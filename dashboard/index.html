@@ -1,0 +1,559 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Риски коррозии скважин</title>
+  <style>
+    :root { color-scheme:light; --ink:#172b3a; --muted:#657785; --line:#dce5ea; --bg:#f3f7f8; --teal:#087f8c; --critical:#a52231; --high:#a54b05; --medium:#8a5a00; --low:#24613e; }
+    * { box-sizing:border-box } body { margin:0; font:15px/1.45 "Segoe UI",Arial,sans-serif; color:var(--ink); background:var(--bg) }
+    header { padding:24px clamp(16px,4vw,48px); background:#fff; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; gap:20px; flex-wrap:wrap }
+    h1 { margin:0; font-size:clamp(22px,3vw,30px) } .subtitle { color:var(--muted); margin:5px 0 0 }
+    main { max-width:1500px; margin:0 auto; padding:24px clamp(16px,4vw,48px) 48px }
+    .toolbar { display:flex; gap:10px; align-items:center; flex-wrap:wrap }
+    button { border:0; border-radius:9px; padding:11px 16px; font-weight:650; cursor:pointer; background:var(--teal); color:#fff }
+    button.secondary { background:#e7eff1; color:var(--ink) } button:disabled { opacity:.55; cursor:wait }
+    .key { display:flex; gap:7px; align-items:center; color:var(--muted); font-size:13px } .key input { width:170px; padding:8px; border:1px solid var(--line); border-radius:7px }
+
+    .cards { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin:22px 0 }
+    .card,.panel { background:#fff; border:1px solid var(--line); border-radius:13px; box-shadow:0 2px 10px #18323c08 }
+    .card { padding:17px 18px } .card span { display:block; color:var(--muted); font-size:13px } .card strong { display:block; font-size:29px; margin-top:5px }
+    
+    .risk-card { background:linear-gradient(135deg, #fff 0%, #fef5f5 100%); border:2px solid var(--critical); padding:20px }
+    .risk-card-title { color:var(--muted); font-size:13px; margin-bottom:12px }
+    .risk-horizons { display:grid; grid-template-columns:repeat(3, 1fr); gap:12px; margin-bottom:12px }
+    .risk-horizon { background:#fff; border:1px solid var(--line); border-radius:8px; padding:12px }
+    .risk-horizon-title { font-size:12px; color:var(--muted); margin-bottom:8px; font-weight:600 }
+    .risk-horizon-stats { display:flex; gap:8px; flex-direction:column }
+    .risk-item { display:flex; justify-content:space-between; align-items:center; padding:6px 10px; border-radius:6px; font-size:13px }
+    .risk-item.critical { background:#fde7e9; color:var(--critical) }
+    .risk-item.high { background:#ffedd5; color:var(--high) }
+    .risk-item strong { font-size:18px; line-height:1 }
+    .risk-total { padding-top:12px; border-top:2px solid var(--line); display:flex; justify-content:space-between; align-items:center }
+    .risk-total span { color:var(--muted); font-size:13px }
+    .risk-total strong { font-size:32px; color:var(--critical) }
+    
+    .card-column { display:flex; flex-direction:column; gap:10px }
+    .card-column .card { padding:12px 15px }
+    .card-column .card strong { font-size:24px }
+
+    .panel { overflow:hidden; margin-bottom:18px } .panel-head { padding:17px 20px; display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; border-bottom:1px solid var(--line) }
+    .panel h2 { margin:0; font-size:18px } #updated { color:var(--muted); font-size:13px }
+    .notice { display:none; padding:13px 16px; margin:0 0 14px; border-radius:9px; background:#e8f4f5; color:#13535b; white-space:pre-wrap }
+    .notice.warning { background:#fff3d6; color:#674d0c } .notice.error { background:#fbe8ea; color:#8e1d2b }
+    .upload-body { padding:18px 20px } .upload-controls { display:grid; grid-template-columns:minmax(170px,1fr) minmax(170px,1fr) minmax(210px,1.4fr) auto; gap:12px; align-items:end }
+    label.field { display:flex; flex-direction:column; gap:5px; color:var(--ink); font-size:13px; font-weight:650 }
+    input,select { min-width:0; padding:10px 11px; border:1px solid #cbd7dd; border-radius:8px; background:#fff; color:var(--ink); font:inherit }
+    input[type=file] { font-size:13px; padding:7px } .upload-help { color:var(--muted); font-size:13px; margin:14px 0 0; max-width:1000px }
+    .upload-result { margin-top:14px; color:var(--muted); font-size:13px; white-space:pre-wrap }
+
+    .collapse-toggle { background:none; border:none; color:var(--ink); font:inherit; font-weight:700; cursor:pointer; padding:0; display:flex; align-items:center; gap:8px }
+    .collapse-toggle::before { content:'▼'; font-size:12px; transition:transform 0.2s }
+    .collapse-toggle[aria-expanded="false"]::before { transform:rotate(-90deg) }
+    .collapse-content { transition:max-height 0.3s ease; overflow:hidden }
+    .collapse-content.hidden { max-height:0; padding:0 }
+
+    .filters { padding:12px 20px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; border-bottom:1px solid var(--line); background:#fbfcfc }
+    .filter-label { color:var(--muted); font-size:13px; font-weight:600 }
+    .filter-select { padding:6px 10px; border:1px solid var(--line); border-radius:6px; font-size:13px; background:#fff }
+
+    .legend { padding:12px 20px; display:flex; gap:8px; flex-wrap:wrap; align-items:center; border-bottom:1px solid var(--line); color:var(--muted); font-size:13px }
+    .legend .badge { min-width:0 }
+    .table-wrap { overflow-x:auto } table { width:100%; border-collapse:collapse; min-width:1120px } th,td { text-align:left; padding:12px 13px; border-bottom:1px solid #edf1f3; vertical-align:top }
+    th { color:var(--muted); font-size:12px; letter-spacing:.035em; text-transform:uppercase; background:#fbfcfc }
+    tbody tr:hover { background:#f8fbfc } .well { font-weight:700; white-space:nowrap } .score { font-variant-numeric:tabular-nums; font-weight:700; white-space:nowrap }
+    .badge { display:inline-block; min-width:85px; text-align:center; padding:4px 9px; border-radius:99px; font-size:12px; font-weight:750; background:#edf1f3; color:#52616b }
+    .badge.CRITICAL { background:#fde7e9; color:var(--critical) } .badge.HIGH { background:#ffedd5; color:var(--high) }
+    .badge.MEDIUM { background:#fff2cc; color:var(--medium) } .badge.LOW { background:#e4f3e9; color:var(--low) }
+    .badge.DATA_ISSUE,.badge.NOT_ANALYZED,.badge.UNKNOWN { background:#edf1f3; color:#52616b }
+    .details { color:var(--muted); font-size:13px; max-width:330px } .empty { text-align:center; color:var(--muted); padding:34px }
+    .ai-cell { min-width:240px; max-width:390px; font-size:13px } .ai-cell summary { color:var(--teal); cursor:pointer; font-weight:700 }
+    .ai-summary { margin:8px 0; color:var(--ink) } .ai-cell ul { padding-left:19px; margin:7px 0 } .ai-cell li { margin:5px 0 }
+    .ai-meta { display:block; color:var(--muted); font-size:12px; margin-top:8px } footer { color:var(--muted); font-size:12px; margin-top:14px }
+    .model-cell { min-width:250px; max-width:360px; font-size:13px } .model-cell summary { color:var(--teal); cursor:pointer; font-weight:700 }
+    .model-list { list-style:none; padding:0; margin:8px 0 } .model-list li { padding:8px 0; border-top:1px solid #edf1f3 }
+    .model-name { font-weight:700 } .model-meta { display:block; color:var(--muted); font-size:12px }
+    @media(max-width:850px) { .upload-controls { grid-template-columns:1fr 1fr } }
+    @media(max-width:720px) { .cards { grid-template-columns:1fr } header { align-items:flex-start } .toolbar { width:100% } .key input { width:130px } .upload-controls { grid-template-columns:1fr } .risk-horizons { grid-template-columns:1fr } }
+  </style>
+</head>
+<body>
+  <header>
+    <div><h1>Риски коррозии скважин</h1><p class="subtitle">Рейтинг по риску, состоянию данных и рекомендациям ИИ.</p></div>
+    <div class="toolbar">
+      <label class="key">Ключ API <input id="apiKey" type="password" autocomplete="off" placeholder="если включена защита"></label>
+      <button class="secondary" id="refresh">Обновить список</button>
+      <button id="run">Выполнить дневной цикл</button>
+    </div>
+  </header>
+  <main>
+    <div id="notice" class="notice" role="status"></div>
+
+    <section class="cards" aria-label="Сводка">
+      <div class="card risk-card">
+        <div class="risk-card-title">Рискованные скважины по горизонтам прогноза</div>
+        <div class="risk-horizons">
+          <div class="risk-horizon">
+            <div class="risk-horizon-title">1 месяц</div>
+            <div class="risk-horizon-stats">
+              <div class="risk-item critical"><span>Критический</span><strong id="critical30">0</strong></div>
+              <div class="risk-item high"><span>Высокий</span><strong id="high30">0</strong></div>
+            </div>
+          </div>
+          <div class="risk-horizon">
+            <div class="risk-horizon-title">3 месяца</div>
+            <div class="risk-horizon-stats">
+              <div class="risk-item critical"><span>Критический</span><strong id="critical90">0</strong></div>
+              <div class="risk-item high"><span>Высокий</span><strong id="high90">0</strong></div>
+            </div>
+          </div>
+          <div class="risk-horizon">
+            <div class="risk-horizon-title">6 месяцев</div>
+            <div class="risk-horizon-stats">
+              <div class="risk-item critical"><span>Критический</span><strong id="critical180">0</strong></div>
+              <div class="risk-item high"><span>Высокий</span><strong id="high180">0</strong></div>
+            </div>
+          </div>
+        </div>
+        <div class="risk-total">
+          <span>Всего требуют внимания</span>
+          <strong id="atRisk">0</strong>
+        </div>
+      </div>
+      <div class="card-column">
+        <div class="card"><span>Скважин в списке</span><strong id="total">—</strong></div>
+        <div class="card"><span>Нужны данные</span><strong id="dataIssues">—</strong></div>
+        <div class="card"><span>Расчёт обновлён</span><strong id="lastUpdated" style="font-size:14px">—</strong></div>
+      </div>
+    </section>
+
+    <section class="panel" aria-labelledby="uploadTitle">
+      <div class="panel-head">
+        <h2 id="uploadTitle">
+          <button type="button" class="collapse-toggle" id="uploadToggle" aria-expanded="true">Загрузить Excel и проверить скважину</button>
+        </h2>
+        <span>Формат .xlsx, до 15 МБ</span>
+      </div>
+      <div class="collapse-content" id="uploadContent">
+        <div class="upload-body">
+          <form id="uploadForm">
+            <div class="upload-controls">
+              <label class="field">Источник данных
+                <select id="profileId" name="profile_id"><option value="dars">DARS — телеметрия</option><option value="khimik">ХИМИК — лабораторные показатели</option><option value="era">ERA — ремонты и отказы</option></select>
+              </label>
+              <label class="field">ID скважины, если нет в книге
+                <input id="wellIdOverride" name="well_id" type="text" placeholder="например, DEMO-001">
+              </label>
+              <label class="field">Файл Excel
+                <input id="excelFile" name="file" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
+              </label>
+              <button id="uploadButton" type="submit">Загрузить файл</button>
+            </div>
+          </form>
+          <p class="upload-help" id="uploadHelp"><strong>Обязательно:</strong> дата/время и ID скважины (в таблице или в поле выше). В каждой строке телеметрии нужен минимум один показатель. Для расчёта по умолчанию нужно 8 разных дат, 8 записей за последние 28 дней, 2 актуальных показателя за 7 дней и данные не старше 48 часов. Источник можно разбить на несколько листов с одной структурой колонок. Файл с несколькими скважинами загружайте без общего ID; ниже выберите нужную скважину.</p>
+          <div class="upload-controls" style="margin-top:14px">
+            <label class="field">Загруженная скважина для проверки
+              <select id="analyzeWell" disabled><option value="">Сначала загрузите файл</option></select>
+            </label>
+            <button id="analyzeButton" type="button" class="secondary" disabled>Рассчитать риск и получить справку ИИ</button>
+          </div>
+          <div id="uploadResult" class="upload-result" aria-live="polite"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" aria-labelledby="crewTitle">
+      <div class="panel-head">
+        <h2 id="crewTitle">
+          <button type="button" class="collapse-toggle" id="crewToggle" aria-expanded="true">Загрузить расписание бригад (JSON)</button>
+        </h2>
+        <span>Формат .json</span>
+      </div>
+      <div class="collapse-content" id="crewContent">
+        <div class="upload-body">
+          <form id="crewForm">
+            <div class="upload-controls">
+              <label class="field">Файл JSON
+                <input id="crewFile" type="file" accept=".json,application/json" required>
+              </label>
+              <label class="field">ID скважины, если не ко всем
+                <input id="crewWellId" type="text" placeholder="например, DEMO-001">
+              </label>
+              <label class="field" style="justify-content:flex-end">
+                <span style="display:flex;gap:8px;align-items:center">
+                  <input id="crewAllWells" type="checkbox" checked style="width:auto">
+                  применить ко всем скважинам
+                </span>
+              </label>
+              <button id="crewButton" type="submit">Загрузить расписание</button>
+            </div>
+          </form>
+          <p class="upload-help">Файл должен содержать массив бригад или объект {"crew_availability": [...]}. Обязательные поля записи: crew_id, specialties, region, status (available / busy / unknown), available_from и available_to в формате ISO 8601. Если галочка снята, укажите ID скважины.</p>
+          <div id="crewResult" class="upload-result" aria-live="polite"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Рейтинг скважин</h2><span id="updated">Загрузка…</span></div>
+       <div class="filters">
+        <span class="filter-label">Фильтр по риску:</span>
+        <select id="riskFilter" class="filter-select">
+          <option value="high_risk">Только рискованные и проблемные</option>
+          <option value="CRITICAL">Критический</option>
+          <option value="HIGH">Высокий</option>
+          <option value="DATA_ISSUE">Нужны данные</option>
+        </select>
+        <span class="filter-label" style="margin-left:18px">Срок прогноза:</span>
+        <select id="horizonSelect" class="filter-select">
+          <option value="all">Все горизонты</option>
+          <option value="30">1 месяц</option>
+          <option value="90">3 месяца</option>
+          <option value="180">6 месяцев</option>
+        </select>
+      </div>
+      <div class="legend" aria-label="Цвета классов риска">
+        <span>Цвет риска:</span><span class="badge CRITICAL">Критический</span><span class="badge HIGH">Высокий</span><span class="badge DATA_ISSUE">Нужны данные</span>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Место</th><th>Скважина</th><th>Горизонт</th><th>Риск</th><th>Баллы правил</th><th>Измерений</th><th>Данные / причины</th><th>Сравнение моделей</th><th>Справка ИИ</th><th>Время расчёта</th></tr></thead>
+        <tbody id="rows"><tr><td colspan="10" class="empty">Загружаем список…</td></tr></tbody>
+      </table></div>
+    </section>
+    <footer>Баллы правил — демонстрационный индикатор, не вероятность отказа. Рекомендации ИИ сформированы по доступным данным и требуют проверки инженером.</footer>
+  </main>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const AUTO_REFRESH_SECONDS = 60;
+    const RISK_LABELS = {
+      CRITICAL: 'КРИТИЧЕСКИЙ', HIGH: 'ВЫСОКИЙ', MEDIUM: 'УМЕРЕННЫЙ', LOW: 'НИЗКИЙ',
+      DATA_ISSUE: 'НУЖНЫ ДАННЫЕ', NOT_ANALYZED: 'НЕТ РАСЧЁТА', UNKNOWN: 'НЕИЗВЕСТНО'
+    };
+    const SOURCE_STATUS_RU = { ok: 'в порядке', partial: 'частично', unavailable: 'нет выгрузки', not_configured: 'не настроен', error: 'ошибка' };
+    const MODEL_STATUS_RU = { ok: 'ок', unavailable: 'недоступна', error: 'ошибка', insufficient_data: 'мало данных', unsupported_horizon: 'горизонт не поддерживается' };
+    const SCORE_KIND_RU = { probability: 'вероятность', normalized_score: 'нормированный балл', risk_points: 'баллы риска', relative_risk: 'относительный риск', custom: 'своя шкала' };
+    const FRESHNESS_RU = { fresh: 'свежие', stale: 'устаревшие', future_timestamp: 'дата в будущем', unknown: 'неизвестно' };
+    let busy = false;
+    let currentSnapshot = null;
+    const HORIZON_LABELS = { 30: '1 месяц', 90: '3 месяца', 180: '6 месяцев' };
+    $('horizonSelect').value = sessionStorage.getItem('maiHorizon') || '90';
+    $('horizonSelect').addEventListener('change', () => sessionStorage.setItem('maiHorizon', $('horizonSelect').value));
+    const horizonDays = () => Number($('horizonSelect').value || 90);
+
+    function updateUploadHelp() {
+      const help = $('uploadHelp');
+      if ($('profileId').value === 'era') {
+        help.innerHTML = '<strong>Обязательно для ERA:</strong> дата события, ID скважины (в таблице или в поле выше) и тип события (работа/отказ) либо описание, позволяющее определить тип. Рекомендуемые сведения: тип работ, причина, оборудование, результат, причина отказа и простой. Источник можно разбить на несколько листов с одной структурой колонок. Файл с несколькими скважинами загружайте без общего ID; ниже выберите нужную скважину.';
+      } else {
+        help.innerHTML = '<strong>Обязательно для DARS/ХИМИК:</strong> дата/время и ID скважины (в таблице или в поле выше); в каждой строке хотя бы один показатель. Для расчёта по умолчанию нужно 8 разных дат, 8 записей за последние 28 дней, 2 актуальных разных показателя за 7 дней и данные не старше 48 часов. Источник можно разбить на несколько листов с одной структурой колонок. Файл с несколькими скважинами загружайте без общего ID; ниже выберите нужную скважину.';
+      }
+    }
+
+    $('profileId').addEventListener('change', updateUploadHelp);
+    $('apiKey').value = sessionStorage.getItem('maiApiKey') || '';
+    $('apiKey').addEventListener('change', () => sessionStorage.setItem('maiApiKey', $('apiKey').value.trim()));
+    const headers = () => { const key = $('apiKey').value.trim(); return key ? { 'X-API-Key': key } : {}; };
+    function showNotice(message, type = '') { const box = $('notice'); box.textContent = message || ''; box.className = `notice ${type}`; box.style.display = message ? 'block' : 'none'; }
+    function makeCell(text, className) { const cell = document.createElement('td'); cell.textContent = text ?? '—'; if (className) cell.className = className; return cell; }
+    function formatTime(value) { if (!value) return '—'; const date = new Date(value); return Number.isNaN(date.valueOf()) ? '—' : date.toLocaleString('ru-RU'); }
+    function latestUpdatedIn(snapshot) {
+      const times = (snapshot.ranking || []).map(w => w.updated_at).filter(Boolean).sort();
+      return times.length ? times[times.length - 1] : null;
+    }
+
+    async function apiRequest(path, options = {}) {
+      const response = await fetch(path, { ...options, headers: { ...headers(), ...(options.headers || {}) } });
+      let result = {};
+      try { result = await response.json(); } catch { result = {}; }
+      if (!response.ok) {
+        const detail = typeof result.detail === 'string' ? result.detail : result.detail?.message;
+        throw new Error(detail || result.message || `Запрос не выполнен (HTTP ${response.status}).`);
+      }
+      return result;
+    }
+
+    function buildAiCell(well) {
+      const cell = document.createElement('td'); cell.className = 'ai-cell';
+      const report = well.ai_report;
+      if (!report) {
+        const status = well.ai_status === 'error' ? 'Справка не получена. Проверьте LiteLLM и журнал запуска.'
+          : well.ai_status === 'not_configured' ? 'LiteLLM не настроен.'
+          : well.ai_status === 'pending' ? 'Справка ещё не сформирована.' : 'Справка недоступна.';
+        cell.textContent = status; return cell;
+      }
+      const details = document.createElement('details');
+      const summary = document.createElement('summary');
+      summary.textContent = `Открыть справку (${(report.recommended_actions || []).length} действий)`;
+      details.append(summary);
+      const paragraph = document.createElement('p'); paragraph.className = 'ai-summary'; paragraph.textContent = report.executive_summary || 'Краткое резюме не предоставлено.'; details.append(paragraph);
+      if (report.risk_interpretation) { const interpretation = document.createElement('p'); interpretation.textContent = report.risk_interpretation; details.append(interpretation); }
+      const actions = document.createElement('ul');
+      for (const action of (report.recommended_actions || []).slice(0, 5)) {
+        const item = document.createElement('li'); item.textContent = `${action.priority || '—'}: ${action.title || ''} — ${action.instruction || ''}`; actions.append(item);
+      }
+      if (actions.childElementCount) details.append(actions);
+      if (report.crew_schedule_comment) { const crews = document.createElement('p'); crews.textContent = report.crew_schedule_comment; details.append(crews); }
+      const meta = document.createElement('span'); meta.className = 'ai-meta'; meta.textContent = `Сформировано: ${formatTime(well.ai_updated_at)}. Проверить инженеру.`; details.append(meta);
+      cell.append(details); return cell;
+    }
+
+    function buildModelCell(well) {
+      const cell = document.createElement('td'); cell.className = 'model-cell';
+      const predictions = well.model_predictions || [];
+      if (!predictions.length) { cell.textContent = 'Нет результатов моделей.'; return cell; }
+      const details = document.createElement('details');
+      const summary = document.createElement('summary'); summary.textContent = `Сравнить модели (${predictions.length})`; details.append(summary);
+      const list = document.createElement('ul'); list.className = 'model-list';
+      for (const item of predictions) {
+        const entry = document.createElement('li');
+        const name = document.createElement('span'); name.className = 'model-name'; name.textContent = `${item.model_id || 'модель'} v${item.model_version || '?'}`; entry.append(name);
+        const score = item.probability != null ? `вероятность ${(item.probability * 100).toFixed(1)}%${item.calibrated ? ' (калибрована)' : ' (не калибрована)'}`
+          : item.score != null ? `оценка ${item.score} (${SCORE_KIND_RU[item.score_kind] || item.score_kind || 'шкала'})` : 'оценка отсутствует';
+        const meta = document.createElement('span'); meta.className = 'model-meta'; meta.textContent = `${MODEL_STATUS_RU[item.status] || item.status} · горизонт ${item.horizon_days} дн. · ${score}`; entry.append(meta);
+        if (item.explanation) { const explanation = document.createElement('span'); explanation.className = 'model-meta'; explanation.textContent = item.explanation; entry.append(explanation); }
+        list.append(entry);
+      }
+      details.append(list); cell.append(details); return cell;
+    }
+
+    function render(snapshot) {
+      currentSnapshot = snapshot;
+      
+      // Подсчёт уникальных скважин
+      const uniqueWells = new Set(snapshot.ranking.map(w => w.well_id));
+      const uniqueWellsWithDataIssues = new Set(
+        snapshot.ranking.filter(w => w.risk_class === 'DATA_ISSUE').map(w => w.well_id)
+      );
+      
+      // Подсчёт рисков по горизонтам
+      const horizons = [30, 90, 180];
+      horizons.forEach(horizon => {
+        const rows = snapshot.ranking.filter(w => w.horizon_days === horizon);
+        const criticalCount = rows.filter(w => w.risk_class === 'CRITICAL').length;
+        const highCount = rows.filter(w => w.risk_class === 'HIGH').length;
+        $('critical' + horizon).textContent = criticalCount;
+        $('high' + horizon).textContent = highCount;
+      });
+      
+      // Общее количество рискованных (CRITICAL + HIGH)
+      const totalAtRisk = snapshot.ranking.filter(w => 
+        w.risk_class === 'CRITICAL' || w.risk_class === 'HIGH'
+      ).length;
+      
+      $('total').textContent = uniqueWells.size;
+      $('atRisk').textContent = totalAtRisk;
+      $('dataIssues').textContent = uniqueWellsWithDataIssues.size;
+      
+      const lastAnalysis = snapshot.last_analysis_at || latestUpdatedIn(snapshot);
+      $('lastUpdated').textContent = lastAnalysis ? formatTime(lastAnalysis) : 'расчётов ещё не было';
+      $('updated').textContent = `Снимок: ${formatTime(snapshot.generated_at)} · прогноз: ${HORIZON_LABELS[horizonDays()] || horizonDays() + ' дн.'} · автообновление каждые ${AUTO_REFRESH_SECONDS} с`;
+      renderTable(snapshot);
+    }
+
+    function renderTable(snapshot) {
+      const riskFilter = $('riskFilter').value;
+      const horizonFilter = $('horizonSelect').value;
+      
+      let filtered = snapshot.ranking;
+      
+      if (riskFilter === 'high_risk') {
+        filtered = filtered.filter(w => 
+          w.risk_class === 'CRITICAL' || 
+          w.risk_class === 'HIGH' || 
+          w.risk_class === 'DATA_ISSUE'
+        );
+      } else if (riskFilter !== 'all') {
+        filtered = filtered.filter(w => w.risk_class === riskFilter);
+      }
+      
+      if (horizonFilter !== 'all') {
+        const horizonValue = Number(horizonFilter);
+        filtered = filtered.filter(w => w.horizon_days === horizonValue);
+      }
+      
+      const body = $('rows'); 
+      body.replaceChildren();
+      
+      if (!filtered.length) { 
+        const row = document.createElement('tr'); 
+        const cell = makeCell('Нет скважин с выбранными параметрами.', 'empty'); 
+        cell.colSpan = 10; 
+        row.append(cell); 
+        body.append(row); 
+        return; 
+      }
+      
+      filtered.forEach((well, index) => {
+        const row = document.createElement('tr');
+        row.append(makeCell(index + 1)); 
+        row.append(makeCell(well.well_id, 'well'));
+        
+        const horizonText = well.horizon_days ? `${well.horizon_days} дн.` : '—';
+        row.append(makeCell(horizonText));
+        
+        const risk = makeCell(''); 
+        const badge = document.createElement('span'); 
+        badge.className = `badge ${well.risk_class}`;
+        badge.textContent = RISK_LABELS[well.risk_class] || well.risk_class;
+        risk.replaceChildren(badge); 
+        row.append(risk);
+        
+        const points = well.risk_points == null ? '—' : `${well.risk_points}`;
+        const score = well.risk_score == null ? '' : ` (индекс ${(well.risk_score * 100).toFixed(0)})`;
+        row.append(makeCell(points + score, 'score'));
+        row.append(makeCell(well.telemetry_records));
+        
+        const sources = (well.source_statuses || [])
+          .filter(x => ['error', 'unavailable', 'not_configured'].includes(x.status))
+          .map(x => `Источник ${x.source_id}: ${SOURCE_STATUS_RU[x.status] || x.status}${x.message && /[А-Яа-я]/.test(x.message) ? ' — ' + x.message : ''}`);
+        const reasons = [...(well.missing_items || []), ...(well.reasons || []), ...sources];
+        const stale = well.data_update_required || well.data_freshness === 'stale';
+        const staleNote = stale ? '⚠ Данные устарели, требуется обновление. ' : '';
+        row.append(makeCell(staleNote + (reasons.length ? reasons.slice(0, 3).join(' · ') : (well.data_freshness ? `Телеметрия: ${FRESHNESS_RU[well.data_freshness] || well.data_freshness}` : 'Данных об ошибках нет')), 'details'));
+        
+        row.append(buildModelCell(well)); 
+        row.append(buildAiCell(well)); 
+        row.append(makeCell(formatTime(well.updated_at)));
+        body.append(row);
+      });
+    }
+
+    async function refresh(options = {}) {
+      busy = true;
+      $('refresh').disabled = true;
+      try {
+        const snapshot = await apiRequest('/api/v1/dashboard/risk-ranking');
+        render(snapshot);
+        if (!options.keepNotice) showNotice('');
+      } catch (error) {
+        if (!options.auto) showNotice(`${error.message} Если защита API включена, введите ключ выше.`, 'error');
+      } finally {
+        $('refresh').disabled = false;
+        busy = false;
+      }
+    }
+
+    async function createReportForAlert(alert) {
+      const [run, external] = await Promise.all([
+        apiRequest(`/api/v1/analysis/runs/${encodeURIComponent(alert.analysis_id)}`),
+        apiRequest(`/api/v1/monitor/wells/${encodeURIComponent(alert.well_id)}/external-data`),
+      ]);
+      return apiRequest('/api/v1/agent/well', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ analysis_id: alert.analysis_id, context: run.analysis.context, external_data: external }) });
+    }
+
+    async function runNow() {
+      busy = true;
+      $('run').disabled = true; showNotice('Обновляются источники и рассчитывается риск…');
+      try {
+        const result = await apiRequest('/api/v1/monitor/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ horizon_days: horizonDays() }) });
+        let reports = 0, reportErrors = 0;
+        for (const alert of (result.alerts || [])) {
+          try { await createReportForAlert(alert); reports++; } catch { reportErrors++; }
+        }
+        const message = (result.alerts || []).length
+          ? `${result.message} Справки ИИ сохранены: ${reports}/${result.alerts.length}${reportErrors ? `; ошибок: ${reportErrors}` : ''}.`
+          : `${result.message} Рискованных скважин нет; ИИ-анализ не запускался.`;
+        showNotice(message, reportErrors ? 'warning' : ''); await refresh({ keepNotice: true });
+      } catch (error) { showNotice(error.message, 'error'); }
+      finally { $('run').disabled = false; busy = false; }
+    }
+
+    $('uploadForm').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const file = $('excelFile').files[0]; if (!file) { showNotice('Выберите файл .xlsx.', 'warning'); return; }
+      busy = true;
+      const button = $('uploadButton'); button.disabled = true; $('analyzeButton').disabled = true;
+      $('uploadResult').textContent = 'Файл загружается и проверяется…';
+      try {
+        const form = new FormData(); form.append('profile_id', $('profileId').value); form.append('file', file);
+        const wellId = $('wellIdOverride').value.trim(); if (wellId) form.append('well_id', wellId);
+        const result = await apiRequest('/api/v1/ingestion/excel', { method: 'POST', body: form });
+        const ids = [...new Set((result.imported_wells || []).map(item => item.well_id).filter(Boolean))];
+        const select = $('analyzeWell'); select.replaceChildren();
+        for (const id of ids) { const option = document.createElement('option'); option.value = id; option.textContent = id; select.append(option); }
+        select.disabled = !ids.length; $('analyzeButton').disabled = !ids.length;
+        $('uploadResult').textContent = `Статус: ${result.status}. Листы: ${(result.sheet_names || [result.sheet_name]).filter(Boolean).join(', ') || '—'}. Строк принято: ${result.rows_accepted}; отклонено: ${result.rows_rejected}. ${result.skipped_sheets?.length ? `Пропущены листы без нужных колонок: ${result.skipped_sheets.join(', ')}. ` : ''}${result.ignored_columns?.length ? `Не используются: ${result.ignored_columns.join(', ')}.` : ''}${result.errors?.length ? ` Примеры ошибок: ${result.errors.slice(0, 3).map(item => `${item.sheet_name || ''} строка ${item.row}: ${item.message}`).join(' | ')}` : ''}`;
+        if (ids.length) showNotice(`Файл принят. Скважин в загрузке: ${ids.length}. Выберите ID и запустите проверку.`, '');
+        else showNotice(result.message || 'В файле не найдено строк для загрузки.', 'warning');
+        await refresh({ keepNotice: true });
+      } catch (error) { $('uploadResult').textContent = error.message; showNotice(error.message, 'error'); }
+      finally { button.disabled = false; busy = false; }
+    });
+
+    $('analyzeButton').addEventListener('click', async () => {
+      const wellId = $('analyzeWell').value; if (!wellId) return;
+      busy = true;
+      const button = $('analyzeButton'); button.disabled = true; showNotice(`Проверяется скважина ${wellId}…`);
+      try {
+        const result = await apiRequest(`/api/v1/monitor/wells/${encodeURIComponent(wellId)}/analyze`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ horizon_days: horizonDays() }) });
+        if (result.status === 'skipped_insufficient_data') {
+          showNotice(`${result.operator_message}\n${(result.requested_data || []).map(item => `• ${item}`).join('\n')}`, 'warning');
+        } else {
+          await createReportForAlert({ analysis_id: result.analysis_id, well_id: result.well_id });
+          showNotice(`Риск рассчитан, справка ИИ сохранена для ${wellId}.`);
+        }
+        await refresh({ keepNotice: true });
+      } catch (error) { showNotice(error.message, 'error'); await refresh({ keepNotice: true }); }
+      finally { button.disabled = false; busy = false; }
+    });
+
+    $('crewForm').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const file = $('crewFile').files[0];
+      if (!file) { showNotice('Выберите файл .json с расписанием бригад.', 'warning'); return; }
+      const toAll = $('crewAllWells').checked;
+      const wellId = $('crewWellId').value.trim();
+      if (!toAll && !wellId) { showNotice('Укажите ID скважины или отметьте «применить ко всем скважинам».', 'warning'); return; }
+      busy = true;
+      $('crewButton').disabled = true;
+      $('crewResult').textContent = 'Файл расписания обрабатывается…';
+      try {
+        const payload = JSON.parse(await file.text());
+        const params = new URLSearchParams();
+        if (toAll) params.set('all_wells', 'true');
+        if (wellId) params.set('well_id', wellId);
+        const result = await apiRequest(`/api/v1/ingestion/crew-schedule?${params.toString()}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        $('crewResult').textContent = `Статус: ${result.status}. Скважин: ${(result.targets || []).length}. Записей принято: ${result.rows_accepted}; отклонено: ${result.rows_rejected}.${result.message ? ' ' + result.message : ''}`;
+        showNotice('Расписание бригад загружено.', '');
+        await refresh({ keepNotice: true });
+      } catch (error) {
+        $('crewResult').textContent = error.message;
+        showNotice(error.message, 'error');
+      } finally {
+        $('crewButton').disabled = false;
+        busy = false;
+      }
+    });
+
+    $('uploadToggle').addEventListener('click', () => {
+      const expanded = $('uploadToggle').getAttribute('aria-expanded') === 'true';
+      $('uploadToggle').setAttribute('aria-expanded', !expanded);
+      $('uploadContent').classList.toggle('hidden', expanded);
+    });
+    $('crewToggle').addEventListener('click', () => {
+      const expanded = $('crewToggle').getAttribute('aria-expanded') === 'true';
+      $('crewToggle').setAttribute('aria-expanded', !expanded);
+      $('crewContent').classList.toggle('hidden', expanded);
+    });
+
+    $('riskFilter').addEventListener('change', () => {
+      if (currentSnapshot) renderTable(currentSnapshot);
+    });
+    $('horizonSelect').addEventListener('change', () => {
+      if (currentSnapshot) renderTable(currentSnapshot);
+    });
+
+    function autoRefreshTick() {
+      if (document.hidden || busy) return;
+      refresh({ keepNotice: true, auto: true });
+    }
+    setInterval(autoRefreshTick, AUTO_REFRESH_SECONDS * 1000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) autoRefreshTick(); });
+    $('refresh').addEventListener('click', () => refresh()); $('run').addEventListener('click', runNow); updateUploadHelp(); refresh();
+  </script>
+</body>
+</html>

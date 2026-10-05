@@ -1,0 +1,168 @@
+{
+  "name": "MAI | Ежедневный анализ риска и справка",
+  "nodes": [
+    {
+      "parameters": {"rule": {"interval": [{"field": "cronExpression", "expression": "0 7 * * *"}]}},
+      "id": "610f591d-0e60-47fd-8730-8e21e4d00001",
+      "name": "1. Каждый день в 07:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://mai-api:8000/api/v1/monitor/run",
+        "sendHeaders": true,
+        "headerParameters": {"parameters": [{"name": "Content-Type", "value": "application/json"}]},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { horizon_days: 90 } }}",
+        "options": {"timeout": 600000}
+      },
+      "id": "610f591d-0e60-47fd-8730-8e21e4d00002",
+      "name": "2. Обновить источники и рассчитать риск",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [540, 300]
+    },
+    {
+      "parameters": {"conditions": {"options": {"caseSensitive": true, "typeValidation": "strict", "version": 2}, "conditions": [{"id": "610f591d-0e60-47fd-8730-8e21e4d00003", "leftValue": "={{ $json.alerts.length }}", "rightValue": 0, "operator": {"type": "number", "operation": "gt"}}], "combinator": "and"}, "options": {}},
+      "id": "610f591d-0e60-47fd-8730-8e21e4d00004",
+      "name": "3. Есть скважины высокого риска?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {"fieldToSplitOut": "alerts", "include": "noOtherFields", "options": {}},
+      "id": "610f591d-0e60-47fd-8730-8e21e4d00005",
+      "name": "4. Развернуть список рискованных скважин",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [1140, 180]
+    },
+    {
+      "parameters": {"url": "={{ 'http://mai-api:8000/api/v1/analysis/runs/' + encodeURIComponent($json.analysis_id) }}", "options": {"timeout": 30000}},
+      "id": "610f591d-0e60-47fd-8730-8e21e4d00006",
+      "name": "5. Получить расчёт и историю работ",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1450, 180],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {"url": "={{ 'http://mai-api:8000/api/v1/monitor/wells/' + encodeURIComponent($('4. Развернуть список рискованных скважин').item.json.well_id) + '/external-data' }}", "options": {"timeout": 30000}},
+      "id": "610f591d-0e60-47fd-8730-8e21e4d00007",
+      "name": "6. Получить расписание и статусы источников",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 180],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {"jsCode": "const alert=$('4. Развернуть список рискованных скважин').item.json; const run=$('5. Получить расчёт и историю работ').item.json; const external=$input.first().json; if(!run.analysis?.context) throw new Error('Не получен паспорт анализа скважины'); return [{json:{analysis_id:alert.analysis_id,context:run.analysis.context,external_data:external}}];"},
+      "id": "610f591d-0e60-47fd-8730-8e21e4d00008",
+      "name": "7. Подготовить данные для ИИ",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2070, 180]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://mai-api:8000/api/v1/agent/well",
+        "sendHeaders": true,
+        "headerParameters": {"parameters": [{"name": "Content-Type", "value": "application/json"}]},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}",
+        "options": {"timeout": 90000}
+      },
+      "id": "610f591d-0e60-47fd-8730-8e21e4d00009",
+      "name": "8. Сохранить справку LiteLLM в BI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2380, 180],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {"content": "## 1. Планировщик\n**Вход:** событие расписания.\n**Задача:** запуск каждый день в 07:00 по Москве.\n**Выход:** начинает узел 2. Опубликуйте workflow, чтобы расписание работало.", "height": 190, "width": 260, "color": 5},
+      "id": "610f591d-0e60-47fd-8730-8e21e4d00011",
+      "name": "Описание 1. Расписание",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [120, 400]
+    },
+    {
+      "parameters": {"content": "## 2. Загрузка и расчёт риска\n**Вход:** горизонт 90 дней.\n**Задача:** backend по каждой скважине запрашивает настроенные Excel/JSON API, проверяет готовность данных и считает риск.\n**Выход:** число скважин, `alerts[]`, ошибки источников. Недостаточные данные пропускаются.", "height": 230, "width": 310, "color": 5},
+      "id": "610f591d-0e60-47fd-8730-8e21e4d00012",
+      "name": "Описание 2. Backend",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [420, 400]
+    },
+    {
+      "parameters": {"content": "## 3. Проверка условия\n**Вход:** результат `/monitor/run`.\n**Условие:** `alerts.length > 0`.\n**Выход:** да — передаёт список риска дальше; нет — workflow заканчивается, дашборд показывает обновлённый рейтинг.", "height": 200, "width": 290, "color": 5},
+      "id": "610f591d-0e60-47fd-8730-8e21e4d00013",
+      "name": "Описание 3. Ветка риска",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [760, 410]
+    },
+    {
+      "parameters": {"content": "## 4. Одна скважина на элемент\n**Вход:** `alerts[]`.\n**Задача:** разбить массив на отдельные записи, сохранив `well_id`, `analysis_id`, класс и основание риска.\n**Выход:** по одному элементу на каждую рискованную скважину.", "height": 190, "width": 290, "color": 5},
+      "id": "610f591d-0e60-47fd-8730-8e21e4d00014",
+      "name": "Описание 4. Список скважин",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1110, 280]
+    },
+    {
+      "parameters": {"content": "## 5. Паспорт и ремонтная история\n**Вход:** `analysis_id`.\n**Запрос:** `GET /analysis/runs/{analysis_id}`.\n**Выход:** снимок телеметрии, диагностика, оценки моделей и история работ/отказов из сохранённого анализа.", "height": 200, "width": 300, "color": 5},
+      "id": "610f591d-0e60-47fd-8730-8e21e4d00015",
+      "name": "Описание 5. История",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1420, 280]
+    },
+    {
+      "parameters": {"content": "## 6. Бригады и качество источников\n**Вход:** `well_id` из предыдущего элемента.\n**Запрос:** `GET /monitor/wells/{well_id}/external-data`.\n**Выход:** актуальные интервалы бригад и статусы внешних систем. При ошибке узел передаёт ошибку дальше для честного указания пробела.", "height": 230, "width": 300, "color": 5},
+      "id": "610f591d-0e60-47fd-8730-8e21e4d00016",
+      "name": "Описание 6. Расписание",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1730, 280]
+    },
+    {
+      "parameters": {"content": "## 7. Сбор входного контракта\n**Вход:** рискованная скважина, `context` анализа, `external_data`.\n**Задача:** соединить данные в контракт AgentWellRequest.\n**Выход:** `analysis_id`, телеметрия, прогнозы, история, статусы и расписание.", "height": 200, "width": 300, "color": 5},
+      "id": "610f591d-0e60-47fd-8730-8e21e4d00017",
+      "name": "Описание 7. Контекст ИИ",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [2040, 280]
+    },
+    {
+      "parameters": {"content": "## 8. Справка для BI\n**Вход:** собранный паспорт скважины.\n**Запрос:** `POST /agent/well`; FastAPI вызывает LiteLLM и проверяет JSON-ответ.\n**Выход:** резюме и действия сохраняются вместе с анализом. Обновите дашборд, чтобы увидеть рекомендацию. Писем этот workflow не отправляет.", "height": 230, "width": 330, "color": 5},
+      "id": "610f591d-0e60-47fd-8730-8e21e4d00018",
+      "name": "Описание 8. Справка",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [2350, 280]
+    }
+  ],
+  "connections": {
+    "1. Каждый день в 07:00": {"main": [[{"node": "2. Обновить источники и рассчитать риск", "type": "main", "index": 0}]]},
+    "2. Обновить источники и рассчитать риск": {"main": [[{"node": "3. Есть скважины высокого риска?", "type": "main", "index": 0}]]},
+    "3. Есть скважины высокого риска?": {"main": [[{"node": "4. Развернуть список рискованных скважин", "type": "main", "index": 0}], []]},
+    "4. Развернуть список рискованных скважин": {"main": [[{"node": "5. Получить расчёт и историю работ", "type": "main", "index": 0}]]},
+    "5. Получить расчёт и историю работ": {"main": [[{"node": "6. Получить расписание и статусы источников", "type": "main", "index": 0}]]},
+    "6. Получить расписание и статусы источников": {"main": [[{"node": "7. Подготовить данные для ИИ", "type": "main", "index": 0}]]},
+    "7. Подготовить данные для ИИ": {"main": [[{"node": "8. Сохранить справку LiteLLM в BI", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1", "timezone": "Europe/Moscow"},
+  "versionId": "610f591d-0e60-47fd-8730-8e21e4d00100",
+  "meta": {"templateCredsSetupCompleted": false},
+  "tags": []
+}

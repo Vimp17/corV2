@@ -1,0 +1,18 @@
+services:
+  postgres:
+    container_name: mai-corrosion-postgres-v2
+    volumes:
+      - mai_pgdata_v2:/var/lib/postgresql/data
+
+  api:
+    container_name: mai-corrosion-api-v2
+    ports:
+      - "127.0.0.1:8001:8000"
+
+  n8n:
+    container_name: mai-corrosion-n8n-v2
+    ports:
+      - "127.0.0.1:5679:5678"
+
+volumes:
+  mai_pgdata_v2:

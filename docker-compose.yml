@@ -1,0 +1,103 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: mai-corrosion-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-mai_corrosion}
+      POSTGRES_USER: ${POSTGRES_USER:-mai}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-before-use}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  mai-api:
+    build: .
+    container_name: mai-corrosion-api
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      MAI_DATABASE_URL: ${MAI_DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-mai}:${POSTGRES_PASSWORD:-change-me-before-use}@postgres:5432/${POSTGRES_DB:-mai_corrosion}}
+      MAI_COX_MODEL_PATH: /app/models/cox_model.json
+      MAI_SOURCE_PROFILES_PATH: /app/config/source_profiles.json
+      MAI_SOURCE_TIMEZONE: ${MAI_SOURCE_TIMEZONE:-Europe/Moscow}
+      MAI_MAX_FORWARD_FILL_DAYS: ${MAI_MAX_FORWARD_FILL_DAYS:-7}
+      MAI_MAX_TELEMETRY_AGE_HOURS: ${MAI_MAX_TELEMETRY_AGE_HOURS:-48}
+      MAI_MIN_TELEMETRY_RECORDS: ${MAI_MIN_TELEMETRY_RECORDS:-8}
+      MAI_MIN_TREND_OBSERVATIONS: ${MAI_MIN_TREND_OBSERVATIONS:-8}
+      MAI_TREND_WINDOW_DAYS: ${MAI_TREND_WINDOW_DAYS:-28}
+      MAI_MIN_CURRENT_SIGNALS: ${MAI_MIN_CURRENT_SIGNALS:-2}
+      MAI_MAX_EXCEL_BYTES: ${MAI_MAX_EXCEL_BYTES:-15728640}
+      MAI_MAX_EXCEL_ROWS: ${MAI_MAX_EXCEL_ROWS:-10000}
+      MAI_WELL_IDS: ${MAI_WELL_IDS:-}
+      MAI_ALERT_RULE_CLASSES: ${MAI_ALERT_RULE_CLASSES:-HIGH,CRITICAL}
+      MAI_ALERT_PROBABILITY_THRESHOLD: ${MAI_ALERT_PROBABILITY_THRESHOLD:-0.7}
+      MAI_DASHBOARD_URL: ${MAI_DASHBOARD_URL:-http://localhost:8000/dashboard}
+      MAI_API_KEY: ${MAI_API_KEY:-}
+      MAI_LLM_API_URL: ${MAI_LLM_API_URL:-}
+      MAI_LLM_API_KEY: ${MAI_LLM_API_KEY:-}
+      MAI_LLM_MODEL: ${MAI_LLM_MODEL:-}
+      MAI_LLM_TIMEOUT_SECONDS: ${MAI_LLM_TIMEOUT_SECONDS:-45}
+      MAI_LLM_MAX_RETRIES: ${MAI_LLM_MAX_RETRIES:-1}
+      MAI_SOURCE_DARS_URL: ${MAI_SOURCE_DARS_URL:-}
+      MAI_SOURCE_DARS_TOKEN: ${MAI_SOURCE_DARS_TOKEN:-}
+      MAI_SOURCE_KHIMIK_URL: ${MAI_SOURCE_KHIMIK_URL:-}
+      MAI_SOURCE_KHIMIK_TOKEN: ${MAI_SOURCE_KHIMIK_TOKEN:-}
+      MAI_SOURCE_ERA_URL: ${MAI_SOURCE_ERA_URL:-}
+      MAI_SOURCE_ERA_TOKEN: ${MAI_SOURCE_ERA_TOKEN:-}
+      MAI_SOURCE_CREW_SCHEDULE_URL: ${MAI_SOURCE_CREW_SCHEDULE_URL:-}
+      MAI_SOURCE_CREW_SCHEDULE_TOKEN: ${MAI_SOURCE_CREW_SCHEDULE_TOKEN:-}
+    volumes:
+      - ./models:/app/models:ro
+      - ./config:/app/config:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 25s
+
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:${N8N_VERSION:-2.40.7}
+    container_name: mai-corrosion-n8n
+    restart: unless-stopped
+    ports:
+      - "${N8N_BIND_ADDRESS:-127.0.0.1}:${N8N_HOST_PORT:-5678}:5678"
+    environment:
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: mai_n8n
+      DB_POSTGRESDB_USER: ${POSTGRES_USER:-mai}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD:-change-me-before-use}
+      N8N_HOST: ${N8N_HOST:-localhost}
+      N8N_PORT: 5678
+      N8N_PROTOCOL: ${N8N_PROTOCOL:-http}
+      WEBHOOK_URL: ${N8N_WEBHOOK_URL:-http://localhost:5678/}
+      N8N_EDITOR_BASE_URL: ${N8N_EDITOR_BASE_URL:-http://localhost:5678/}
+      GENERIC_TIMEZONE: ${GENERIC_TIMEZONE:-Europe/Moscow}
+      TZ: ${TZ:-Europe/Moscow}
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
+    volumes:
+      - n8n_data:/home/node/.n8n
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mai-api:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  n8n_data:

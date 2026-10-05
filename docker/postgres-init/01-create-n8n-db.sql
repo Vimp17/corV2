@@ -1,0 +1,1 @@
+CREATE DATABASE mai_n8n;

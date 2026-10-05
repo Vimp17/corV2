@@ -1,0 +1,181 @@
+{
+  "name": "MAI | Проверка скважины оператором",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "Проверка коррозионного риска",
+        "formDescription": "Введите номер скважины. Система обновит подключённые источники, проверит полноту данных и покажет результат. Если данных не хватит, расчёт моделей будет пропущен.",
+        "formFields": {"values": [
+          {"fieldLabel": "Идентификатор скважины", "fieldName": "well_id", "placeholder": "WELL-001", "requiredField": true},
+          {"fieldLabel": "Горизонт прогноза, дней", "fieldName": "horizon_days", "fieldType": "number", "defaultValue": 90, "requiredField": true}
+        ]},
+        "responseMode": "lastNode",
+        "options": {"buttonLabel": "Проверить скважину", "appendAttribution": false}
+      },
+      "id": "0b80aa00-1f27-4a2d-b8bd-936bdd170001",
+      "name": "1. Форма оператора",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [240, 300],
+      "webhookId": "43f7141f-6c20-4f39-80ee-e455fa170001"
+    },
+    {
+      "parameters": {"jsCode": "const input = $input.first().json; const well_id = String(input.well_id ?? '').trim(); const horizon_days = Number(input.horizon_days ?? 90); if (!well_id) throw new Error('Укажите идентификатор скважины.'); if (!Number.isInteger(horizon_days) || horizon_days < 1 || horizon_days > 3650) throw new Error('Горизонт должен быть целым числом от 1 до 3650 дней.'); return [{json:{well_id,horizon_days}}];"},
+      "id": "0b80aa00-1f27-4a2d-b8bd-936bdd170002",
+      "name": "2. Проверить поля",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://mai-api:8000/api/v1/monitor/wells/' + encodeURIComponent($json.well_id) + '/analyze' }}",
+        "sendHeaders": true,
+        "headerParameters": {"parameters": [{"name": "Content-Type", "value": "application/json"}]},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { horizon_days: $json.horizon_days } }}",
+        "options": {"timeout": 180000}
+      },
+      "id": "0b80aa00-1f27-4a2d-b8bd-936bdd170003",
+      "name": "3. Обновить источники и выполнить анализ",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [790, 300],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {"conditions": {"options": {"caseSensitive": true, "typeValidation": "strict", "version": 2}, "conditions": [{"id": "0b80aa00-1f27-4a2d-b8bd-936bdd170004", "leftValue": "={{ $json.status }}", "rightValue": "skipped_insufficient_data", "operator": {"type": "string", "operation": "equals"}}], "combinator": "and"}, "options": {}},
+      "id": "0b80aa00-1f27-4a2d-b8bd-936bdd170005",
+      "name": "4. Данных достаточно?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1060, 300]
+    },
+    {
+      "parameters": {"jsCode": "const r=$input.first().json; const missing=(r.missing_items||[]).map(x=>'• '+x); const requested=(r.requested_data||[]).map(x=>'• '+x); const sources=(r.source_statuses||[]).map(x=>'• '+x.source_id+': '+x.status+(x.message?' — '+x.message:'')); const lines=[r.operator_message||'Анализ остановлен: данных недостаточно.', '', 'Что нужно предоставить:', ...(requested.length?requested:['• Проверьте перечень недостающих полей ниже.']), '', 'Причины:', ...missing, ...(sources.length?['','Состояние источников:',...sources]:[])]; return [{json:{formSubmittedText:lines.join('<br>'),status:r.status,well_id:r.well_id}}];"},
+      "id": "0b80aa00-1f27-4a2d-b8bd-936bdd170006",
+      "name": "Показать, каких данных не хватает",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 120]
+    },
+    {
+      "parameters": {
+        "url": "={{ 'http://mai-api:8000/api/v1/monitor/wells/' + encodeURIComponent($('3. Обновить источники и выполнить анализ').first().json.well_id) + '/external-data' }}",
+        "options": {"timeout": 30000}
+      },
+      "id": "0b80aa00-1f27-4a2d-b8bd-936bdd170007",
+      "name": "5. История и расписание бригад",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, 440],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {"jsCode": "const analysis=$('3. Обновить источники и выполнить анализ').first().json; const external=$input.first().json; return [{json:{analysis_id:analysis.analysis_id,context:analysis.context,external_data:external}}];"},
+      "id": "0b80aa00-1f27-4a2d-b8bd-936bdd170008",
+      "name": "6. Подготовить компактный контекст для LLM",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1570, 440]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://mai-api:8000/api/v1/agent/well",
+        "sendHeaders": true,
+        "headerParameters": {"parameters": [{"name": "Content-Type", "value": "application/json"}]},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}",
+        "options": {"timeout": 90000}
+      },
+      "id": "0b80aa00-1f27-4a2d-b8bd-936bdd170009",
+      "name": "7. Получить инженерную справку (LiteLLM)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1830, 440],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {"jsCode": "const ai=$input.first().json; const a=$('3. Обновить источники и выполнить анализ').first().json; const r=ai.report; const lines=r?[`Справка по скважине ${a.well_id}`,r.executive_summary,r.risk_interpretation,...(r.recommended_actions||[]).map((x,i)=>`${i+1}. ${x.priority.toUpperCase()}: ${x.title} — ${x.instruction}`),...(r.data_gaps?.length?['Пробелы данных: '+r.data_gaps.join('; ')]:[]),r.crew_schedule_comment,'Все действия требуют проверки инженером.']:[`Анализ скважины ${a.well_id} завершён.`,`Класс риска: ${a.rule_risk?.risk_class??'не определён'}; баллы: ${a.rule_risk?.risk_points??'нет'}.`,`LLM: ${ai.message??ai.status??'справка недоступна'}.`,`Откройте BI-дашборд: http://localhost:8000/dashboard`]; return [{json:{formSubmittedText:lines.join('<br>'),well_id:a.well_id,analysis_id:a.analysis_id}}];"},
+      "id": "0b80aa00-1f27-4a2d-b8bd-936bdd170010",
+      "name": "Показать итог анализа",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2090, 360]
+    },
+    {
+      "parameters": {"jsCode": "const e=$input.first().json; const message=e.message||e.error?.message||'Источник данных или API сейчас недоступен.'; return [{json:{formSubmittedText:'Запуск не завершён: '+message+'<br>Проверьте подключения источников и состояние API, затем повторите попытку.'}}];"},
+      "id": "0b80aa00-1f27-4a2d-b8bd-936bdd170011",
+      "name": "Показать сообщение об ошибке",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 660]
+    },
+    {
+      "parameters": {"content": "## Что происходит после нажатия\n\n1. Backend запрашивает настроенные Excel API источников DARS / ХИМИК / ERA и JSON расписание бригад.\n2. Заголовки Excel преобразуются по `config/source_profiles.json`; лишние колонки отбрасываются.\n3. Backend проверяет давность, число измерений и заполненность показателей.\n4. Если данных мало — модели и LLM не запускаются; оператор получает список, что исправить.\n5. Если данных достаточно — запускаются диагностика/модели, затем LiteLLM получает только канонический паспорт скважины и историю/расписание.\n\nОтвет формы штатно возвращается после последнего узла (`lastNode`). Узла Respond to Webhook в этом workflow нет. Если включён `MAI_API_KEY`, добавьте заголовок X-API-Key в HTTP Request nodes через n8n Credentials.", "height": 350, "width": 470, "color": 5},
+      "id": "0b80aa00-1f27-4a2d-b8bd-936bdd170012",
+      "name": "Памятка: схема работы и ответ формы",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [220, 40]
+    },
+    {
+      "parameters": {"content": "## 1. Форма\n**Вход:** оператор вводит `well_id` и горизонт прогноза.\n**Выход:** эти два поля переходят в проверку. Кнопка формы ждёт окончания workflow.", "height": 150, "width": 250, "color": 5},
+      "id": "0b80aa00-1f27-4a2d-b8bd-936bdd170013", "name": "Описание 1. Форма", "type": "n8n-nodes-base.stickyNote", "typeVersion": 1, "position": [170, 390]
+    },
+    {
+      "parameters": {"content": "## 2. Проверка полей\n**Вход:** текст ID и горизонт из формы.\n**Задача:** убрать пробелы, убедиться, что ID не пустой, а горизонт — целое число 1–3650.\n**Выход:** `{well_id, horizon_days}` для backend.", "height": 180, "width": 280, "color": 5},
+      "id": "0b80aa00-1f27-4a2d-b8bd-936bdd170014", "name": "Описание 2. Проверка", "type": "n8n-nodes-base.stickyNote", "typeVersion": 1, "position": [460, 400]
+    },
+    {
+      "parameters": {"content": "## 3. Обновление источников и анализ\n**Вход:** ID скважины и горизонт.\n**Запрос:** `POST /api/v1/monitor/wells/{id}/analyze`. Backend загружает подключённые Excel/JSON API и проверяет готовность данных.\n**Выход:** результат анализа или `skipped_insufficient_data`; при HTTP-ошибке открывается ветка сообщения об ошибке.", "height": 230, "width": 310, "color": 5},
+      "id": "0b80aa00-1f27-4a2d-b8bd-936bdd170015", "name": "Описание 3. Backend", "type": "n8n-nodes-base.stickyNote", "typeVersion": 1, "position": [760, 410]
+    },
+    {
+      "parameters": {"content": "## 4. Проверка готовности\n**Вход:** ответ backend.\n**Условие:** статус равен `skipped_insufficient_data`.\n**Выход:** да — показать список недостающих данных; нет — получить расписание/контекст и продолжить к ИИ.", "height": 180, "width": 280, "color": 5},
+      "id": "0b80aa00-1f27-4a2d-b8bd-936bdd170016", "name": "Описание 4. Развилка", "type": "n8n-nodes-base.stickyNote", "typeVersion": 1, "position": [1050, 540]
+    },
+    {
+      "parameters": {"content": "## Сообщение о недостающих данных\n**Вход:** причины, статусы источников и запрос на дополнительные данные.\n**Выход:** понятный ответ формы. Расчёт и LLM здесь не запускались.", "height": 160, "width": 270, "color": 6},
+      "id": "0b80aa00-1f27-4a2d-b8bd-936bdd170017", "name": "Описание 5. Запрос данных", "type": "n8n-nodes-base.stickyNote", "typeVersion": 1, "position": [1260, 20]
+    },
+    {
+      "parameters": {"content": "## 5. Расписание и статусы\n**Вход:** `well_id` рассчитанной скважины.\n**Запрос:** `GET /api/v1/monitor/wells/{id}/external-data`.\n**Выход:** интервалы доступности бригад, статусы источников и примечания. Ремонтная история уже находится в паспорте анализа.", "height": 200, "width": 290, "color": 5},
+      "id": "0b80aa00-1f27-4a2d-b8bd-936bdd170018", "name": "Описание 6. Расписание", "type": "n8n-nodes-base.stickyNote", "typeVersion": 1, "position": [1250, 535]
+    },
+    {
+      "parameters": {"content": "## 6. Компактный контекст\n**Вход:** `context` результата анализа и ответ об источниках/бригаде.\n**Задача:** сформировать контракт `AgentWellRequest`.\n**Выход:** `analysis_id`, паспорт скважины и `external_data` для следующего узла.", "height": 180, "width": 290, "color": 5},
+      "id": "0b80aa00-1f27-4a2d-b8bd-936bdd170019", "name": "Описание 7. Контекст", "type": "n8n-nodes-base.stickyNote", "typeVersion": 1, "position": [1510, 640]
+    },
+    {
+      "parameters": {"content": "## 7. Справка LiteLLM\n**Вход:** подготовленный контракт, без исходной книги Excel.\n**Запрос:** `POST /api/v1/agent/well`; FastAPI вызывает LiteLLM по `MAI_LLM_API_URL`.\n**Выход:** валидированный отчёт сохраняется в PostgreSQL по `analysis_id`; при ошибке финальный узел покажет статус.", "height": 200, "width": 300, "color": 5},
+      "id": "0b80aa00-1f27-4a2d-b8bd-936bdd170020", "name": "Описание 8. ИИ", "type": "n8n-nodes-base.stickyNote", "typeVersion": 1, "position": [1790, 640]
+    },
+    {
+      "parameters": {"content": "## Ответ пользователю\n**Вход:** расчёт и ответ LiteLLM либо статус ошибки.\n**Выход:** краткая справка и ссылка на BI. Поле `formSubmittedText` возвращается штатным Form Trigger в режиме `lastNode`.", "height": 170, "width": 270, "color": 5},
+      "id": "0b80aa00-1f27-4a2d-b8bd-936bdd170021", "name": "Описание 9. Ответ", "type": "n8n-nodes-base.stickyNote", "typeVersion": 1, "position": [2070, 520]
+    },
+    {
+      "parameters": {"content": "## Сообщение об ошибке\n**Вход:** timeout, недоступный backend/источник или ошибка HTTP.\n**Выход:** сообщение с причиной и просьбой проверить подключение. Данные ошибки не выдаются за рассчитанный риск.", "height": 160, "width": 280, "color": 6},
+      "id": "0b80aa00-1f27-4a2d-b8bd-936bdd170022", "name": "Описание 10. Ошибка", "type": "n8n-nodes-base.stickyNote", "typeVersion": 1, "position": [1320, 790]
+    }
+  ],
+  "connections": {
+    "1. Форма оператора": {"main": [[{"node": "2. Проверить поля", "type": "main", "index": 0}]]},
+    "2. Проверить поля": {"main": [[{"node": "3. Обновить источники и выполнить анализ", "type": "main", "index": 0}]]},
+    "3. Обновить источники и выполнить анализ": {"main": [[{"node": "4. Данных достаточно?", "type": "main", "index": 0}], [{"node": "Показать сообщение об ошибке", "type": "main", "index": 0}]]},
+    "4. Данных достаточно?": {"main": [[{"node": "Показать, каких данных не хватает", "type": "main", "index": 0}], [{"node": "5. История и расписание бригад", "type": "main", "index": 0}]]},
+    "5. История и расписание бригад": {"main": [[{"node": "6. Подготовить компактный контекст для LLM", "type": "main", "index": 0}], [{"node": "Показать сообщение об ошибке", "type": "main", "index": 0}]]},
+    "6. Подготовить компактный контекст для LLM": {"main": [[{"node": "7. Получить инженерную справку (LiteLLM)", "type": "main", "index": 0}]]},
+    "7. Получить инженерную справку (LiteLLM)": {"main": [[{"node": "Показать итог анализа", "type": "main", "index": 0}], [{"node": "Показать итог анализа", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1", "timezone": "Europe/Moscow"},
+  "versionId": "0b80aa00-1f27-4a2d-b8bd-936bdd170100",
+  "meta": {"templateCredsSetupCompleted": false},
+  "tags": []
+}

@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "profiles": {
+    "dars": {
+      "source_id": "DARS",
+      "kind": "telemetry",
+      "sheet_name": null,
+      "header_row": 1,
+      "required_columns": ["timestamp"],
+      "field_map": {
+        "well_id": ["well_id", "well", "скважина", "номер скважины", "id скважины"],
+        "timestamp": ["timestamp", "date", "datetime", "дата", "дата и время", "дата измерения", "время измерения"],
+        "water_cut_pct": ["water_cut_pct", "water cut", "обводненность", "обводнённость", "обводненность, %", "обводнённость, %"],
+        "co2_pct": ["co2_pct", "co2", "co2, %", "co₂, %", "содержание co2, %"],
+        "chlorides_mg_l": ["chlorides_mg_l", "chlorides", "хлориды, мг/л", "хлориды"],
+        "inhibitor_efficiency": ["inhibitor_efficiency", "эффективность ингибитора", "защита ингибитором"],
+        "injection_deviation_pct": ["injection_deviation_pct", "отклонение закачки, %", "отклонение закачки"],
+        "corrosion_rate_mm_year": ["corrosion_rate_mm_year", "скорость коррозии, мм/год", "скорость коррозии"],
+        "wall_thickness_mm": ["wall_thickness_mm", "толщина стенки, мм", "толщина стенки"],
+        "initial_wall_thickness_mm": ["initial_wall_thickness_mm", "начальная толщина стенки, мм"],
+        "metal_loss_mm": ["metal_loss_mm", "потеря металла, мм"],
+        "corrosion_load": ["corrosion_load", "коррозионная нагрузка"],
+        "water_compatibility_issue": ["water_compatibility_issue", "несовместимость вод", "несовместимость воды"]
+      },
+      "scale_fields": []
+    },
+    "khimik": {
+      "source_id": "KHIMIK",
+      "kind": "telemetry",
+      "sheet_name": null,
+      "header_row": 1,
+      "required_columns": ["timestamp"],
+      "field_map": {
+        "well_id": ["well_id", "well", "скважина", "номер скважины", "id скважины"],
+        "timestamp": ["timestamp", "date", "datetime", "дата", "дата и время", "дата анализа", "дата отбора проб"],
+        "water_cut_pct": ["water_cut_pct", "обводненность", "обводнённость", "обводненность, %", "обводнённость, %"],
+        "co2_pct": ["co2_pct", "co2", "co2, %", "co₂, %"],
+        "chlorides_mg_l": ["chlorides_mg_l", "хлориды", "хлориды, мг/л", "концентрация хлоридов"],
+        "inhibitor_efficiency": ["inhibitor_efficiency", "эффективность ингибитора", "эффективность защиты"],
+        "corrosion_rate_mm_year": ["corrosion_rate_mm_year", "скорость коррозии", "скорость коррозии, мм/год"],
+        "wall_thickness_mm": ["wall_thickness_mm", "толщина стенки", "толщина стенки, мм"],
+        "water_compatibility_issue": ["water_compatibility_issue", "несовместимость вод", "несовместимость воды"]
+      },
+      "scale_fields": []
+    },
+    "era": {
+      "source_id": "ERA",
+      "kind": "history",
+      "sheet_name": null,
+      "header_row": 1,
+      "required_columns": ["event_date"],
+      "work_event_values": ["work", "repair", "maintenance", "работа", "ремонт", "обслуживание"],
+      "failure_event_values": ["failure", "incident", "отказ", "поломка", "авария"],
+      "field_map": {
+        "well_id": ["well_id", "well", "скважина", "номер скважины", "id скважины"],
+        "event_date": ["event_date", "date", "дата", "дата события", "дата отказа", "дата ремонта"],
+        "event_type": ["event_type", "type", "тип события", "вид события", "тип записи"],
+        "work_type": ["work_type", "вид работ", "тип работ", "выполненная работа", "тип ремонта"],
+        "reason": ["reason", "причина", "основание"],
+        "equipment": ["equipment", "оборудование", "узел"],
+        "result": ["result", "результат", "итог работ"],
+        "failure_type": ["failure_type", "тип отказа", "вид отказа", "неисправность"],
+        "cause": ["cause", "причина отказа", "коренная причина"],
+        "corrosion_detected": ["corrosion_detected", "коррозия обнаружена", "обнаружена коррозия"],
+        "repair": ["repair", "ремонт", "восстановительные работы"],
+        "downtime_days": ["downtime_days", "простой, дни", "длительность простоя, дней", "простой"]
+      }
+    },
+    "crew_schedule": {
+      "source_id": "CREW_SCHEDULE",
+      "kind": "json_schedule",
+      "description": "JSON API response with crew_availability rows; not an Excel upload profile."
+    }
+  }
+}
