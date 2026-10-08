@@ -258,8 +258,8 @@ def run_scheduled_monitor(request_data: MonitorRequest, request: Request) -> Mon
     source_failures: list[dict] = []
     completed = skipped = 0
     
-    # Ежедневный цикл запускается на 30 и 90 дней
-    horizons_for_monitor = [30, 90]
+    # Keep dashboard horizons populated and include the horizon explicitly requested by the caller.
+    horizons_for_monitor = sorted({30, 90, 180, request_data.horizon_days})
     
     for well_id in well_ids:
         try:

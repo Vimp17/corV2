@@ -80,7 +80,7 @@ async def ingest_excel(file: UploadFile = File(...), profile_id: str = Form(...)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-@router.post("/ingestion/crew-schedule", status_code=201)
+@router.post("/crew-schedule", status_code=201)
 def ingest_crew_schedule(
     payload: dict,
     well_id: str | None = Query(default=None, max_length=128),

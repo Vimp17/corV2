@@ -289,7 +289,7 @@ my_survival = "mai_my_survival.plugin:MySurvivalModel"
 | `POST /api/v1/ingestion/telemetry`, `POST /api/v1/ingestion/history` | Канонический JSON intake |
 | `POST /api/v1/ingestion/crew-schedule?well_id={well_id}` | JSON-снимок расписания для конкретной скважины |
 | `GET /api/v1/ingestion/wells/{well_id}/telemetry`, `GET /api/v1/ingestion/wells/{well_id}/history` | Сохранённые данные |
-| `POST /api/v1/monitor/run` | Суточная синхронизация и риск-рейтинг всех известных скважин; тело `{"horizon_days":90}` |
+| `POST /api/v1/monitor/run` | Суточная синхронизация и риск-рейтинг всех известных скважин по горизонтам 30, 90 и 180 дней, а также по горизонту из запроса; тело `{"horizon_days":90}` |
 | `POST /api/v1/monitor/wells/{well_id}/analyze` | Синхронизация и ручной анализ одной скважины |
 | `GET /api/v1/dashboard/risk-ranking` | Данные BI, ошибки источников, сравнение моделей и AI-отчёты |
 | `GET /api/v1/monitor/wells/{well_id}/external-data` | Статусы внешних систем и доступность бригад для LLM |
