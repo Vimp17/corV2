@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from math import isfinite
 
+from app.config import settings
 from app.core.quality import MEASUREMENTS
 from app.schemas import FeatureSnapshot
 
@@ -17,7 +18,15 @@ def _parse_timestamp(value: str) -> datetime:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
-def _slope(rows: list[dict], field: str, window_days: int = 28) -> tuple[float | None, int]:
+def _slope(rows: list[dict], field: str, window_days: int | None = None,
+           min_observations: int | None = None) -> tuple[float | None, int]:
+    """Least-squares slope per day over the trailing window ending at the latest record.
+
+    Window and minimum sample count default to MAI_TREND_WINDOW_DAYS and
+    MAI_MIN_TREND_OBSERVATIONS, the same values readiness uses.
+    """
+    window_days = settings.trend_window_days if window_days is None else window_days
+    min_observations = settings.min_trend_observations if min_observations is None else min_observations
     latest = _parse_timestamp(rows[-1]["timestamp"])
     samples: list[tuple[float, float]] = []
     for row in rows:
@@ -26,7 +35,7 @@ def _slope(rows: list[dict], field: str, window_days: int = 28) -> tuple[float |
         value = row["calculated"].get(field)
         if days_before_latest <= window_days and value is not None and isfinite(float(value)):
             samples.append((-days_before_latest, float(value)))
-    if len(samples) < 8:
+    if len(samples) < min_observations:
         return None, len(samples)
     mean_x = sum(x for x, _ in samples) / len(samples)
     mean_y = sum(y for _, y in samples) / len(samples)

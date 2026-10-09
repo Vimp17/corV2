@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import functools
 import logging
 import os
+import time
 from importlib import metadata
 from typing import Any, Protocol
 from urllib.parse import urlparse
@@ -150,7 +152,31 @@ def source_env(source_id: str, suffix: str) -> str:
     return os.getenv(f"MAI_SOURCE_{safe_id}_{suffix}", "").strip()
 
 
+_RETRYABLE_STATUS = {429, 502, 503, 504}
+
+
+def _get_with_retries(endpoint: str, **kwargs) -> requests.Response:
+    """GET with bounded retries for transient failures (connection errors, timeouts and
+    HTTP 429/502/503/504), backing off 1 s, 2 s, 4 s ... between attempts."""
+    attempts = settings.source_max_retries + 1
+    for attempt in range(attempts):
+        last_try = attempt == attempts - 1
+        try:
+            response = requests.get(endpoint, **kwargs)
+        except (requests.ConnectionError, requests.Timeout):
+            if last_try:
+                raise
+        else:
+            if response.status_code not in _RETRYABLE_STATUS or last_try:
+                return response
+            response.close()
+        time.sleep(min(2 ** attempt, 8))
+    raise RuntimeError("unreachable")
+
+
+@functools.lru_cache(maxsize=1)
 def _load_adapters() -> dict[str, SourceAdapter]:
+    """Entry points are fixed for the life of the process, so they are enumerated once."""
     adapters: dict[str, SourceAdapter] = {}
     try:
         points = metadata.entry_points(group=SOURCE_ENTRY_POINT_GROUP)
@@ -391,7 +417,7 @@ def refresh_sources_for_well(well_id: str) -> list[dict]:
             headers["Authorization"] = f"Bearer {token}"
 
         try:
-            response = requests.get(
+            response = _get_with_retries(
                 endpoint,
                 params={"well_id": well_id},
                 headers=headers,

@@ -249,7 +249,9 @@ class RuleRisk(APIModel):
     model: str = "rules"
     model_version: str = "1.0"
     status: str
-    risk_score: float | None = None
+    risk_score: float | None = Field(default=None, description=(
+        "Rule points divided by the CRITICAL threshold (14), capped at 1. A normalised index "
+        "for ranking, not a probability of failure."))
     risk_points: int | None = None
     risk_class: str
     risk_percentile: float | None = None
@@ -437,6 +439,7 @@ class SkippedAnalysis(APIModel):
     analysis_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     well_id: str
     status: Literal["skipped_insufficient_data"] = "skipped_insufficient_data"
+    horizon_days: int | None = Field(default=None, ge=1, le=3650)
     telemetry_records: int = Field(ge=0)
     unique_timestamps: int = Field(ge=0)
     current_signal_count: int = Field(ge=0)

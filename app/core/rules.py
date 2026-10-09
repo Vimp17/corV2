@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from app.core.diagnostics import THRESHOLDS
+from app.core.diagnostics import THRESHOLDS, assess_wall
 from app.schemas import ActionItem, FeatureSnapshot, RuleFinding, RuleRisk
 
 
@@ -107,13 +107,12 @@ def evaluate_rules(features: FeatureSnapshot, normalized: list[dict], horizon_da
             THRESHOLDS["corrosion_rate_critical"] if critical else THRESHOLDS["corrosion_rate_high"])
     add("CORR_RATE_003", _persistent(normalized, "corrosion_rate_mm_year", lambda x: x >= THRESHOLDS["corrosion_rate_high"]),
         "MEDIUM", RULE_POINTS["persistent_7d"], "Высокая скорость коррозии сохраняется не менее 7 дней", 7, 7)
-    wall = values.get("wall_thickness_mm")
-    if wall is not None and wall <= THRESHOLDS["wall_thickness_critical"]:
-        add("CORR_WALL_002", True, "CRITICAL", RULE_POINTS["wall_critical"],
-            "Остаточная толщина достигла критического уровня", wall, THRESHOLDS["wall_thickness_critical"])
-    elif wall is not None and wall <= THRESHOLDS["wall_thickness_warning"]:
-        add("CORR_WALL_001", True, "HIGH", RULE_POINTS["wall_warning"],
-            "Остаточная толщина ниже предупредительного порога", wall, THRESHOLDS["wall_thickness_warning"])
+    wall_finding = assess_wall(values)
+    if wall_finding is not None:
+        critical = wall_finding["severity"] == "CRITICAL"
+        add("CORR_WALL_002" if critical else "CORR_WALL_001", True, wall_finding["severity"],
+            RULE_POINTS["wall_critical"] if critical else RULE_POINTS["wall_warning"],
+            wall_finding["reason"], wall_finding["value"], wall_finding["threshold"])
 
     points = sum(item.points for item in findings)
     risk_class = "CRITICAL" if points >= 14 else "HIGH" if points >= 7 else "MEDIUM" if points >= 4 else "LOW"
