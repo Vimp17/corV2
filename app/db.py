@@ -5,7 +5,9 @@ import hashlib
 import json
 import uuid
 from datetime import datetime, timezone
-from typing import Iterable
+from pathlib import Path
+from contextlib import contextmanager
+from typing import Iterable, Iterator
 
 from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, Integer, JSON, MetaData, String, Table, Column, UniqueConstraint, create_engine, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -82,6 +84,18 @@ source_health = Table(
     Column("retrieved_at", DateTime(timezone=True), nullable=False),
 )
 
+monitor_jobs = Table(
+    "monitor_jobs", metadata,
+    Column("job_id", String(64), primary_key=True),
+    Column("status", String(32), nullable=False),
+    Column("horizon_days", Integer, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("started_at", DateTime(timezone=True)),
+    Column("completed_at", DateTime(timezone=True)),
+    Column("result_json", JSON),
+    Column("error", String(2000)),
+)
+
 source_documents = Table(
     "source_documents", metadata,
     Column("source_id", String(128), primary_key=True), Column("well_id", String(128), primary_key=True),
@@ -110,10 +124,34 @@ def engine() -> Engine:
     return _engine
 
 
+_MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"
+# Separate key from MONITOR_LOCK_KEY: serialises schema upgrades when several API workers or
+# replicas start at once.
+_MIGRATION_LOCK_KEY = 0x4D41494D4947  # "MAIMIG"
+
+
 def init_db() -> None:
-    metadata.create_all(engine())
-    _migrate_source_health_origin()
-    _migrate_analysis_runs_horizon()
+    """Bring the schema to the latest Alembic revision.
+
+    The table definitions in this module describe the schema for queries; the schema itself is
+    owned by the revisions in migrations/versions. A blocking advisory lock makes concurrent
+    startups wait for one upgrade instead of racing each other.
+    """
+    from alembic import command
+    from alembic.config import Config
+
+    config = Config()
+    config.set_main_option("script_location", str(_MIGRATIONS_DIR))
+    with engine().connect() as conn:
+        conn.execute(text("SELECT pg_advisory_lock(:k)"), {"k": _MIGRATION_LOCK_KEY})
+        conn.commit()
+        try:
+            config.attributes["connection"] = conn
+            command.upgrade(config, "head")
+            conn.commit()
+        finally:
+            conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": _MIGRATION_LOCK_KEY})
+            conn.commit()
 
 
 def check_database() -> bool:
@@ -486,63 +524,6 @@ def prune_analysis_runs(retention_days: int) -> int:
     with engine().begin() as conn:
         return conn.execute(statement, {"days": retention_days}).rowcount or 0
 
-def _migrate_source_health_origin() -> None:
-    statements = [
-        """
-        ALTER TABLE source_health
-        ADD COLUMN IF NOT EXISTS origin VARCHAR(32) NOT NULL DEFAULT 'api_refresh'
-        """,
-        """
-        UPDATE source_health
-        SET origin = 'api_refresh'
-        WHERE origin IS NULL
-        """,
-        """
-        DO $$
-        DECLARE
-            rec RECORD;
-        BEGIN
-            FOR rec IN
-                SELECT conname
-                FROM pg_constraint
-                WHERE conrelid = 'source_health'::regclass
-                  AND contype = 'p'
-            LOOP
-                EXECUTE format('ALTER TABLE source_health DROP CONSTRAINT %I', rec.conname);
-            END LOOP;
-        END $$;
-        """,
-        """
-        ALTER TABLE source_health
-        ADD PRIMARY KEY (source_id, well_id, origin)
-        """,
-    ]
-
-    with engine().begin() as conn:
-        for statement in statements:
-            conn.execute(text(statement))
-
-def _migrate_analysis_runs_horizon() -> None:
-    """Add and backfill analysis_runs.horizon_days for databases created before it existed."""
-    statements = [
-        "ALTER TABLE analysis_runs ADD COLUMN IF NOT EXISTS horizon_days INTEGER",
-        """
-        UPDATE analysis_runs
-        SET horizon_days = (result_json -> 'model_predictions' -> 0 ->> 'horizon_days')::int
-        WHERE horizon_days IS NULL
-          AND json_typeof(result_json -> 'model_predictions') = 'array'
-          AND (result_json -> 'model_predictions' -> 0 ->> 'horizon_days') ~ '^[0-9]+$'
-        """,
-        """
-        CREATE INDEX IF NOT EXISTS idx_analysis_runs_well_horizon_time
-        ON analysis_runs (well_id, horizon_days, created_at)
-        """,
-    ]
-    with engine().begin() as conn:
-        for statement in statements:
-            conn.execute(text(statement))
-
-
 def effective_source_statuses(well_id: str | None = None) -> list[dict]:
     rows = list_source_statuses(well_id)
 
@@ -608,3 +589,47 @@ def effective_source_statuses(well_id: str | None = None) -> list[dict]:
     )
 
     return effective
+
+
+# Arbitrary application-wide key for pg_try_advisory_lock: at most one monitor run at a time
+# across all API workers and replicas sharing the database.
+MONITOR_LOCK_KEY = 0x4D41494D4F4E  # "MAIMON"
+
+
+@contextmanager
+def advisory_lock(key: int) -> Iterator[bool]:
+    """Try to take a session-level advisory lock; yields whether it was acquired."""
+    with engine().connect() as conn:
+        acquired = bool(conn.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": key}).scalar())
+        conn.commit()
+        try:
+            yield acquired
+        finally:
+            if acquired:
+                conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": key})
+                conn.commit()
+
+
+def create_monitor_job(job_id: str, horizon_days: int) -> dict:
+    row = {"job_id": job_id, "status": "queued", "horizon_days": horizon_days,
+           "created_at": datetime.now(timezone.utc)}
+    with engine().begin() as conn:
+        conn.execute(monitor_jobs.insert().values(**row))
+    return get_monitor_job(job_id)
+
+
+def update_monitor_job(job_id: str, **values) -> None:
+    with engine().begin() as conn:
+        conn.execute(monitor_jobs.update().where(monitor_jobs.c.job_id == job_id).values(**values))
+
+
+def get_monitor_job(job_id: str) -> dict | None:
+    with engine().connect() as conn:
+        row = conn.execute(select(monitor_jobs).where(monitor_jobs.c.job_id == job_id)).mappings().first()
+    if row is None:
+        return None
+    iso = lambda value: value.isoformat() if value else None  # noqa: E731
+    return {"job_id": row["job_id"], "status": row["status"], "horizon_days": row["horizon_days"],
+            "created_at": iso(row["created_at"]), "started_at": iso(row["started_at"]),
+            "completed_at": iso(row["completed_at"]), "result": row["result_json"],
+            "error": row["error"]}

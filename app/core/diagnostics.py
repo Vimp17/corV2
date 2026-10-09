@@ -12,9 +12,47 @@ THRESHOLDS = {
     "inhibitor_low": 0.70, "inhibitor_critical": 0.40,
     "injection_dev_high": 15.0, "injection_dev_critical": 30.0,
     "wall_thickness_warning": 8.0, "wall_thickness_critical": 5.0,
+    # Fraction of the initial wall lost. Chosen to match the absolute thresholds above for the
+    # 12 mm demo pipe (8 mm left = 1/3 lost, 5 mm left = 7/12 lost); used whenever the initial
+    # thickness is known, so thin- and thick-walled pipes are judged by their own design wall.
+    "wall_loss_warning": 0.33, "wall_loss_critical": 0.58,
     "corrosion_rate_high": 0.35, "corrosion_rate_critical": 0.60,
 }
 SEVERITY_RANK = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3, "UNKNOWN": -1}
+
+
+def assess_wall(values: dict) -> dict | None:
+    """Grade wall thickness, relative to the initial wall when it is known.
+
+    Returns None when there is no finding, else a dict with severity, value, threshold,
+    basis ("relative_loss" or "absolute_thickness") and a Russian reason.
+    """
+    wall = values.get("wall_thickness_mm")
+    if wall is None:
+        return None
+    initial = values.get("initial_wall_thickness_mm")
+    if initial is not None and initial > 0 and initial >= wall:
+        loss = (initial - wall) / initial
+        for severity, key in (("CRITICAL", "wall_loss_critical"), ("HIGH", "wall_loss_warning")):
+            if loss >= THRESHOLDS[key]:
+                return {
+                    "severity": severity, "value": round(loss, 4), "threshold": THRESHOLDS[key],
+                    "basis": "relative_loss",
+                    "reason": (f"Потеряно {loss:.0%} исходной толщины стенки "
+                               f"({wall:g} из {initial:g} мм); порог {THRESHOLDS[key]:.0%}."),
+                }
+        return None
+    for severity, key, text in (
+        ("CRITICAL", "wall_thickness_critical", "Остаточная толщина достигла критического порога"),
+        ("HIGH", "wall_thickness_warning", "Остаточная толщина ниже порога предупреждения"),
+    ):
+        if wall <= THRESHOLDS[key]:
+            return {
+                "severity": severity, "value": wall, "threshold": THRESHOLDS[key],
+                "basis": "absolute_thickness",
+                "reason": f"{text} ({wall:g} мм); исходная толщина неизвестна, применён абсолютный порог.",
+            }
+    return None
 
 
 def _result(findings: list[DiagnosticFinding], has_data: bool) -> DiagnosticResult:
@@ -128,15 +166,12 @@ def diagnose_corrosion(features: FeatureSnapshot) -> CorrosionState:
             factor="corrosion_rate_mm_year", severity="HIGH", value=rate,
             threshold=THRESHOLDS["corrosion_rate_high"], reason="Высокая скорость коррозии.",
         ))
-    if wall is not None and wall <= THRESHOLDS["wall_thickness_critical"]:
+    wall_finding = assess_wall(values)
+    if wall_finding is not None:
         findings.append(DiagnosticFinding(
-            factor="wall_thickness_mm", severity="CRITICAL", value=wall,
-            threshold=THRESHOLDS["wall_thickness_critical"], reason="Остаточная толщина достигла критического порога.",
-        ))
-    elif wall is not None and wall <= THRESHOLDS["wall_thickness_warning"]:
-        findings.append(DiagnosticFinding(
-            factor="wall_thickness_mm", severity="HIGH", value=wall,
-            threshold=THRESHOLDS["wall_thickness_warning"], reason="Остаточная толщина ниже порога предупреждения.",
+            factor="wall_thickness_mm", severity=wall_finding["severity"],
+            value=wall_finding["value"], threshold=wall_finding["threshold"],
+            reason=wall_finding["reason"],
         ))
     if findings:
         severity = max((item.severity for item in findings), key=lambda level: SEVERITY_RANK[level])

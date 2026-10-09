@@ -320,12 +320,23 @@
     $('horizonSelect').addEventListener('change', () => sessionStorage.setItem('maiHorizon', $('horizonSelect').value));
     const horizonDays = () => Number($('horizonSelect').value || 90);
 
+    // Readiness thresholds come from the backend settings; these defaults are used only until
+    // /api/v1/ingestion/sources answers (or if it is unreachable).
+    let readiness = { min_telemetry_records: 8, min_trend_observations: 8, trend_window_days: 28,
+                      min_current_signals: 2, max_forward_fill_days: 7, max_telemetry_age_hours: 48 };
+    async function loadReadiness() {
+      try {
+        const sources = await apiRequest('/api/v1/ingestion/sources');
+        if (sources.readiness) { readiness = { ...readiness, ...sources.readiness }; updateUploadHelp(); }
+      } catch { /* keep defaults; the help text is advisory */ }
+    }
+
     function updateUploadHelp() {
       const help = $('uploadHelp');
       if ($('profileId').value === 'era') {
         help.innerHTML = '<strong>Обязательно для ERA:</strong> дата события, ID скважины (в таблице или в поле выше) и тип события (работа/отказ) либо описание, позволяющее определить тип. Рекомендуемые сведения: тип работ, причина, оборудование, результат, причина отказа и простой. Источник можно разбить на несколько листов с одной структурой колонок. Файл с несколькими скважинами загружайте без общего ID; ниже выберите нужную скважину.';
       } else {
-        help.innerHTML = '<strong>Обязательно для DARS/ХИМИК:</strong> дата/время и ID скважины (в таблице или в поле выше); в каждой строке хотя бы один показатель. Для расчёта по умолчанию нужно 8 разных дат, 8 записей за последние 28 дней, 2 актуальных разных показателя за 7 дней и данные не старше 48 часов. Источник можно разбить на несколько листов с одной структурой колонок. Файл с несколькими скважинами загружайте без общего ID; ниже выберите нужную скважину.';
+        help.innerHTML = `<strong>Обязательно для DARS/ХИМИК:</strong> дата/время и ID скважины (в таблице или в поле выше); в каждой строке хотя бы один показатель. Для расчёта нужно ${Number(readiness.min_telemetry_records)} разных дат, ${Number(readiness.min_trend_observations)} записей за ${Number(readiness.trend_window_days)} дней и ${Number(readiness.min_current_signals)} актуальных разных показателя за ${Number(readiness.max_forward_fill_days)} дней. Данные старше ${Number(readiness.max_telemetry_age_hours)} ч. рассчитываются, но помечаются как устаревшие. Источник можно разбить на несколько листов с одной структурой колонок. Файл с несколькими скважинами загружайте без общего ID; ниже выберите нужную скважину.`;
       }
     }
 
@@ -495,11 +506,27 @@
       return apiRequest('/api/v1/agent/well', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ analysis_id: alert.analysis_id, context: run.analysis.context, external_data: external }) });
     }
 
+    // The monitor runs as a background job; poll its status instead of holding one long request.
+    async function waitForMonitorJob(jobId) {
+      const started = Date.now();
+      for (;;) {
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        const job = await apiRequest(`/api/v1/monitor/jobs/${encodeURIComponent(jobId)}`);
+        if (job.status === 'completed') return job.result;
+        if (job.status === 'failed' || job.status === 'rejected') {
+          throw new Error(job.error || 'Расчёт не выполнен; подробности в журнале backend.');
+        }
+        const seconds = Math.round((Date.now() - started) / 1000);
+        showNotice(`Обновляются источники и рассчитывается риск… прошло ${seconds} с.`);
+      }
+    }
+
     async function runNow() {
       busy = true;
       $('run').disabled = true; showNotice('Обновляются источники и рассчитывается риск…');
       try {
-        const result = await apiRequest('/api/v1/monitor/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ horizon_days: horizonDays() }) });
+        const job = await apiRequest('/api/v1/monitor/run?background=true', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ horizon_days: horizonDays() }) });
+        const result = await waitForMonitorJob(job.job_id);
         let reports = 0, reportErrors = 0;
         for (const alert of (result.alerts || [])) {
           try { await createReportForAlert(alert); reports++; } catch { reportErrors++; }
@@ -603,7 +630,7 @@
     }
     setInterval(autoRefreshTick, AUTO_REFRESH_SECONDS * 1000);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) autoRefreshTick(); });
-    $('refresh').addEventListener('click', () => refresh()); $('run').addEventListener('click', runNow); updateUploadHelp(); refresh();
+    $('refresh').addEventListener('click', () => refresh()); $('run').addEventListener('click', runNow); updateUploadHelp(); loadReadiness(); refresh();
   </script>
 </body>
 </html>

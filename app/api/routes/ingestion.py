@@ -52,6 +52,16 @@ def get_sources() -> dict:
         "last_status": db.list_source_statuses(),
         "excel_upload": {"format": "xlsx", "max_bytes": settings.max_excel_bytes,
                          "max_rows": settings.max_excel_rows},
+        # Effective readiness thresholds, so clients do not hard-code the defaults.
+        "readiness": {
+            "min_telemetry_records": settings.min_telemetry_records,
+            "min_trend_observations": settings.min_trend_observations,
+            "trend_window_days": settings.trend_window_days,
+            "min_current_signals": settings.min_current_signals,
+            "max_forward_fill_days": settings.max_forward_fill_days,
+            "max_telemetry_age_hours": settings.max_telemetry_age_hours,
+            "max_future_skew_hours": settings.max_future_skew_hours,
+        },
     }
 
 

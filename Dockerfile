@@ -11,6 +11,8 @@ COPY app ./app
 COPY dashboard ./dashboard
 COPY config ./config
 COPY scripts ./scripts
+COPY migrations ./migrations
+COPY alembic.ini ./alembic.ini
 RUN mkdir -p /app/models
 
 EXPOSE 8000

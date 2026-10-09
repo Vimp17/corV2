@@ -249,7 +249,9 @@ class RuleRisk(APIModel):
     model: str = "rules"
     model_version: str = "1.0"
     status: str
-    risk_score: float | None = None
+    risk_score: float | None = Field(default=None, description=(
+        "Rule points divided by the CRITICAL threshold (14), capped at 1. A normalised index "
+        "for ranking, not a probability of failure."))
     risk_points: int | None = None
     risk_class: str
     risk_percentile: float | None = None

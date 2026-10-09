@@ -88,6 +88,10 @@ class Settings:
     # Full analysis payloads older than this are pruned after each scheduled run; the latest
     # run for every well/horizon pair is always kept. 0 disables pruning.
     analysis_retention_days: int = _int_env("MAI_ANALYSIS_RETENTION_DAYS", "90", 0, 3650)
+    # Scheduled monitor: wells whose sources are refreshed concurrently, and retries for
+    # transient source API failures (connection errors, timeouts, HTTP 429/502/503/504).
+    source_refresh_workers: int = _int_env("MAI_SOURCE_REFRESH_WORKERS", "4", 1, 32)
+    source_max_retries: int = _int_env("MAI_SOURCE_MAX_RETRIES", "2", 0, 5)
     # Readiness tolerance for clocks running ahead of the server; beyond it analysis is skipped.
     max_future_skew_hours: float = _positive_float("MAI_MAX_FUTURE_SKEW_HOURS", "24", 720)
     app_name: str = "MAI Corrosion Control API"
