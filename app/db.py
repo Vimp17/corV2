@@ -59,9 +59,11 @@ analysis_runs = Table(
     Column("status", String(64), nullable=False), Column("model_versions_json", JSON, nullable=False),
     Column("result_json", JSON, nullable=False), Column("agent_status", String(64)),
     Column("agent_updated_at", DateTime(timezone=True)), Column("agent_response_json", JSON),
-    Column("external_data_json", JSON),
+    Column("external_data_json", JSON), Column("horizon_days", Integer),
 )
 Index("idx_analysis_runs_well_time", analysis_runs.c.well_id, analysis_runs.c.created_at)
+Index("idx_analysis_runs_well_horizon_time", analysis_runs.c.well_id,
+      analysis_runs.c.horizon_days, analysis_runs.c.created_at)
 source_health = Table(
     "source_health",
     metadata,
@@ -88,6 +90,18 @@ source_documents = Table(
 
 _engine: Engine | None = None
 
+# PostgreSQL allows at most 65,535 bind parameters per statement; multi-row inserts are
+# split so that the documented 10,000-row batches stay well below that limit.
+_INSERT_CHUNK_ROWS = 2000
+# Unique constraints treat NULLs as distinct, so a NULL source_id would let identical rows
+# be stored twice. Rows without a valid source are keyed under this sentinel instead.
+_UNSPECIFIED_SOURCE = "__unspecified__"
+
+
+def _chunks(rows: list[dict], size: int = _INSERT_CHUNK_ROWS):
+    for start in range(0, len(rows), size):
+        yield rows[start:start + size]
+
 
 def engine() -> Engine:
     global _engine
@@ -99,6 +113,7 @@ def engine() -> Engine:
 def init_db() -> None:
     metadata.create_all(engine())
     _migrate_source_health_origin()
+    _migrate_analysis_runs_horizon()
 
 
 def check_database() -> bool:
@@ -137,14 +152,12 @@ def save_batch(well_id: str, requested_batch_id: str | None, records: Iterable[T
     for index, (point, payload) in enumerate(zip(rows, payloads)):
         source_id = payload.get("source_id")
         if not isinstance(source_id, str) or not source_id.strip() or len(source_id) > 128:
-            source_id = None
+            source_id = _UNSPECIFIED_SOURCE
             payload.pop("source_id", None)
-        source_occurrence = None
-        if source_id:
-            timestamp = point.timestamp.replace(tzinfo=timezone.utc) if point.timestamp.tzinfo is None else point.timestamp.astimezone(timezone.utc)
-            occurrence_key = (source_id, timestamp.isoformat())
-            source_occurrence = occurrences.get(occurrence_key, 0)
-            occurrences[occurrence_key] = source_occurrence + 1
+        timestamp = point.timestamp.replace(tzinfo=timezone.utc) if point.timestamp.tzinfo is None else point.timestamp.astimezone(timezone.utc)
+        occurrence_key = (source_id, timestamp.isoformat())
+        source_occurrence = occurrences.get(occurrence_key, 0)
+        occurrences[occurrence_key] = source_occurrence + 1
         telemetry_rows.append({"batch_id": batch_id, "well_id": well_id, "source_id": source_id,
                                "source_occurrence": source_occurrence, "record_index": index,
                                "timestamp": point.timestamp, "payload_json": payload})
@@ -162,8 +175,8 @@ def save_batch(well_id: str, requested_batch_id: str | None, records: Iterable[T
                 raise ValueError("batch_id has already been used with a different well or payload")
             return {"batch_id": batch_id, "well_id": well_id, "records_received": len(rows),
                     "records_stored": existing["record_count"], "idempotent_replay": True}
-        if telemetry_rows:
-            statement = pg_insert(telemetry).values(telemetry_rows)
+        for chunk in _chunks(telemetry_rows):
+            statement = pg_insert(telemetry).values(chunk)
             statement = statement.on_conflict_do_update(
                 index_elements=[telemetry.c.well_id, telemetry.c.source_id,
                                 telemetry.c.timestamp, telemetry.c.source_occurrence],
@@ -234,7 +247,7 @@ def save_history(well_id: str, requested_batch_id: str | None,
                  source_id: str | None = None) -> dict:
     batch_id = requested_batch_id or str(uuid.uuid4())
     if not isinstance(source_id, str) or not source_id.strip() or len(source_id) > 128:
-        source_id = None
+        source_id = _UNSPECIFIED_SOURCE
     encoded: list[dict] = []
     for event_type, records, date_field in (("work", work_history, "date"),
                                              ("failure", failure_history, "failure_date")):
@@ -269,13 +282,14 @@ def save_history(well_id: str, requested_batch_id: str | None,
             for event_type in ("work", "failure"):
                 event_rows = [{"batch_id": batch_id, "well_id": well_id, **item}
                               for item in encoded if item["event_type"] == event_type]
-                if not event_rows:
-                    continue
-                statement = pg_insert(history_events).values(event_rows).on_conflict_do_nothing(
-                    index_elements=[history_events.c.well_id, history_events.c.source_id,
-                                    history_events.c.event_type, history_events.c.event_fingerprint]
-                )
-                inserted_counts[event_type] = max(0, conn.execute(statement).rowcount or 0)
+                for chunk in _chunks(event_rows):
+                    # rowcount is not reliable for multi-row INSERT ... ON CONFLICT DO NOTHING
+                    # with this driver, so count the rows actually inserted via RETURNING.
+                    statement = pg_insert(history_events).values(chunk).on_conflict_do_nothing(
+                        index_elements=[history_events.c.well_id, history_events.c.source_id,
+                                        history_events.c.event_type, history_events.c.event_fingerprint]
+                    ).returning(history_events.c.id)
+                    inserted_counts[event_type] += len(conn.execute(statement).all())
     return {"batch_id": batch_id, "well_id": well_id,
             "work_records_received": len(work_history), "failure_records_received": len(failure_history),
             "work_records_stored": inserted_counts["work"],
@@ -296,9 +310,13 @@ def load_history(well_id: str) -> dict[str, list]:
     return {"work_history": work, "failure_history": failures}
 
 
-def save_analysis_run(result: PipelineResult | dict, request_id: str | None = None) -> dict:
+def save_analysis_run(result: PipelineResult | dict, request_id: str | None = None,
+                      horizon_days: int | None = None) -> dict:
     payload = result.model_dump(mode="json") if isinstance(result, PipelineResult) else result
     analysis_id = payload["analysis_id"]
+    if horizon_days is None:
+        horizon_days = payload.get("horizon_days") or next(
+            (item.get("horizon_days") for item in payload.get("model_predictions", [])), None)
     model_versions = {item["model_id"]: item["model_version"]
                       for item in payload.get("model_predictions", [])}
     created_at = datetime.now(timezone.utc)
@@ -306,22 +324,40 @@ def save_analysis_run(result: PipelineResult | dict, request_id: str | None = No
         conn.execute(analysis_runs.insert().values(
             analysis_id=analysis_id, well_id=payload["well_id"], request_id=request_id,
             created_at=created_at, status=payload["status"], model_versions_json=model_versions,
-            result_json=payload,
+            result_json=payload, horizon_days=horizon_days,
         ))
     return {"analysis_id": analysis_id, "well_id": payload["well_id"],
             "created_at": created_at.isoformat(), "status": payload["status"],
-            "model_versions": model_versions, "request_id": request_id}
+            "model_versions": model_versions, "request_id": request_id, "horizon_days": horizon_days}
 
 
 def save_agent_result(analysis_id: str, well_id: str, agent_status: str,
                       agent_response: dict | None, external_data: dict | None) -> bool:
+    """Store the AI report on its run and on sibling horizon runs from the same request.
+
+    A scheduled monitor run analyses each well on several horizons under one request_id but
+    requests a single AI report per well; the sibling runs get the same report so every
+    horizon row on the dashboard shows it, without paying for one LLM call per horizon.
+    """
+    values = dict(agent_status=agent_status, agent_updated_at=datetime.now(timezone.utc),
+                  agent_response_json=agent_response, external_data_json=external_data)
     with engine().begin() as conn:
         result = conn.execute(analysis_runs.update().where(
             analysis_runs.c.analysis_id == analysis_id,
             analysis_runs.c.well_id == well_id,
-        ).values(agent_status=agent_status, agent_updated_at=datetime.now(timezone.utc),
-                 agent_response_json=agent_response, external_data_json=external_data))
-        return result.rowcount == 1
+        ).values(**values))
+        if result.rowcount != 1:
+            return False
+        request_id = conn.execute(select(analysis_runs.c.request_id).where(
+            analysis_runs.c.analysis_id == analysis_id)).scalar()
+        if request_id:
+            conn.execute(analysis_runs.update().where(
+                analysis_runs.c.well_id == well_id,
+                analysis_runs.c.request_id == request_id,
+                analysis_runs.c.analysis_id != analysis_id,
+                analysis_runs.c.agent_status.is_(None),
+            ).values(**values))
+        return True
 
 
 def get_analysis_run(analysis_id: str) -> dict | None:
@@ -414,20 +450,41 @@ def load_source_payloads(well_id: str) -> dict[str, dict]:
 
 
 def latest_analysis_runs() -> list[dict]:
+    """Latest run for every (well_id, horizon_days) pair, read with one indexed query."""
+    query = (
+        select(analysis_runs)
+        .distinct(analysis_runs.c.well_id, analysis_runs.c.horizon_days)
+        .order_by(analysis_runs.c.well_id, analysis_runs.c.horizon_days,
+                  analysis_runs.c.created_at.desc())
+    )
     with engine().connect() as conn:
-        rows = conn.execute(select(analysis_runs).order_by(analysis_runs.c.created_at.desc())).mappings().all()
-    latest: dict[str, dict] = {}
-    for row in rows:
-        if row["well_id"] in latest:
-            continue
-        latest[row["well_id"]] = {
-            "analysis_id": row["analysis_id"], "well_id": row["well_id"],
-            "created_at": row["created_at"].isoformat(), "status": row["status"],
-            "analysis": row["result_json"], "agent_response": row["agent_response_json"],
-            "agent_status": row["agent_status"],
-            "agent_updated_at": row["agent_updated_at"].isoformat() if row["agent_updated_at"] else None,
-        }
-    return list(latest.values())
+        rows = conn.execute(query).mappings().all()
+    return [{
+        "analysis_id": row["analysis_id"], "well_id": row["well_id"],
+        "horizon_days": row["horizon_days"],
+        "created_at": row["created_at"].isoformat(), "status": row["status"],
+        "analysis": row["result_json"], "agent_response": row["agent_response_json"],
+        "agent_status": row["agent_status"],
+        "agent_updated_at": row["agent_updated_at"].isoformat() if row["agent_updated_at"] else None,
+    } for row in rows]
+
+
+def prune_analysis_runs(retention_days: int) -> int:
+    """Delete runs older than the retention window, always keeping the latest run per
+    (well_id, horizon_days) so the dashboard never loses a well. Returns rows deleted."""
+    if retention_days <= 0:
+        return 0
+    statement = text("""
+        DELETE FROM analysis_runs a
+        WHERE a.created_at < now() - make_interval(days => :days)
+          AND a.analysis_id NOT IN (
+              SELECT DISTINCT ON (well_id, horizon_days) analysis_id
+              FROM analysis_runs
+              ORDER BY well_id, horizon_days, created_at DESC
+          )
+    """)
+    with engine().begin() as conn:
+        return conn.execute(statement, {"days": retention_days}).rowcount or 0
 
 def _migrate_source_health_origin() -> None:
     statements = [
@@ -464,6 +521,27 @@ def _migrate_source_health_origin() -> None:
     with engine().begin() as conn:
         for statement in statements:
             conn.execute(text(statement))
+
+def _migrate_analysis_runs_horizon() -> None:
+    """Add and backfill analysis_runs.horizon_days for databases created before it existed."""
+    statements = [
+        "ALTER TABLE analysis_runs ADD COLUMN IF NOT EXISTS horizon_days INTEGER",
+        """
+        UPDATE analysis_runs
+        SET horizon_days = (result_json -> 'model_predictions' -> 0 ->> 'horizon_days')::int
+        WHERE horizon_days IS NULL
+          AND json_typeof(result_json -> 'model_predictions') = 'array'
+          AND (result_json -> 'model_predictions' -> 0 ->> 'horizon_days') ~ '^[0-9]+$'
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_analysis_runs_well_horizon_time
+        ON analysis_runs (well_id, horizon_days, created_at)
+        """,
+    ]
+    with engine().begin() as conn:
+        for statement in statements:
+            conn.execute(text(statement))
+
 
 def effective_source_statuses(well_id: str | None = None) -> list[dict]:
     rows = list_source_statuses(well_id)

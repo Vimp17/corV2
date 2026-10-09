@@ -407,7 +407,9 @@
         $('critical' + horizon).textContent = rows.filter(w => w.risk_class === 'CRITICAL').length;
         $('high' + horizon).textContent = rows.filter(w => w.risk_class === 'HIGH').length;
       });
-      const totalAtRisk = snapshot.ranking.filter(w => w.risk_class === 'CRITICAL' || w.risk_class === 'HIGH').length;
+      const totalAtRisk = new Set(
+        snapshot.ranking.filter(w => w.risk_class === 'CRITICAL' || w.risk_class === 'HIGH').map(w => w.well_id)
+      ).size;
       $('total').textContent = uniqueWells.size;
       $('atRisk').textContent = totalAtRisk;
       $('dataIssues').textContent = uniqueWellsWithDataIssues.size;
@@ -428,7 +430,8 @@
       }
       if (horizonFilter !== 'all') {
         const horizonValue = Number(horizonFilter);
-        filtered = filtered.filter(w => w.horizon_days === horizonValue);
+        // Rows without a horizon (not analysed yet, legacy data issues) apply to every horizon.
+        filtered = filtered.filter(w => w.horizon_days == null || w.horizon_days === horizonValue);
       }
       const body = $('rows');
       body.replaceChildren();

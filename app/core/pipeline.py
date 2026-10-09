@@ -99,4 +99,5 @@ def analyze_well(well_id: str, records: list[TelemetryPoint], horizon_days: int,
         features=features, environment=environment, protection=protection,
         technology=technology, corrosion=corrosion, rule_risk=rules,
         cox_risk=cox, model_predictions=model_predictions, context=context,
+        data_update_required=data_freshness != "fresh",
     )

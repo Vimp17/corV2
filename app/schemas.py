@@ -437,6 +437,7 @@ class SkippedAnalysis(APIModel):
     analysis_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     well_id: str
     status: Literal["skipped_insufficient_data"] = "skipped_insufficient_data"
+    horizon_days: int | None = Field(default=None, ge=1, le=3650)
     telemetry_records: int = Field(ge=0)
     unique_timestamps: int = Field(ge=0)
     current_signal_count: int = Field(ge=0)

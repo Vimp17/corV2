@@ -28,7 +28,13 @@ def source_status_contract(rows: list[dict]) -> list[ExternalSourceStatus]:
     ) for row in rows]
 
 
-def assess_readiness(well_id: str, records: list[TelemetryPoint], source_rows: list[dict]) -> SkippedAnalysis | None:
+def assess_readiness(well_id: str, records: list[TelemetryPoint], source_rows: list[dict],
+                     horizon_days: int | None = None) -> SkippedAnalysis | None:
+    """Return a SkippedAnalysis when the data cannot support a model run, else None.
+
+    Blocking: too few unique measurements, too few recent observations for a trend, too few
+    current signals, or timestamps beyond the allowed future skew. Staleness is not blocking.
+    """
     timestamps = {
         (point.timestamp.replace(tzinfo=timezone.utc) if point.timestamp.tzinfo is None
          else point.timestamp.astimezone(timezone.utc)).isoformat()
@@ -72,16 +78,20 @@ def assess_readiness(well_id: str, records: list[TelemetryPoint], source_rows: l
         missing.append(f"За последние {settings.max_forward_fill_days} дней заполнено {current_signal_count} прогнозных показателя; нужно не менее {settings.min_current_signals}.")
         candidates = ", ".join(FIELD_LABELS[field] for field in SIGNAL_FIELDS)
         requested_data.append(f"Добавьте как минимум {settings.min_current_signals} показателя из списка: {candidates}.")
+    # Stale telemetry is deliberately NOT a blocking condition: hiding a well's last known
+    # risk because its feed stopped would be worse than showing it. The pipeline marks such
+    # results as stale (data_freshness / data_update_required) instead. Timestamps far in
+    # the future indicate a clock or timezone error and do block the analysis.
     if latest_utc is None:
         missing.append("Нет временной отметки телеметрии.")
     else:
-        age_hours = (datetime.now(timezone.utc) - latest_utc).total_seconds() / 3600
-        if age_hours < -1:
-            missing.append("Последнее измерение датировано будущим временем; проверьте часы и часовой пояс источника.")
+        ahead_hours = (latest_utc - datetime.now(timezone.utc)).total_seconds() / 3600
+        if ahead_hours > settings.max_future_skew_hours:
+            missing.append(
+                f"Последнее измерение датировано будущим временем (+{ahead_hours:.1f} ч.; "
+                f"допустимо до {settings.max_future_skew_hours:g} ч.); проверьте часы и часовой пояс источника."
+            )
             requested_data.append("Исправьте дату/часовой пояс последнего измерения и повторите загрузку.")
-        elif age_hours > settings.max_telemetry_age_hours:
-            missing.append(f"Последнее измерение устарело ({age_hours:.1f} ч.; допустимо до {settings.max_telemetry_age_hours:g} ч.).")
-            requested_data.append("Обновите телеметрию из источника или загрузите актуальный Excel-файл.")
 
     if not missing:
         return None
@@ -95,7 +105,8 @@ def assess_readiness(well_id: str, records: list[TelemetryPoint], source_rows: l
     message = (f"Анализ скважины {well_id} пропущен: данных пока недостаточно или источник недоступен. "
                "Модели не запускались. Исправьте перечисленные пункты и повторите синхронизацию.")
     return SkippedAnalysis(
-        well_id=well_id, telemetry_records=len(records), unique_timestamps=len(timestamps),
+        well_id=well_id, horizon_days=horizon_days,
+        telemetry_records=len(records), unique_timestamps=len(timestamps),
         current_signal_count=current_signal_count, missing_items=missing,
         source_statuses=source_status_contract(source_rows), operator_message=message,
         requested_data=list(dict.fromkeys(requested_data)),
