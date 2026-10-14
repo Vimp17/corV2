@@ -96,7 +96,10 @@ monitor_jobs = Table(
     Column("error", String(2000)),
 )
 
-# Current rating inputs per well (approved template); computed fields live in app.core.rating.
+# Current rating per well. Evidence and model scores are computed from source data by
+# app.core.rating_builder (provenance records the source and date of each value); plan_date,
+# promine_status and comment are operator fields edited on the dashboard and never overwritten
+# by a recomputation. The index, measure and deadline are derived in app.core.rating.
 well_rating = Table(
     "well_rating", metadata,
     Column("well_id", String(128), primary_key=True),
@@ -113,6 +116,9 @@ well_rating = Table(
     Column("assessed_at", DateTime(timezone=True)),
     Column("updated_at", DateTime(timezone=True), nullable=False),
     Column("source", String(32), nullable=False),
+    Column("measure", String(32)), Column("measure_since", DateTime(timezone=True)),
+    Column("provenance", JSON), Column("computed_at", DateTime(timezone=True)),
+    Column("skip_reason", String(2000)), Column("analysis_id", String(64)),
 )
 
 # Proposals to change the ERA repair plan, sent through Промайн.
@@ -305,18 +311,12 @@ def load_telemetry(well_id: str) -> list[TelemetryPoint]:
     return combined
 
 
-# Rating uploads record a source status per well; such wells join the telemetry monitor only
-# once they have telemetry, history or analyses, so a fleet-wide rating file does not add a
-# "no data" skip per well to every daily run.
-RATING_SOURCE_ID = "RATING"
-
-
 def list_wells() -> list[dict]:
     query = text("""
         WITH well_ids AS (
             SELECT well_id FROM telemetry UNION SELECT well_id FROM history_events
             UNION SELECT well_id FROM analysis_runs
-            UNION SELECT well_id FROM source_health WHERE source_id <> :rating_source
+            UNION SELECT well_id FROM source_health
         )
         SELECT w.well_id, COUNT(t.id) AS record_count, MIN(t.timestamp) AS first_timestamp,
                MAX(t.timestamp) AS last_timestamp,
@@ -325,7 +325,7 @@ def list_wells() -> list[dict]:
         GROUP BY w.well_id ORDER BY w.well_id
     """)
     with engine().connect() as conn:
-        return [dict(row) for row in conn.execute(query, {"rating_source": RATING_SOURCE_ID}).mappings().all()]
+        return [dict(row) for row in conn.execute(query).mappings().all()]
 
 
 def save_history(well_id: str, requested_batch_id: str | None,
@@ -380,6 +380,18 @@ def save_history(well_id: str, requested_batch_id: str | None,
             "work_records_received": len(work_history), "failure_records_received": len(failure_history),
             "work_records_stored": inserted_counts["work"],
             "failure_records_stored": inserted_counts["failure"], "idempotent_replay": False}
+
+
+def load_history_events(well_id: str) -> list[dict]:
+    """History events with their source and date, for the rating evidence and provenance."""
+    with engine().connect() as conn:
+        rows = conn.execute(select(history_events.c.event_type, history_events.c.source_id,
+                                   history_events.c.event_date, history_events.c.payload_json)
+                            .where(history_events.c.well_id == well_id)
+                            .order_by(history_events.c.event_date, history_events.c.id)).mappings().all()
+    return [{"event_type": row["event_type"],
+             "source_id": None if row["source_id"] == _UNSPECIFIED_SOURCE else row["source_id"],
+             "event_date": row["event_date"], "payload": row["payload_json"]} for row in rows]
 
 
 def load_history(well_id: str) -> dict[str, list]:
@@ -684,16 +696,19 @@ def get_monitor_job(job_id: str) -> dict | None:
 
 
 # --------------------------------------------------------------------------- well rating
-RATING_FIELDS = (
+# Computed by app.core.rating_builder; never edited by hand.
+COMPUTED_RATING_FIELDS = (
     "field", "equipment", "in_operation", "sampling", "corrosive_environment", "tonnage_t",
     "noo_days", "demount_act", "demount_corrosion", "base_act", "base_corrosion", "category",
-    "model_ntc", "model_math", "plan_date", "promine_status", "comment",
+    "model_ntc", "model_math",
 )
+# Edited by the operator on the dashboard; a recomputation never touches them.
+OPERATOR_RATING_FIELDS = ("plan_date", "promine_status", "comment")
 
 
 def _rating_row(row) -> dict:
     data = dict(row)
-    for key in ("assessed_at", "updated_at"):
+    for key in ("assessed_at", "updated_at", "measure_since", "computed_at"):
         if data.get(key) is not None:
             data[key] = data[key].isoformat()
     if data.get("plan_date") is not None:
@@ -701,40 +716,30 @@ def _rating_row(row) -> dict:
     return data
 
 
-def upsert_rating(records: list[dict], source: str) -> dict:
-    """Insert or update rating rows. Each record holds well_id plus only the fields to set.
+def save_computed_rating(well_id: str, values: dict, *, measure: str | None, provenance: dict,
+                         skip_reason: str | None, analysis_id: str | None) -> dict:
+    """Store a well's computed rating, keeping the operator fields.
 
-    assessed_at (the start of a measure's deadline) moves only when a model score changes or an
-    explicit assessed_at is given, so re-uploading the same file daily does not push deadlines.
+    measure_since (the start of the measure deadline) moves only when the measure changes, so
+    the daily recomputation does not keep pushing deadlines forward.
     """
-    if not records:
-        return {"inserted": 0, "updated": 0}
     now = datetime.now(timezone.utc)
-    merged: dict[str, dict] = {}
-    for record in records:  # last row for a well wins
-        merged.setdefault(record["well_id"], {}).update(record)
+    computed = {key: values.get(key) for key in COMPUTED_RATING_FIELDS}
+    computed.update(measure=measure, provenance=provenance, skip_reason=skip_reason,
+                    analysis_id=analysis_id, computed_at=now, assessed_at=now, updated_at=now,
+                    source="computed")
     with engine().begin() as conn:
-        existing = {row["well_id"]: dict(row) for row in conn.execute(
-            select(well_rating).where(well_rating.c.well_id.in_(list(merged)))).mappings().all()}
-        inserted = updated = 0
-        for well_id, record in merged.items():
-            old = existing.get(well_id)
-            values = {key: record[key] for key in RATING_FIELDS if key in record}
-            explicit = record.get("assessed_at")
-            scores_changed = old is None or any(
-                key in values and values[key] != old.get(key) for key in ("model_ntc", "model_math"))
-            if explicit is not None:
-                values["assessed_at"] = datetime.combine(explicit, datetime.min.time(), tzinfo=timezone.utc)
-            elif scores_changed:
-                values["assessed_at"] = now
-            values.update(updated_at=now, source=source)
-            if old is None:
-                conn.execute(well_rating.insert().values(well_id=well_id, **values))
-                inserted += 1
-            else:
-                conn.execute(well_rating.update().where(well_rating.c.well_id == well_id).values(**values))
-                updated += 1
-    return {"inserted": inserted, "updated": updated}
+        old = conn.execute(select(well_rating.c.measure, well_rating.c.measure_since)
+                           .where(well_rating.c.well_id == well_id).with_for_update()).mappings().first()
+        if old is None:
+            computed["measure_since"] = now if measure else None
+            conn.execute(well_rating.insert().values(well_id=well_id, **computed))
+        else:
+            if old["measure"] != measure or old["measure_since"] is None:
+                computed["measure_since"] = now if measure else None
+            conn.execute(well_rating.update().where(well_rating.c.well_id == well_id).values(**computed))
+        row = conn.execute(select(well_rating).where(well_rating.c.well_id == well_id)).mappings().one()
+    return _rating_row(row)
 
 
 def list_rating_rows() -> list[dict]:
@@ -749,11 +754,12 @@ def get_rating_row(well_id: str) -> dict | None:
     return _rating_row(row) if row else None
 
 
-def update_rating_row(well_id: str, values: dict, source: str = "dashboard") -> bool:
-    values = {key: value for key, value in values.items() if key in RATING_FIELDS}
+def update_rating_row(well_id: str, values: dict) -> bool:
+    """Change operator fields only (plan, Промайн document status, comment)."""
+    values = {key: value for key, value in values.items() if key in OPERATOR_RATING_FIELDS}
     with engine().begin() as conn:
         result = conn.execute(well_rating.update().where(well_rating.c.well_id == well_id).values(
-            **values, updated_at=datetime.now(timezone.utc), source=source))
+            **values, updated_at=datetime.now(timezone.utc)))
         return result.rowcount == 1
 
 

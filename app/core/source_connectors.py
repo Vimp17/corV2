@@ -60,11 +60,6 @@ def ingest_excel_bytes(
             batch_id = _batch_id(source_id, target_well, parsed["file_sha256"])
             stored = db.save_batch(target_well, batch_id, points)
             record_count = len(points)
-        elif parsed["kind"] == "rating":
-            if not group["rating"]:
-                continue
-            stored = db.upsert_rating(group["rating"], source=origin)
-            record_count = len(group["rating"])
         else:
             work, failures = group["work_history"], group["failure_history"]
             if not work and not failures:
@@ -321,6 +316,25 @@ def _ingest_adapter_response(
     raise ExcelImportError(f"No JSON adapter contract is defined for source kind '{kind}'")
 
 
+def source_modes() -> list[dict]:
+    """How each per-well source gets its data: pulled from an API/adapter, or uploads only."""
+    modes = []
+    for profile_id, profile in load_profiles().items():
+        if profile.get("kind") not in {"telemetry", "history"}:
+            continue
+        source_id = str(profile.get("source_id", profile_id)).upper()
+        if profile.get("pull") is False:
+            mode = "upload"
+        elif profile.get("adapter"):
+            mode = "adapter" if profile["adapter"] in _load_adapters() else "adapter_missing"
+        else:
+            mode = "api" if source_env(source_id, "URL") else "upload"
+        modes.append({"profile_id": profile_id, "source_id": source_id,
+                      "title": profile.get("short_title") or profile.get("title") or source_id,
+                      "mode": mode})
+    return modes
+
+
 def refresh_sources_for_well(well_id: str) -> list[dict]:
     """Fetch each configured per-well source using its Excel, JSON, or plugin contract."""
     statuses: list[dict] = []
@@ -329,7 +343,7 @@ def refresh_sources_for_well(well_id: str) -> list[dict]:
     for profile_id, profile in load_profiles().items():
         source_id = str(profile.get("source_id", profile_id)).upper()
         adapter_name = profile.get("adapter")
-        # Fleet-wide sources (the rating template) are uploaded or pushed, never pulled per well.
+        # Profiles marked "pull": false are uploaded or pushed only, never pulled per well.
         if profile.get("pull") is False:
             continue
 

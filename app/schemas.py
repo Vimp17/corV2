@@ -41,6 +41,12 @@ class TelemetryPoint(BaseModel):
     metal_loss_mm: float | None = None
     corrosion_load: float | None = None
     water_compatibility_issue: bool | None = None
+    # Passport and treatment fields used by the well rating (DARS: field, status; ХИМИК:
+    # tonnage and НОО of the inhibitor treatment). They are not risk-model features.
+    field: str | None = Field(default=None, max_length=256)
+    in_operation: bool | None = None
+    tonnage_t: float | None = Field(default=None, ge=0, le=10000)
+    noo_days: float | None = Field(default=None, ge=0, le=100000)
 
     @model_validator(mode="before")
     @classmethod
@@ -52,7 +58,7 @@ class TelemetryPoint(BaseModel):
     @field_validator(
         "water_cut_pct", "co2_pct", "chlorides_mg_l", "inhibitor_efficiency",
         "injection_deviation_pct", "corrosion_rate_mm_year", "wall_thickness_mm",
-        "initial_wall_thickness_mm", "metal_loss_mm", "corrosion_load",
+        "initial_wall_thickness_mm", "metal_loss_mm", "corrosion_load", "tonnage_t", "noo_days",
     )
     @classmethod
     def finite_measurements(cls, value: float | None) -> float | None:
@@ -91,6 +97,8 @@ class WorkHistoryItem(APIModel):
     reason: str | None = Field(default=None, max_length=2000)
     equipment: str | None = Field(default=None, max_length=256)
     result: str | None = Field(default=None, max_length=2000)
+    # Set on demount and base-inspection acts: was corrosion found.
+    corrosion_detected: bool | None = None
 
 
 class FailureHistoryItem(APIModel):
@@ -517,42 +525,6 @@ class LandmarkValidationResult(APIModel):
 # --------------------------------------------------------------------------- well rating
 RatingCategory = Literal["corrosive", "medium", "noncorrosive"]
 PromineStatus = Literal["not_created", "created", "sent"]
-
-
-class RatingWellInput(WellRequest):
-    """Canonical rating fields for one well. Omitted fields keep their stored value."""
-
-    field: str | None = Field(default=None, max_length=256)
-    equipment: str | None = Field(default=None, max_length=256)
-    in_operation: bool | None = None
-    sampling: bool | None = None
-    corrosive_environment: bool | None = None
-    tonnage_t: float | None = Field(default=None, ge=0, le=10000)
-    noo_days: float | None = Field(default=None, ge=0, le=100000)
-    demount_act: bool | None = None
-    demount_corrosion: bool | None = None
-    base_act: bool | None = None
-    base_corrosion: bool | None = None
-    category: RatingCategory | None = None
-    model_ntc: float | None = Field(default=None, ge=0, le=1)
-    model_math: float | None = Field(default=None, ge=0, le=1)
-    plan_date: date | None = None
-    promine_status: PromineStatus | None = None
-    comment: str | None = Field(default=None, max_length=2000)
-    assessed_at: date | None = None
-
-    @model_validator(mode="after")
-    def findings_need_their_act(self):
-        # A corrosion finding without its act is contradictory; the act wins.
-        if self.demount_act is False and self.demount_corrosion is not None:
-            self.demount_corrosion = None
-        if self.base_act is False and self.base_corrosion is not None:
-            self.base_corrosion = None
-        return self
-
-
-class RatingUpsertRequest(APIModel):
-    wells: list[RatingWellInput] = Field(min_length=1, max_length=10000)
 
 
 class RatingWellPatch(APIModel):

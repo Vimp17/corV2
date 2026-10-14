@@ -94,17 +94,27 @@ class Settings:
     source_max_retries: int = _int_env("MAI_SOURCE_MAX_RETRIES", "2", 0, 5)
     # Readiness tolerance for clocks running ahead of the server; beyond it analysis is skipped.
     max_future_skew_hours: float = _positive_float("MAI_MAX_FUTURE_SKEW_HOURS", "24", 720)
-    # Well rating (approved Excel template): index = combined НТЦ / math model score × 100.
+    # Well rating (approved Excel layout): index = combined НТЦ / math model score × 100.
+    # The rating is computed from source data (DARS, ХИМИК, ERA) by app.core.rating_builder.
     # Thresholds: index >= repair_from -> planned repair package + ERA repair inclusion;
     # ud_from..ud_to -> shock dosing (УД); between ud_to and repair_from -> engineer decision.
     rating_combine: str = os.getenv("MAI_RATING_COMBINE", "max").strip().lower()
     rating_repair_from: int = _int_env("MAI_RATING_REPAIR_FROM", "80", 1, 100)
     rating_ud_from: int = _int_env("MAI_RATING_UD_FROM", "40", 0, 100)
     rating_ud_to: int = _int_env("MAI_RATING_UD_TO", "60", 0, 100)
-    # Days from the date the model scores were assessed to the measure deadline.
+    # Days from the date the current measure was first assigned to its deadline.
     rating_days_repair: int = _int_env("MAI_RATING_DAYS_REPAIR", "14", 1, 365)
     rating_days_engineer: int = _int_env("MAI_RATING_DAYS_ENGINEER", "30", 1, 365)
     rating_days_ud: int = _int_env("MAI_RATING_DAYS_UD", "45", 1, 365)
+    # Forecast horizon whose model scores feed the rating (НТЦ / math columns).
+    rating_horizon_days: int = _int_env("MAI_RATING_HORIZON_DAYS", "90", 1, 3650)
+    # «Отбор проб» = a laboratory sample (profile with "lab_samples": true) within this many days.
+    rating_sampling_days: int = _int_env("MAI_RATING_SAMPLING_DAYS", "30", 1, 3650)
+    # Demount and base-inspection acts older than this are not counted.
+    rating_act_days: int = _int_env("MAI_RATING_ACT_DAYS", "365", 1, 3650)
+    # Uploads touching at most this many wells recompute their rating before responding;
+    # larger uploads recompute in the background.
+    rating_recompute_sync_limit: int = _int_env("MAI_RATING_RECOMPUTE_SYNC_LIMIT", "50", 0, 100000)
     # Промайн: proposals to change the ERA repair plan. Transport "smtp" mails the Промайн
     # mailbox, "api" posts JSON to the Промайн endpoint, "none" stores proposals unsent.
     promine_transport: str = os.getenv("MAI_PROMINE_TRANSPORT", "none").strip().lower()
@@ -121,7 +131,7 @@ class Settings:
     smtp_security: str = os.getenv("MAI_SMTP_SECURITY", "starttls").strip().lower()
     smtp_from: str = os.getenv("MAI_SMTP_FROM", "").strip()
     app_name: str = "MAI Corrosion Control API"
-    app_version: str = "0.4.0"
+    app_version: str = "0.5.0"
 
 
 settings = Settings()

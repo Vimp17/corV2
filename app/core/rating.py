@@ -1,12 +1,12 @@
 """Well rating: priority index from the НТЦ and math model scores and the measure it implies.
 
-The rules mirror the approved Excel template (sheet «Параметры»):
+The rules mirror the approved Excel rating (sheet «Параметры»):
   index >= repair_from          -> planned repair package, well goes to the ERA repair plan
   ud_to < index < repair_from   -> engineer decision (range not specified by operations yet)
   ud_from <= index <= ud_to     -> shock dosing (УД)
   index < ud_from               -> no measures required
 Every threshold and deadline comes from settings, so the dashboard, the API and the Excel
-template stay in step.
+export stay in step. The input fields are derived from source data by app.core.rating_builder.
 """
 from __future__ import annotations
 
@@ -121,7 +121,9 @@ def evaluate(row: dict[str, Any]) -> dict[str, Any]:
     """Add the computed rating fields to one stored well_rating row."""
     index = priority_index(row.get("model_ntc"), row.get("model_math"))
     measure = measure_for(index)
-    assessed = _as_date(row.get("assessed_at"))
+    # The deadline runs from the day the current measure was first assigned, so a daily
+    # recomputation does not keep pushing it forward.
+    assessed = _as_date(row.get("measure_since") or row.get("assessed_at"))
     deadline = deadline_for(measure, assessed)
     plan = _as_date(row.get("plan_date"))
     status = plan_status_for(measure, plan, deadline)
@@ -164,147 +166,3 @@ def summarize(wells: list[dict[str, Any]]) -> dict[str, int]:
         if well["plan_status"] == "not_planned":
             counts["plan_missing"] += 1
     return counts
-
-
-# --------------------------------------------------------------------------- parsing input values
-# Excel uploads carry the template's Russian labels; the JSON API accepts canonical values.
-# Both pass through these parsers so stored values are always canonical.
-
-_EMPTY = {"", "—", "-", "–", "н/д", "нет данных", "none", "null"}
-
-
-def _key(value: Any) -> str:
-    return str(value).strip().casefold().replace("ё", "е")
-
-
-def is_blank(value: Any) -> bool:
-    return value is None or _key(value) in _EMPTY
-
-
-def parse_bool(value: Any, true_words: set[str], false_words: set[str], field: str) -> bool | None:
-    if is_blank(value):
-        return None
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)) and value in (0, 1):
-        return bool(value)
-    key = _key(value)
-    if key in true_words or key in {"да", "true", "yes", "1"}:
-        return True
-    if key in false_words or key in {"нет", "false", "no", "0"}:
-        return False
-    raise ValueError(f"{field}: unrecognised value '{value}'")
-
-
-def parse_in_operation(value: Any) -> bool | None:
-    return parse_bool(value, {"в работе", "работает", "in_operation"}, {"не в работе", "остановлена", "stopped"},
-                      "Статус")
-
-
-def parse_environment(value: Any) -> bool | None:
-    return parse_bool(value, {"коррозионная", "corrosive"}, {"некоррозионная", "noncorrosive"}, "Среда")
-
-
-def parse_presence(value: Any, field: str) -> bool | None:
-    return parse_bool(value, {"есть", "имеется", "present"}, {"отсутствует", "absent"}, field)
-
-
-def parse_base_result(value: Any) -> bool | None:
-    return parse_bool(value, {"коррозия есть", "есть коррозия", "есть", "corrosion"},
-                      {"коррозии нет", "нет коррозии", "no_corrosion"}, "Результат разбора")
-
-
-_CATEGORY_WORDS = {
-    "коррозионная": "corrosive", "corrosive": "corrosive",
-    "среднекоррозионная": "medium", "средне-коррозионная": "medium", "medium": "medium",
-    "некоррозионная": "noncorrosive", "noncorrosive": "noncorrosive",
-}
-_PROMINE_WORDS = {
-    "не сформирован": "not_created", "not_created": "not_created",
-    "сформирован": "created", "created": "created",
-    "направлен в эра": "sent", "направлен": "sent", "sent": "sent",
-}
-
-
-def parse_category(value: Any) -> str | None:
-    if is_blank(value):
-        return None
-    try:
-        return _CATEGORY_WORDS[_key(value)]
-    except KeyError as exc:
-        raise ValueError(f"Категория скважины: unrecognised value '{value}'") from exc
-
-
-def parse_promine_status(value: Any) -> str | None:
-    if is_blank(value):
-        return None
-    try:
-        return _PROMINE_WORDS[_key(value)]
-    except KeyError as exc:
-        raise ValueError(f"Документ Промайн: unrecognised value '{value}'") from exc
-
-
-def parse_number(value: Any, field: str, minimum: float | None = None,
-                 maximum: float | None = None) -> float | None:
-    if is_blank(value):
-        return None
-    if isinstance(value, bool):
-        raise ValueError(f"{field}: number expected")
-    number = float(value) if isinstance(value, (int, float)) else float(
-        str(value).strip().replace(" ", "").replace(" ", "").replace(",", "."))
-    if number != number or number in (float("inf"), float("-inf")):
-        raise ValueError(f"{field}: number expected")
-    if minimum is not None and number < minimum or maximum is not None and number > maximum:
-        raise ValueError(f"{field}: {number:g} is outside {minimum:g}..{maximum:g}")
-    return number
-
-
-def parse_date(value: Any, field: str) -> date | None:
-    if is_blank(value):
-        return None
-    if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, date):
-        return value
-    text = str(value).strip()
-    for fmt in ("%d.%m.%Y", "%Y-%m-%d", "%d.%m.%y"):
-        try:
-            return datetime.strptime(text[:10], fmt).date()
-        except ValueError:
-            continue
-    raise ValueError(f"{field}: date expected (ДД.ММ.ГГГГ or ISO), got '{value}'")
-
-
-def parse_text(value: Any, limit: int) -> str | None:
-    if is_blank(value):
-        return None
-    text = str(value).strip()
-    return text[:limit] if text else None
-
-
-def parse_row(row: dict[str, Any]) -> dict[str, Any]:
-    """Convert one mapped spreadsheet row (canonical keys, raw cell values) to canonical values.
-
-    Only keys present in `row` are returned, so a sheet without a column never clears it.
-    """
-    parsers = {
-        "field": lambda v: parse_text(v, 256),
-        "equipment": lambda v: parse_text(v, 256),
-        "in_operation": parse_in_operation,
-        "sampling": lambda v: parse_bool(v, set(), set(), "Отбор проб"),
-        "corrosive_environment": parse_environment,
-        "tonnage_t": lambda v: parse_number(v, "Тоннаж", 0, 10000),
-        "noo_days": lambda v: parse_number(v, "НОО", 0, 100000),
-        "demount_act": lambda v: parse_presence(v, "Акт демонтажа"),
-        "demount_corrosion": lambda v: parse_presence(v, "Признак коррозии"),
-        "base_act": lambda v: parse_presence(v, "Акт разбора на базе"),
-        "base_corrosion": parse_base_result,
-        "category": parse_category,
-        "model_ntc": lambda v: parse_number(v, "Модель НТЦ", 0, 1),
-        "model_math": lambda v: parse_number(v, "Мат. модель", 0, 1),
-        "plan_date": lambda v: parse_date(v, "План ППР (ДДО)"),
-        "promine_status": parse_promine_status,
-        "comment": lambda v: parse_text(v, 2000),
-        "assessed_at": lambda v: parse_date(v, "Дата оценки"),
-    }
-    return {key: parser(row[key]) for key, parser in parsers.items() if key in row}

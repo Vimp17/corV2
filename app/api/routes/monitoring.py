@@ -10,9 +10,9 @@ from fastapi.responses import JSONResponse
 from app import db
 from app.config import settings
 from app.core.monitor_runner import (
-    RISK_ORDER, MonitorBusyError, refresh_well_sources, run_monitor, run_monitor_job,
+    DEFAULT_HORIZONS, RISK_ORDER, MonitorBusyError, refresh_well_sources, run_monitor, run_monitor_job,
 )
-from app.core.orchestration import analyze_saved_well
+from app.core.orchestration import analyze_saved_well_horizons
 from app.core.readiness import source_status_contract
 from app.schemas import (
     DashboardSnapshot,
@@ -164,13 +164,16 @@ def analyze_one_well(well_id: str, request_data: MonitorRequest, request: Reques
     well_id = well_id.strip()
     if not well_id or len(well_id) > 128:
         raise HTTPException(status_code=422, detail="well_id must contain 1 to 128 characters")
+    # Same as the daily cycle for one well: pull configured source APIs, analyse the standard
+    # horizons (the dashboard shows all of them) and recompute the well's rating.
     refresh_well_sources(well_id)
-    return analyze_saved_well(
+    horizons = [request_data.horizon_days, *(h for h in DEFAULT_HORIZONS if h != request_data.horizon_days)]
+    return analyze_saved_well_horizons(
         well_id,
-        request_data.horizon_days,
+        horizons,
         request.app.state,
         getattr(request.state, "request_id", None),
-    )
+    )[0]
 
 
 @router.get("/monitor/wells/{well_id}/external-data", response_model=ExternalWellData)
