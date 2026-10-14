@@ -43,9 +43,15 @@ def get_sources() -> dict:
     except ExcelImportError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return {
+        # The dashboard builds one upload card per profile from this list, so a new profile in
+        # config/source_profiles.json appears in the UI without code changes.
         "sources": [{"profile_id": profile_id,
                      "source_id": str(profile.get("source_id", profile_id)).upper(),
                      "kind": profile.get("kind"),
+                     "title": profile.get("title") or str(profile.get("source_id", profile_id)),
+                     "description": profile.get("description"),
+                     "upload_format": "json" if profile.get("kind") == "json_schedule" else "xlsx",
+                     "per_well": profile.get("kind") in {"telemetry", "history"},
                      "required_columns": profile.get("required_columns", []),
                      "mapping_columns": sorted(profile.get("field_map", {}))}
                     for profile_id, profile in profiles.items()],

@@ -60,6 +60,11 @@ def ingest_excel_bytes(
             batch_id = _batch_id(source_id, target_well, parsed["file_sha256"])
             stored = db.save_batch(target_well, batch_id, points)
             record_count = len(points)
+        elif parsed["kind"] == "rating":
+            if not group["rating"]:
+                continue
+            stored = db.upsert_rating(group["rating"], source=origin)
+            record_count = len(group["rating"])
         else:
             work, failures = group["work_history"], group["failure_history"]
             if not work and not failures:
@@ -118,6 +123,8 @@ def ingest_excel_bytes(
         "profile_id": profile_id,
         "kind": parsed["kind"],
         "sheet_name": parsed["sheet_name"],
+        "sheet_names": parsed.get("sheet_names", [parsed["sheet_name"]]),
+        "skipped_sheets": parsed.get("skipped_sheets", []),
         "rows_read": parsed["rows_read"],
         "rows_accepted": parsed["rows_accepted"],
         "rows_rejected": parsed["rows_rejected"],
@@ -322,6 +329,9 @@ def refresh_sources_for_well(well_id: str) -> list[dict]:
     for profile_id, profile in load_profiles().items():
         source_id = str(profile.get("source_id", profile_id)).upper()
         adapter_name = profile.get("adapter")
+        # Fleet-wide sources (the rating template) are uploaded or pushed, never pulled per well.
+        if profile.get("pull") is False:
+            continue
 
         if adapter_name:
             adapter = adapters.get(adapter_name)

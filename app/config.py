@@ -94,11 +94,45 @@ class Settings:
     source_max_retries: int = _int_env("MAI_SOURCE_MAX_RETRIES", "2", 0, 5)
     # Readiness tolerance for clocks running ahead of the server; beyond it analysis is skipped.
     max_future_skew_hours: float = _positive_float("MAI_MAX_FUTURE_SKEW_HOURS", "24", 720)
+    # Well rating (approved Excel template): index = combined НТЦ / math model score × 100.
+    # Thresholds: index >= repair_from -> planned repair package + ERA repair inclusion;
+    # ud_from..ud_to -> shock dosing (УД); between ud_to and repair_from -> engineer decision.
+    rating_combine: str = os.getenv("MAI_RATING_COMBINE", "max").strip().lower()
+    rating_repair_from: int = _int_env("MAI_RATING_REPAIR_FROM", "80", 1, 100)
+    rating_ud_from: int = _int_env("MAI_RATING_UD_FROM", "40", 0, 100)
+    rating_ud_to: int = _int_env("MAI_RATING_UD_TO", "60", 0, 100)
+    # Days from the date the model scores were assessed to the measure deadline.
+    rating_days_repair: int = _int_env("MAI_RATING_DAYS_REPAIR", "14", 1, 365)
+    rating_days_engineer: int = _int_env("MAI_RATING_DAYS_ENGINEER", "30", 1, 365)
+    rating_days_ud: int = _int_env("MAI_RATING_DAYS_UD", "45", 1, 365)
+    # Промайн: proposals to change the ERA repair plan. Transport "smtp" mails the Промайн
+    # mailbox, "api" posts JSON to the Промайн endpoint, "none" stores proposals unsent.
+    promine_transport: str = os.getenv("MAI_PROMINE_TRANSPORT", "none").strip().lower()
+    promine_email_to: tuple[str, ...] = tuple(
+        item.strip() for item in os.getenv("MAI_PROMINE_EMAIL_TO", "").split(",") if item.strip()
+    )
+    promine_api_url: str = os.getenv("MAI_PROMINE_API_URL", "").strip()
+    promine_api_token: str = os.getenv("MAI_PROMINE_API_TOKEN", "").strip()
+    promine_timeout_seconds: float = _positive_float("MAI_PROMINE_TIMEOUT_SECONDS", "20", 120)
+    smtp_host: str = os.getenv("MAI_SMTP_HOST", "").strip()
+    smtp_port: int = _int_env("MAI_SMTP_PORT", "587", 1, 65535)
+    smtp_user: str = os.getenv("MAI_SMTP_USER", "").strip()
+    smtp_password: str = os.getenv("MAI_SMTP_PASSWORD", "")
+    smtp_security: str = os.getenv("MAI_SMTP_SECURITY", "starttls").strip().lower()
+    smtp_from: str = os.getenv("MAI_SMTP_FROM", "").strip()
     app_name: str = "MAI Corrosion Control API"
-    app_version: str = "0.3.0"
+    app_version: str = "0.4.0"
 
 
 settings = Settings()
+if settings.rating_combine not in {"max", "mean"}:
+    raise ValueError("MAI_RATING_COMBINE must be max or mean")
+if not settings.rating_ud_from < settings.rating_ud_to < settings.rating_repair_from:
+    raise ValueError("Rating thresholds must satisfy MAI_RATING_UD_FROM < MAI_RATING_UD_TO < MAI_RATING_REPAIR_FROM")
+if settings.promine_transport not in {"none", "smtp", "api"}:
+    raise ValueError("MAI_PROMINE_TRANSPORT must be none, smtp or api")
+if settings.smtp_security not in {"starttls", "ssl", "none"}:
+    raise ValueError("MAI_SMTP_SECURITY must be starttls, ssl or none")
 try:
     ZoneInfo(settings.source_timezone)
 except ZoneInfoNotFoundError as exc:

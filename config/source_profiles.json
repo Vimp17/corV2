@@ -6,70 +6,368 @@
       "kind": "telemetry",
       "sheet_name": null,
       "header_row": 1,
-      "required_columns": ["timestamp"],
+      "required_columns": [
+        "timestamp"
+      ],
       "field_map": {
-        "well_id": ["well_id", "well", "скважина", "номер скважины", "id скважины"],
-        "timestamp": ["timestamp", "date", "datetime", "дата", "дата и время", "дата измерения", "время измерения"],
-        "water_cut_pct": ["water_cut_pct", "water cut", "обводненность", "обводнённость", "обводненность, %", "обводнённость, %"],
-        "co2_pct": ["co2_pct", "co2", "co2, %", "co₂, %", "содержание co2, %"],
-        "chlorides_mg_l": ["chlorides_mg_l", "chlorides", "хлориды, мг/л", "хлориды"],
-        "inhibitor_efficiency": ["inhibitor_efficiency", "эффективность ингибитора", "защита ингибитором"],
-        "injection_deviation_pct": ["injection_deviation_pct", "отклонение закачки, %", "отклонение закачки"],
-        "corrosion_rate_mm_year": ["corrosion_rate_mm_year", "скорость коррозии, мм/год", "скорость коррозии"],
-        "wall_thickness_mm": ["wall_thickness_mm", "толщина стенки, мм", "толщина стенки"],
-        "initial_wall_thickness_mm": ["initial_wall_thickness_mm", "начальная толщина стенки, мм"],
-        "metal_loss_mm": ["metal_loss_mm", "потеря металла, мм"],
-        "corrosion_load": ["corrosion_load", "коррозионная нагрузка"],
-        "water_compatibility_issue": ["water_compatibility_issue", "несовместимость вод", "несовместимость воды"]
+        "well_id": [
+          "well_id",
+          "well",
+          "скважина",
+          "номер скважины",
+          "id скважины"
+        ],
+        "timestamp": [
+          "timestamp",
+          "date",
+          "datetime",
+          "дата",
+          "дата и время",
+          "дата измерения",
+          "время измерения"
+        ],
+        "water_cut_pct": [
+          "water_cut_pct",
+          "water cut",
+          "обводненность",
+          "обводнённость",
+          "обводненность, %",
+          "обводнённость, %"
+        ],
+        "co2_pct": [
+          "co2_pct",
+          "co2",
+          "co2, %",
+          "co₂, %",
+          "содержание co2, %"
+        ],
+        "chlorides_mg_l": [
+          "chlorides_mg_l",
+          "chlorides",
+          "хлориды, мг/л",
+          "хлориды"
+        ],
+        "inhibitor_efficiency": [
+          "inhibitor_efficiency",
+          "эффективность ингибитора",
+          "защита ингибитором"
+        ],
+        "injection_deviation_pct": [
+          "injection_deviation_pct",
+          "отклонение закачки, %",
+          "отклонение закачки"
+        ],
+        "corrosion_rate_mm_year": [
+          "corrosion_rate_mm_year",
+          "скорость коррозии, мм/год",
+          "скорость коррозии"
+        ],
+        "wall_thickness_mm": [
+          "wall_thickness_mm",
+          "толщина стенки, мм",
+          "толщина стенки"
+        ],
+        "initial_wall_thickness_mm": [
+          "initial_wall_thickness_mm",
+          "начальная толщина стенки, мм"
+        ],
+        "metal_loss_mm": [
+          "metal_loss_mm",
+          "потеря металла, мм"
+        ],
+        "corrosion_load": [
+          "corrosion_load",
+          "коррозионная нагрузка"
+        ],
+        "water_compatibility_issue": [
+          "water_compatibility_issue",
+          "несовместимость вод",
+          "несовместимость воды"
+        ]
       },
-      "scale_fields": []
+      "scale_fields": [],
+      "title": "DARS — телеметрия",
+      "description": "Суточная телеметрия: обводнённость, CO₂, хлориды, ингибитор, закачка, скорость коррозии, толщина стенки."
     },
     "khimik": {
       "source_id": "KHIMIK",
       "kind": "telemetry",
       "sheet_name": null,
       "header_row": 1,
-      "required_columns": ["timestamp"],
+      "required_columns": [
+        "timestamp"
+      ],
       "field_map": {
-        "well_id": ["well_id", "well", "скважина", "номер скважины", "id скважины"],
-        "timestamp": ["timestamp", "date", "datetime", "дата", "дата и время", "дата анализа", "дата отбора проб"],
-        "water_cut_pct": ["water_cut_pct", "обводненность", "обводнённость", "обводненность, %", "обводнённость, %"],
-        "co2_pct": ["co2_pct", "co2", "co2, %", "co₂, %"],
-        "chlorides_mg_l": ["chlorides_mg_l", "хлориды", "хлориды, мг/л", "концентрация хлоридов"],
-        "inhibitor_efficiency": ["inhibitor_efficiency", "эффективность ингибитора", "эффективность защиты"],
-        "corrosion_rate_mm_year": ["corrosion_rate_mm_year", "скорость коррозии", "скорость коррозии, мм/год"],
-        "wall_thickness_mm": ["wall_thickness_mm", "толщина стенки", "толщина стенки, мм"],
-        "water_compatibility_issue": ["water_compatibility_issue", "несовместимость вод", "несовместимость воды"]
+        "well_id": [
+          "well_id",
+          "well",
+          "скважина",
+          "номер скважины",
+          "id скважины"
+        ],
+        "timestamp": [
+          "timestamp",
+          "date",
+          "datetime",
+          "дата",
+          "дата и время",
+          "дата анализа",
+          "дата отбора проб"
+        ],
+        "water_cut_pct": [
+          "water_cut_pct",
+          "обводненность",
+          "обводнённость",
+          "обводненность, %",
+          "обводнённость, %"
+        ],
+        "co2_pct": [
+          "co2_pct",
+          "co2",
+          "co2, %",
+          "co₂, %"
+        ],
+        "chlorides_mg_l": [
+          "chlorides_mg_l",
+          "хлориды",
+          "хлориды, мг/л",
+          "концентрация хлоридов"
+        ],
+        "inhibitor_efficiency": [
+          "inhibitor_efficiency",
+          "эффективность ингибитора",
+          "эффективность защиты"
+        ],
+        "corrosion_rate_mm_year": [
+          "corrosion_rate_mm_year",
+          "скорость коррозии",
+          "скорость коррозии, мм/год"
+        ],
+        "wall_thickness_mm": [
+          "wall_thickness_mm",
+          "толщина стенки",
+          "толщина стенки, мм"
+        ],
+        "water_compatibility_issue": [
+          "water_compatibility_issue",
+          "несовместимость вод",
+          "несовместимость воды"
+        ]
       },
-      "scale_fields": []
+      "scale_fields": [],
+      "title": "ХИМИК — лабораторные показатели",
+      "description": "Лабораторные анализы проб."
     },
     "era": {
       "source_id": "ERA",
       "kind": "history",
       "sheet_name": null,
       "header_row": 1,
-      "required_columns": ["event_date"],
-      "work_event_values": ["work", "repair", "maintenance", "работа", "ремонт", "обслуживание"],
-      "failure_event_values": ["failure", "incident", "отказ", "поломка", "авария"],
+      "required_columns": [
+        "event_date"
+      ],
+      "work_event_values": [
+        "work",
+        "repair",
+        "maintenance",
+        "работа",
+        "ремонт",
+        "обслуживание"
+      ],
+      "failure_event_values": [
+        "failure",
+        "incident",
+        "отказ",
+        "поломка",
+        "авария"
+      ],
       "field_map": {
-        "well_id": ["well_id", "well", "скважина", "номер скважины", "id скважины"],
-        "event_date": ["event_date", "date", "дата", "дата события", "дата отказа", "дата ремонта"],
-        "event_type": ["event_type", "type", "тип события", "вид события", "тип записи"],
-        "work_type": ["work_type", "вид работ", "тип работ", "выполненная работа", "тип ремонта"],
-        "reason": ["reason", "причина", "основание"],
-        "equipment": ["equipment", "оборудование", "узел"],
-        "result": ["result", "результат", "итог работ"],
-        "failure_type": ["failure_type", "тип отказа", "вид отказа", "неисправность"],
-        "cause": ["cause", "причина отказа", "коренная причина"],
-        "corrosion_detected": ["corrosion_detected", "коррозия обнаружена", "обнаружена коррозия"],
-        "repair": ["repair", "ремонт", "восстановительные работы"],
-        "downtime_days": ["downtime_days", "простой, дни", "длительность простоя, дней", "простой"]
-      }
+        "well_id": [
+          "well_id",
+          "well",
+          "скважина",
+          "номер скважины",
+          "id скважины"
+        ],
+        "event_date": [
+          "event_date",
+          "date",
+          "дата",
+          "дата события",
+          "дата отказа",
+          "дата ремонта"
+        ],
+        "event_type": [
+          "event_type",
+          "type",
+          "тип события",
+          "вид события",
+          "тип записи"
+        ],
+        "work_type": [
+          "work_type",
+          "вид работ",
+          "тип работ",
+          "выполненная работа",
+          "тип ремонта"
+        ],
+        "reason": [
+          "reason",
+          "причина",
+          "основание"
+        ],
+        "equipment": [
+          "equipment",
+          "оборудование",
+          "узел"
+        ],
+        "result": [
+          "result",
+          "результат",
+          "итог работ"
+        ],
+        "failure_type": [
+          "failure_type",
+          "тип отказа",
+          "вид отказа",
+          "неисправность"
+        ],
+        "cause": [
+          "cause",
+          "причина отказа",
+          "коренная причина"
+        ],
+        "corrosion_detected": [
+          "corrosion_detected",
+          "коррозия обнаружена",
+          "обнаружена коррозия"
+        ],
+        "repair": [
+          "repair",
+          "ремонт",
+          "восстановительные работы"
+        ],
+        "downtime_days": [
+          "downtime_days",
+          "простой, дни",
+          "длительность простоя, дней",
+          "простой"
+        ]
+      },
+      "title": "ERA — ремонты и отказы",
+      "description": "История работ и отказов по скважинам."
     },
     "crew_schedule": {
       "source_id": "CREW_SCHEDULE",
       "kind": "json_schedule",
-      "description": "JSON API response with crew_availability rows; not an Excel upload profile."
+      "description": "JSON со списком бригад: специализация, регион, статус и окно доступности. Используется в справке ИИ.",
+      "title": "Расписание бригад (JSON)"
+    },
+    "rating": {
+      "source_id": "RATING",
+      "kind": "rating",
+      "pull": false,
+      "title": "Рейтинг скважин (шаблон Excel)",
+      "description": "Лист «Рейтинг» утверждённого шаблона: признаки коррозии, оценки моделей НТЦ и мат., план ППР (ДДО), документ Промайн. Индекс и мероприятия пересчитываются системой.",
+      "sheet_name": null,
+      "header_row": "auto",
+      "required_columns": [
+        "well_id",
+        "model_ntc",
+        "model_math"
+      ],
+      "field_map": {
+        "well_id": [
+          "well_id",
+          "№ скважины",
+          "номер скважины",
+          "скважина"
+        ],
+        "field": [
+          "field",
+          "месторождение"
+        ],
+        "equipment": [
+          "equipment",
+          "спущенное оборудование",
+          "оборудование"
+        ],
+        "in_operation": [
+          "in_operation",
+          "статус",
+          "статус скважины"
+        ],
+        "sampling": [
+          "sampling",
+          "отбор проб"
+        ],
+        "corrosive_environment": [
+          "corrosive_environment",
+          "среда"
+        ],
+        "tonnage_t": [
+          "tonnage_t",
+          "тоннаж, т",
+          "тоннаж",
+          "танаж"
+        ],
+        "noo_days": [
+          "noo_days",
+          "ноо, сут",
+          "ноо"
+        ],
+        "demount_act": [
+          "demount_act",
+          "акт демонтажа"
+        ],
+        "demount_corrosion": [
+          "demount_corrosion",
+          "признак коррозии"
+        ],
+        "base_act": [
+          "base_act",
+          "акт разбора на базе",
+          "акт разбора"
+        ],
+        "base_corrosion": [
+          "base_corrosion",
+          "результат разбора"
+        ],
+        "category": [
+          "category",
+          "категория скважины",
+          "категория"
+        ],
+        "model_ntc": [
+          "model_ntc",
+          "модель нтц (0–1)",
+          "модель нтц"
+        ],
+        "model_math": [
+          "model_math",
+          "мат. модель (0–1)",
+          "мат. модель",
+          "математическая модель"
+        ],
+        "plan_date": [
+          "plan_date",
+          "план ппр (ддо)",
+          "план ппр",
+          "ддо"
+        ],
+        "promine_status": [
+          "promine_status",
+          "документ промайн"
+        ],
+        "comment": [
+          "comment",
+          "комментарий"
+        ],
+        "assessed_at": [
+          "assessed_at",
+          "дата оценки"
+        ]
+      }
     }
   }
 }
