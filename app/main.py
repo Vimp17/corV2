@@ -13,6 +13,7 @@ from app import db
 from app.api.routes.analysis import router as analysis_router
 from app.api.routes.ingestion import router as ingestion_router
 from app.api.routes.monitoring import router as monitoring_router
+from app.api.routes.rating import router as rating_router
 from app.config import settings
 from app.core.cox import load_optional_model
 from app.core.model_registry import ModelRegistry
@@ -96,8 +97,25 @@ def dashboard():
     return FileResponse(page)
 
 
+_TEMPLATE_CANDIDATES = (
+    Path(__file__).resolve().parents[1] / "templates" / "rating_template.xlsx",
+    Path(__file__).resolve().parents[1] / "data" / "sample_rating.xlsx",
+)
+
+
+@app.get("/dashboard/templates/rating.xlsx", include_in_schema=False)
+def rating_template():
+    """Excel template of the well rating (with a synthetic example), linked from the dashboard."""
+    path = next((item for item in _TEMPLATE_CANDIDATES if item.is_file()), None)
+    if path is None:
+        raise HTTPException(status_code=404, detail="Rating template is not bundled with this build")
+    return FileResponse(path, filename="Рейтинг скважин — шаблон.xlsx",
+                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
 v1 = APIRouter(prefix="/api/v1", dependencies=[Depends(require_api_key)])
 v1.include_router(ingestion_router)
 v1.include_router(analysis_router)
 v1.include_router(monitoring_router)
+v1.include_router(rating_router)
 app.include_router(v1)

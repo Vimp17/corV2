@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -512,3 +512,67 @@ class LandmarkValidationResult(APIModel):
     records_excluded_early_censoring: int
     models: dict[str, ValidationModelMetrics]
     note: str
+
+
+# --------------------------------------------------------------------------- well rating
+RatingCategory = Literal["corrosive", "medium", "noncorrosive"]
+PromineStatus = Literal["not_created", "created", "sent"]
+
+
+class RatingWellInput(WellRequest):
+    """Canonical rating fields for one well. Omitted fields keep their stored value."""
+
+    field: str | None = Field(default=None, max_length=256)
+    equipment: str | None = Field(default=None, max_length=256)
+    in_operation: bool | None = None
+    sampling: bool | None = None
+    corrosive_environment: bool | None = None
+    tonnage_t: float | None = Field(default=None, ge=0, le=10000)
+    noo_days: float | None = Field(default=None, ge=0, le=100000)
+    demount_act: bool | None = None
+    demount_corrosion: bool | None = None
+    base_act: bool | None = None
+    base_corrosion: bool | None = None
+    category: RatingCategory | None = None
+    model_ntc: float | None = Field(default=None, ge=0, le=1)
+    model_math: float | None = Field(default=None, ge=0, le=1)
+    plan_date: date | None = None
+    promine_status: PromineStatus | None = None
+    comment: str | None = Field(default=None, max_length=2000)
+    assessed_at: date | None = None
+
+    @model_validator(mode="after")
+    def findings_need_their_act(self):
+        # A corrosion finding without its act is contradictory; the act wins.
+        if self.demount_act is False and self.demount_corrosion is not None:
+            self.demount_corrosion = None
+        if self.base_act is False and self.base_corrosion is not None:
+            self.base_corrosion = None
+        return self
+
+
+class RatingUpsertRequest(APIModel):
+    wells: list[RatingWellInput] = Field(min_length=1, max_length=10000)
+
+
+class RatingWellPatch(APIModel):
+    """Operator edits from the dashboard."""
+
+    plan_date: date | None = None
+    promine_status: PromineStatus | None = None
+    comment: str | None = Field(default=None, max_length=2000)
+
+
+EraChangeType = Literal["include", "exclude", "reschedule", "scope", "other"]
+
+
+class EraProposalRequest(WellRequest):
+    change_type: EraChangeType
+    reason: str = Field(min_length=10, max_length=4000)
+    proposed_date: date | None = None
+    author: str | None = Field(default=None, max_length=200)
+
+    @field_validator("reason", "author")
+    @classmethod
+    def strip_text(cls, value: str | None) -> str | None:
+        return value.strip() if isinstance(value, str) else value

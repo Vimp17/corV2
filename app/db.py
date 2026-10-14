@@ -9,7 +9,7 @@ from pathlib import Path
 from contextlib import contextmanager
 from typing import Iterable, Iterator
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, Integer, JSON, MetaData, String, Table, Column, UniqueConstraint, create_engine, select, text
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, JSON, MetaData, String, Table, Column, UniqueConstraint, create_engine, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine
 
@@ -95,6 +95,47 @@ monitor_jobs = Table(
     Column("result_json", JSON),
     Column("error", String(2000)),
 )
+
+# Current rating inputs per well (approved template); computed fields live in app.core.rating.
+well_rating = Table(
+    "well_rating", metadata,
+    Column("well_id", String(128), primary_key=True),
+    Column("field", String(256)), Column("equipment", String(256)),
+    Column("in_operation", Boolean), Column("sampling", Boolean),
+    Column("corrosive_environment", Boolean),
+    Column("tonnage_t", Float), Column("noo_days", Float),
+    Column("demount_act", Boolean), Column("demount_corrosion", Boolean),
+    Column("base_act", Boolean), Column("base_corrosion", Boolean),
+    Column("category", String(32)),
+    Column("model_ntc", Float), Column("model_math", Float),
+    Column("plan_date", Date), Column("promine_status", String(32)),
+    Column("comment", String(2000)),
+    Column("assessed_at", DateTime(timezone=True)),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    Column("source", String(32), nullable=False),
+)
+
+# Proposals to change the ERA repair plan, sent through Промайн.
+era_proposals = Table(
+    "era_proposals", metadata,
+    Column("proposal_id", String(64), primary_key=True),
+    Column("well_id", String(128), nullable=False),
+    Column("change_type", String(32), nullable=False),
+    Column("reason", String(4000), nullable=False),
+    Column("proposed_date", Date),
+    Column("author", String(200)),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("status", String(32), nullable=False),
+    Column("transport", String(16), nullable=False),
+    Column("attempts", Integer, nullable=False),
+    Column("sent_at", DateTime(timezone=True)),
+    Column("external_id", String(256)),
+    Column("error", String(2000)),
+    Column("subject", String(500), nullable=False),
+    Column("body", String(20000), nullable=False),
+    Column("rating_json", JSON),
+)
+Index("idx_era_proposals_well_time", era_proposals.c.well_id, era_proposals.c.created_at)
 
 source_documents = Table(
     "source_documents", metadata,
@@ -264,11 +305,18 @@ def load_telemetry(well_id: str) -> list[TelemetryPoint]:
     return combined
 
 
+# Rating uploads record a source status per well; such wells join the telemetry monitor only
+# once they have telemetry, history or analyses, so a fleet-wide rating file does not add a
+# "no data" skip per well to every daily run.
+RATING_SOURCE_ID = "RATING"
+
+
 def list_wells() -> list[dict]:
     query = text("""
         WITH well_ids AS (
             SELECT well_id FROM telemetry UNION SELECT well_id FROM history_events
-            UNION SELECT well_id FROM analysis_runs UNION SELECT well_id FROM source_health
+            UNION SELECT well_id FROM analysis_runs
+            UNION SELECT well_id FROM source_health WHERE source_id <> :rating_source
         )
         SELECT w.well_id, COUNT(t.id) AS record_count, MIN(t.timestamp) AS first_timestamp,
                MAX(t.timestamp) AS last_timestamp,
@@ -277,7 +325,7 @@ def list_wells() -> list[dict]:
         GROUP BY w.well_id ORDER BY w.well_id
     """)
     with engine().connect() as conn:
-        return [dict(row) for row in conn.execute(query).mappings().all()]
+        return [dict(row) for row in conn.execute(query, {"rating_source": RATING_SOURCE_ID}).mappings().all()]
 
 
 def save_history(well_id: str, requested_batch_id: str | None,
@@ -633,3 +681,124 @@ def get_monitor_job(job_id: str) -> dict | None:
             "created_at": iso(row["created_at"]), "started_at": iso(row["started_at"]),
             "completed_at": iso(row["completed_at"]), "result": row["result_json"],
             "error": row["error"]}
+
+
+# --------------------------------------------------------------------------- well rating
+RATING_FIELDS = (
+    "field", "equipment", "in_operation", "sampling", "corrosive_environment", "tonnage_t",
+    "noo_days", "demount_act", "demount_corrosion", "base_act", "base_corrosion", "category",
+    "model_ntc", "model_math", "plan_date", "promine_status", "comment",
+)
+
+
+def _rating_row(row) -> dict:
+    data = dict(row)
+    for key in ("assessed_at", "updated_at"):
+        if data.get(key) is not None:
+            data[key] = data[key].isoformat()
+    if data.get("plan_date") is not None:
+        data["plan_date"] = data["plan_date"].isoformat()
+    return data
+
+
+def upsert_rating(records: list[dict], source: str) -> dict:
+    """Insert or update rating rows. Each record holds well_id plus only the fields to set.
+
+    assessed_at (the start of a measure's deadline) moves only when a model score changes or an
+    explicit assessed_at is given, so re-uploading the same file daily does not push deadlines.
+    """
+    if not records:
+        return {"inserted": 0, "updated": 0}
+    now = datetime.now(timezone.utc)
+    merged: dict[str, dict] = {}
+    for record in records:  # last row for a well wins
+        merged.setdefault(record["well_id"], {}).update(record)
+    with engine().begin() as conn:
+        existing = {row["well_id"]: dict(row) for row in conn.execute(
+            select(well_rating).where(well_rating.c.well_id.in_(list(merged)))).mappings().all()}
+        inserted = updated = 0
+        for well_id, record in merged.items():
+            old = existing.get(well_id)
+            values = {key: record[key] for key in RATING_FIELDS if key in record}
+            explicit = record.get("assessed_at")
+            scores_changed = old is None or any(
+                key in values and values[key] != old.get(key) for key in ("model_ntc", "model_math"))
+            if explicit is not None:
+                values["assessed_at"] = datetime.combine(explicit, datetime.min.time(), tzinfo=timezone.utc)
+            elif scores_changed:
+                values["assessed_at"] = now
+            values.update(updated_at=now, source=source)
+            if old is None:
+                conn.execute(well_rating.insert().values(well_id=well_id, **values))
+                inserted += 1
+            else:
+                conn.execute(well_rating.update().where(well_rating.c.well_id == well_id).values(**values))
+                updated += 1
+    return {"inserted": inserted, "updated": updated}
+
+
+def list_rating_rows() -> list[dict]:
+    with engine().connect() as conn:
+        rows = conn.execute(select(well_rating)).mappings().all()
+    return [_rating_row(row) for row in rows]
+
+
+def get_rating_row(well_id: str) -> dict | None:
+    with engine().connect() as conn:
+        row = conn.execute(select(well_rating).where(well_rating.c.well_id == well_id)).mappings().first()
+    return _rating_row(row) if row else None
+
+
+def update_rating_row(well_id: str, values: dict, source: str = "dashboard") -> bool:
+    values = {key: value for key, value in values.items() if key in RATING_FIELDS}
+    with engine().begin() as conn:
+        result = conn.execute(well_rating.update().where(well_rating.c.well_id == well_id).values(
+            **values, updated_at=datetime.now(timezone.utc), source=source))
+        return result.rowcount == 1
+
+
+# --------------------------------------------------------------------------- ERA proposals
+def _proposal_row(row) -> dict:
+    data = dict(row)
+    for key in ("created_at", "sent_at"):
+        if data.get(key) is not None:
+            data[key] = data[key].isoformat()
+    if data.get("proposed_date") is not None:
+        data["proposed_date"] = data["proposed_date"].isoformat()
+    return data
+
+
+def create_era_proposal(values: dict) -> dict:
+    with engine().begin() as conn:
+        conn.execute(era_proposals.insert().values(**values))
+    return get_era_proposal(values["proposal_id"])
+
+
+def update_era_proposal(proposal_id: str, **values) -> None:
+    with engine().begin() as conn:
+        conn.execute(era_proposals.update().where(era_proposals.c.proposal_id == proposal_id).values(**values))
+
+
+def get_era_proposal(proposal_id: str) -> dict | None:
+    with engine().connect() as conn:
+        row = conn.execute(select(era_proposals).where(
+            era_proposals.c.proposal_id == proposal_id)).mappings().first()
+    return _proposal_row(row) if row else None
+
+
+def list_era_proposals(well_id: str | None = None, limit: int = 100) -> list[dict]:
+    query = select(era_proposals).order_by(era_proposals.c.created_at.desc()).limit(limit)
+    if well_id is not None:
+        query = query.where(era_proposals.c.well_id == well_id)
+    with engine().connect() as conn:
+        return [_proposal_row(row) for row in conn.execute(query).mappings().all()]
+
+
+def latest_era_proposals() -> dict[str, dict]:
+    """Most recent proposal per well, for the rating table."""
+    query = (select(era_proposals.c.well_id, era_proposals.c.proposal_id, era_proposals.c.status,
+                    era_proposals.c.change_type, era_proposals.c.created_at)
+             .distinct(era_proposals.c.well_id)
+             .order_by(era_proposals.c.well_id, era_proposals.c.created_at.desc()))
+    with engine().connect() as conn:
+        return {row["well_id"]: _proposal_row(row) for row in conn.execute(query).mappings().all()}
