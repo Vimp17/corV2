@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from collections import defaultdict
 from datetime import date, datetime, time, timezone
 from io import BytesIO
@@ -14,14 +13,17 @@ from openpyxl import load_workbook
 from pydantic import ValidationError
 
 from app.config import settings
-from app.core import rating
 from app.schemas import FailureHistoryItem, TelemetryPoint, WorkHistoryItem
 
 MEASUREMENT_FIELDS = {
     "water_cut_pct", "co2_pct", "chlorides_mg_l", "inhibitor_efficiency",
     "injection_deviation_pct", "corrosion_rate_mm_year", "wall_thickness_mm",
     "initial_wall_thickness_mm", "metal_loss_mm", "corrosion_load", "water_compatibility_issue",
+    "tonnage_t", "noo_days",
 }
+# Non-numeric telemetry columns carried into the well rating (DARS passport data).
+TEXT_FIELDS = {"field"}
+STATUS_FIELDS = {"in_operation"}
 
 
 class ExcelImportError(ValueError):
@@ -48,7 +50,7 @@ def load_profiles() -> dict:
         if source_id in seen_source_ids:
             raise ExcelImportError(f"More than one profile uses source_id '{source_id}'")
         seen_source_ids.add(source_id)
-        if profile.get("kind") not in {"telemetry", "history", "rating", "json_schedule"}:
+        if profile.get("kind") not in {"telemetry", "history", "json_schedule"}:
             raise ExcelImportError(f"Source profile '{profile_id}' has an unsupported kind")
         if profile.get("kind") != "json_schedule":
             if not isinstance(profile.get("field_map"), dict):
@@ -115,11 +117,23 @@ def _boolean(value: Any) -> bool | None:
     if isinstance(value, (int, float)):
         return bool(value)
     normalized = str(value).strip().casefold()
-    if normalized in {"1", "true", "yes", "да", "есть", "обнаружена"}:
+    if normalized in {"1", "true", "yes", "да", "есть", "обнаружена", "коррозия есть", "есть коррозия"}:
         return True
-    if normalized in {"0", "false", "no", "нет", "отсутствует", "не обнаружена"}:
+    if normalized in {"0", "false", "no", "нет", "отсутствует", "не обнаружена", "коррозии нет",
+                      "нет коррозии"}:
         return False
     raise ValueError("boolean value must be yes/no, true/false or 1/0")
+
+
+def _operation_status(value: Any) -> bool | None:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    normalized = str(value).strip().casefold()
+    if normalized in {"в работе", "работает", "в эксплуатации", "in_operation", "running"}:
+        return True
+    if normalized in {"не в работе", "остановлена", "простой", "в ремонте", "stopped"}:
+        return False
+    return _boolean(value)
 
 
 def _text(value: Any) -> str | None:
@@ -178,7 +192,7 @@ def parse_excel(content: bytes, filename: str, profile_id: str, supplied_well_id
     if not isinstance(profile, dict):
         raise ExcelImportError(f"Unknown profile '{profile_id}'. Available profiles: {', '.join(sorted(profiles))}")
     kind = profile.get("kind")
-    if kind not in {"telemetry", "history", "rating"}:
+    if kind not in {"telemetry", "history"}:
         raise ExcelImportError(f"Profile '{profile_id}' has unsupported kind '{kind}'")
     source_id = str(profile.get("source_id", profile_id)).upper()
     try:
@@ -254,7 +268,6 @@ def parse_excel(content: bytes, filename: str, profile_id: str, supplied_well_id
             )
 
         telemetry_rows: dict[str, list[TelemetryPoint]] = defaultdict(list)
-        rating_rows: dict[str, list[dict]] = defaultdict(list)
         history_work: dict[str, list[WorkHistoryItem]] = defaultdict(list)
         history_failures: dict[str, list[FailureHistoryItem]] = defaultdict(list)
         errors: list[dict] = []
@@ -297,7 +310,8 @@ def parse_excel(content: bytes, filename: str, profile_id: str, supplied_well_id
                     if kind == "telemetry":
                         row["timestamp"] = _as_datetime(row.get("timestamp"))
                         normalized = {key: value for key, value in row.items()
-                                      if key in MEASUREMENT_FIELDS or key == "timestamp"}
+                                      if key in MEASUREMENT_FIELDS | TEXT_FIELDS | STATUS_FIELDS
+                                      or key == "timestamp"}
                         normalized["source_id"] = source_id
                         for field, multiplier in scale_fields.items():
                             if field in normalized and normalized[field] is not None:
@@ -307,11 +321,12 @@ def parse_excel(content: bytes, filename: str, profile_id: str, supplied_well_id
                                 normalized[field] = _number(normalized[field])
                         if "water_compatibility_issue" in normalized:
                             normalized["water_compatibility_issue"] = _boolean(normalized["water_compatibility_issue"])
+                        for field in TEXT_FIELDS & normalized.keys():
+                            normalized[field] = _text(normalized[field])
+                        if "in_operation" in normalized:
+                            normalized["in_operation"] = _operation_status(normalized["in_operation"])
                         point = TelemetryPoint.model_validate(normalized)
                         telemetry_rows[well_id].append(point)
-                    elif kind == "rating":
-                        values = rating.parse_row({key: value for key, value in row.items() if key != "well_id"})
-                        rating_rows[well_id].append({"well_id": well_id, **values})
                     else:
                         event_date = _as_datetime(row.get("event_date"))
                         event_raw = _text(row.get("event_type"))
@@ -342,6 +357,7 @@ def parse_excel(content: bytes, filename: str, profile_id: str, supplied_well_id
                             history_work[well_id].append(WorkHistoryItem(
                                 date=event_date, work_type=work_type, reason=_text(row.get("reason")),
                                 equipment=_text(row.get("equipment")), result=_text(row.get("result")),
+                                corrosion_detected=_boolean(row.get("corrosion_detected")),
                             ))
                     accepted += 1
                 except (ValueError, TypeError, ValidationError) as exc:
@@ -350,13 +366,12 @@ def parse_excel(content: bytes, filename: str, profile_id: str, supplied_well_id
                                        "well_id": well_id, "message": str(exc)[:500]})
 
         grouped: dict[str, dict] = {}
-        all_wells = set(telemetry_rows) | set(history_work) | set(history_failures) | set(rating_rows)
+        all_wells = set(telemetry_rows) | set(history_work) | set(history_failures)
         for well_id in all_wells:
             grouped[well_id] = {
                 "records": telemetry_rows.get(well_id, []),
                 "work_history": history_work.get(well_id, []),
                 "failure_history": history_failures.get(well_id, []),
-                "rating": rating_rows.get(well_id, []),
             }
         file_hash = hashlib.sha256(content).hexdigest()
         return {

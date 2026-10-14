@@ -13,7 +13,6 @@ COPY config ./config
 COPY scripts ./scripts
 COPY migrations ./migrations
 COPY alembic.ini ./alembic.ini
-COPY data/sample_rating.xlsx ./templates/rating_template.xlsx
 RUN mkdir -p /app/models
 
 EXPOSE 8000

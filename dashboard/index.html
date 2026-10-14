@@ -40,6 +40,7 @@
     .btn:disabled { opacity:.55; cursor:wait }
     .btn.secondary { background:#fff; color:var(--blue); border:1px solid var(--blue) }
     .btn.secondary:hover { background:var(--sky) }
+    a.btn { display:inline-flex; align-items:center; text-decoration:none }
     .appbar .btn.secondary { background:transparent; color:#fff; border:1px solid #4E6E93 }
     .appbar .btn.secondary:hover { background:var(--navy-2) }
     .btn.small { min-height:32px; padding:5px 10px; font-size:12px }
@@ -77,7 +78,9 @@
     .tile { display:flex; flex-direction:column; align-items:flex-start; gap:2px; min-width:0; padding:12px 14px; border:1px solid var(--line); border-radius:var(--radius); background:#fff; color:var(--ink); cursor:pointer; text-align:left }
     .tile:hover { border-color:#9DB4CC }
     .tile[aria-pressed="true"] { border-color:var(--blue); box-shadow:inset 0 0 0 1px var(--blue); background:#F4F9FE }
-    .tile .tl { display:flex; align-items:center; gap:8px; font-size:13px; font-weight:600 }
+    /* The square sits on the first line of a wrapped label, not in the middle of the block. */
+    .tile .tl { display:flex; align-items:flex-start; gap:8px; font-size:13px; font-weight:600; line-height:18px }
+    .tile .tl .sq { margin-top:4px }
     .tile .tn { font-size:26px; font-weight:700; line-height:1.15; font-variant-numeric:tabular-nums }
     .tile .tr { font-size:12px; color:var(--muted) }
     .sq { width:10px; height:10px; border-radius:2px; flex:0 0 auto; background:var(--navy) }
@@ -154,6 +157,7 @@
     .dl { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:4px 16px; margin:0 }
     .dl dt { font-size:12px; color:var(--muted); margin:0; padding-top:6px }
     .dl dd { margin:0; font-size:13px; font-weight:600; padding-bottom:6px; border-bottom:1px solid var(--line-2); overflow-wrap:anywhere }
+    .dl dd.bad .prov, .dl dd.ok .prov { color:var(--muted) }
     .dl dd.bad { color:var(--repair) } .dl dd.ok { color:var(--none) } .dl dd.na { color:var(--muted); font-weight:400 }
     .box { border:1px solid var(--line); border-radius:var(--radius); padding:12px 14px; display:flex; flex-direction:column; gap:10px }
     .box h3 { margin:0; font-size:14px; color:var(--navy) }
@@ -177,6 +181,14 @@
     .src .row { display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end }
     .src .result { font-size:12px; color:var(--muted); white-space:pre-line; min-height:18px }
     .src.future { border-style:dashed; background:#FAFBFC }
+    .datastate { display:flex; flex-wrap:wrap; gap:6px 14px; font-size:12px; color:var(--muted) }
+    .datastate b { color:var(--ink); font-weight:600 }
+    .srcmode { display:inline-flex; gap:4px; align-items:baseline }
+    .srcmode.api b { color:var(--none) }
+    .empty .row { display:flex; justify-content:center; flex-wrap:wrap; gap:10px; margin-top:12px }
+    .empty-title { font-size:15px; font-weight:600; color:var(--ink); margin-bottom:6px }
+    .prov { display:block; font-size:11px; font-weight:400; color:var(--muted); margin-top:2px }
+    .toolbar .spacer-x { flex:1 }
     .check { display:flex; gap:8px; align-items:center; font-size:13px; color:var(--ink) }
     footer { color:var(--muted); font-size:12px }
   </style>
@@ -215,6 +227,7 @@
         <div>
           <h1>Рейтинг скважин</h1>
           <div class="sub" id="ratingSub">Индекс приоритета 0–100 — более высокая из оценок моделей НТЦ и математической. По индексу рейтинг предлагает мероприятие.</div>
+          <div class="datastate" id="dataState"></div>
         </div>
         <div class="alerts">
           <span class="alert"><b id="aPromine">0</b> скв. ждут документа Промайн на включение в ЭРА ремонта</span>
@@ -231,6 +244,8 @@
           <label>Поиск скважины <input id="search" type="search" placeholder="номер" autocomplete="off"></label>
           <label>Месторождение <select id="fieldFilter"><option value="">Все</option></select></label>
           <span class="sub" id="updated">Загрузка…</span>
+          <span class="spacer-x"></span>
+          <button class="btn secondary small" id="export" type="button">Скачать рейтинг (Excel)</button>
         </div>
         <div class="table-box"><div class="table-inner">
           <div class="thead-wrap">
@@ -281,12 +296,12 @@
       <section id="sec-upload" aria-labelledby="uploadTitle" style="display:flex; flex-direction:column; gap:12px; scroll-margin-top:72px">
         <div>
           <h2 class="section" id="uploadTitle">Загрузка данных</h2>
-          <div class="sub">Одна карточка на источник из config/source_profiles.json: новый профиль появится здесь без изменений дашборда.</div>
+          <div class="sub">Одна карточка на источник из config/source_profiles.json. После загрузки рейтинг пересчитывается для скважин из файла. Если у источника настроен API, дневной цикл запрашивает данные сам.</div>
         </div>
         <div class="uploads" id="uploads"><div class="panel src"><div class="sub">Загружаем список источников…</div></div></div>
       </section>
 
-      <footer>Индекс и мероприятия рассчитываются по правилам утверждённого шаблона (пороги — переменные MAI_RATING_*). Рекомендации требуют проверки инженером; предложения по ЭРА ремонта уходят в Промайн только после нажатия «Отправить».</footer>
+      <footer>Рейтинг рассчитывается системой по данным ДАРС, ХИМИК и ЭРА ремонта: из API источников, если они настроены, иначе по загруженным файлам. Пороги и сроки — переменные MAI_RATING_*. Рекомендации требуют проверки инженером; предложения по ЭРА ремонта уходят в Промайн только после нажатия «Отправить».</footer>
     </main>
   </div>
 
@@ -376,11 +391,21 @@
       const combine = settings.combine === 'mean' ? 'среднее оценок' : 'более высокая из оценок';
       $('ratingSub').textContent = `Индекс приоритета 0–100 — ${combine} моделей НТЦ и математической. По индексу рейтинг предлагает мероприятие.`;
       $('updated').textContent = `Обновлено ${fmtTime(state.rating.generated_at)}`;
+      renderDataState(state.rating.data);
       renderTiles(settings.measures, counts);
       renderFieldFilter(wells);
       renderTable();
       renderGantt();
       if (!state.cardLocked) renderCard();
+    }
+
+    const SOURCE_MODE = { api: 'API', adapter: 'API (адаптер)', adapter_missing: 'адаптер не установлен', upload: 'загрузка файлов' };
+    function renderDataState(data) {
+      if (!data) { $('dataState').replaceChildren(); return; }
+      const parts = (data.sources || []).map(s => el('span', { class: `srcmode ${s.mode === 'api' || s.mode === 'adapter' ? 'api' : ''}` }, `${s.title}:`, el('b', { text: SOURCE_MODE[s.mode] || s.mode })));
+      parts.push(el('span', {}, 'Рассчитано: ', el('b', { text: `${data.computed_wells} из ${data.known_wells} скв.` })));
+      if (data.last_computed_at) parts.push(el('span', {}, 'Последний расчёт: ', el('b', { text: fmtTime(data.last_computed_at) })));
+      $('dataState').replaceChildren(...parts);
     }
 
     function renderTiles(measures, counts) {
@@ -432,10 +457,7 @@
 
     function renderTable() {
       const rows = visibleWells();
-      if (!state.rating.wells.length) {
-        $('rows').replaceChildren(el('div', { class: 'empty' }, 'Рейтинг пуст. Загрузите шаблон Excel в разделе ', el('a', { href: '#sec-upload', text: '«Загрузка данных»' }), '.'));
-        return;
-      }
+      if (!state.rating.wells.length) { $('rows').replaceChildren(emptyRating(state.rating.data || {})); return; }
       if (!rows.length) { $('rows').replaceChildren(el('div', { class: 'empty', text: 'Нет скважин с выбранными условиями.' })); return; }
       $('rows').replaceChildren(...rows.map(w => {
         const key = measureKey(w);
@@ -455,6 +477,19 @@
           planCell(w),
           eraCell(w));
       }));
+    }
+
+    function emptyRating(data) {
+      const run = el('button', { class: 'btn', type: 'button', text: 'Выполнить дневной цикл', onClick: runNow });
+      if (!data.known_wells) {
+        const how = data.api_configured
+          ? 'API источников настроен: дневной цикл запросит данные и рассчитает рейтинг.'
+          : 'Загрузите файлы ДАРС, ХИМИК и ЭРА ремонта в разделе «Загрузка данных» — рейтинг рассчитается сразу. Чтобы данные запрашивались автоматически, задайте MAI_SOURCE_<ID>_URL и список скважин MAI_WELL_IDS.';
+        return el('div', { class: 'empty' }, el('div', { class: 'empty-title', text: 'Данных по скважинам пока нет' }), el('div', { text: how }),
+          el('div', { class: 'row' }, el('a', { class: 'btn secondary', href: '#sec-upload', text: 'К загрузке данных' }), data.api_configured ? run : null));
+      }
+      return el('div', { class: 'empty' }, el('div', { class: 'empty-title', text: `Данные есть по ${data.known_wells} скв., рейтинг ещё не рассчитан` }),
+        el('div', { text: 'Дневной цикл запросит данные из настроенных API, рассчитает риск и рейтинг по всем скважинам.' }), el('div', { class: 'row' }, run));
     }
 
     function barLine(label, value, cls, wide = false) {
@@ -481,7 +516,7 @@
       $('pprSub').textContent = `Скважины с назначенными мероприятиями (${planned.length}), 12 недель с ${fmtDay(start)}. Полоса — окно до крайнего срока, метка — плановая дата.`;
       if (!planned.length) { $('ganttRows').replaceChildren(el('div', { class: 'empty', text: 'Нет скважин с назначенными мероприятиями.' })); return; }
       $('ganttRows').replaceChildren(...planned.map(w => {
-        const assessed = isoDay(w.assessed_at) ?? today;
+        const assessed = isoDay(w.measure_since || w.assessed_at) ?? today;
         const deadline = isoDay(w.deadline);
         const plan = isoDay(w.plan_date);
         const late = w.plan_status === 'late';
@@ -525,10 +560,18 @@
       }
     }
 
-    function dlGroup(title, items) {
+    // Where a rating value came from: "ДАРС · 14.10.2026", plus the note, as a small line.
+    function provLine(w, key) {
+      const p = (w.provenance || {})[key];
+      if (!p) return null;
+      const text = [p.source, p.date ? fmtIso(p.date) : null, p.note].filter(Boolean).join(' · ');
+      return text ? el('span', { class: 'prov', text }) : null;
+    }
+    function dlGroup(title, items, w = null) {
       return el('div', { style: 'display:flex; flex-direction:column; gap:4px' },
         el('h3', { class: 'group-title', text: title }),
-        el('dl', { class: 'dl' }, items.map(([k, v, cls]) => [el('dt', { text: k }), el('dd', { class: cls || (v === '—' ? 'na' : ''), text: v })])));
+        el('dl', { class: 'dl' }, items.map(([k, v, cls, key]) => [el('dt', { text: k }),
+          el('dd', { class: cls || (v === '—' ? 'na' : '') }, v, w && key ? provLine(w, key) : null)])));
     }
 
     function proposalText(w) {
@@ -538,7 +581,9 @@
         case 'engineer': return `Индекс ${w.index} выше порога УД, но ниже порога планового комплекса по ремонту. Мероприятие назначает инженер до ${deadline}.`;
         case 'ud': return `Ударная дозировка до ${deadline}.`;
         case 'none': return 'Мероприятия не требуются.';
-        default: return 'Нет оценок моделей НТЦ и мат.: загрузите их в шаблоне рейтинга.';
+        default: return w.skip_reason
+          ? `Модели не рассчитаны: ${w.skip_reason}`
+          : 'Модели ещё не рассчитаны: нажмите «Пересчитать скважину» или выполните дневной цикл.';
       }
     }
 
@@ -557,7 +602,8 @@
         el('div', { style: 'text-align:right' },
           el('div', { class: 'idx', style: 'justify-content:flex-end' }, el('strong', { class: key, style: 'font-size:32px', text: w.index ?? '—' })),
           el('div', { class: 'sub', text: 'индекс приоритета' }))));
-      body.push(el('div', { class: 'bars' }, barLine('Модель НТЦ', w.model_ntc, '', true), barLine('Мат. модель', w.model_math, 'm', true)));
+      body.push(el('div', { class: 'bars' }, barLine('Модель НТЦ', w.model_ntc, '', true), provLine(w, 'model_ntc'),
+        barLine('Мат. модель', w.model_math, 'm', true), provLine(w, 'model_math')));
 
       const prop = el('div', { class: `prop ${key}` }, el('h3', { text: `Предложение рейтинга: ${w.measure_label}` }), el('div', { style: 'font-size:13px', text: proposalText(w) }));
       if (w.era_required) {
@@ -568,16 +614,27 @@
       }
       body.push(prop);
 
-      body.push(dlGroup('Скважина', [['Спущенное оборудование', w.equipment || '—'], ['Статус', w.in_operation === null || w.in_operation === undefined ? '—' : (w.in_operation ? 'В работе' : 'Не в работе'), w.in_operation === false ? 'bad' : (w.in_operation ? 'ok' : '')]]));
+      body.push(dlGroup('Скважина', [
+        ['Месторождение', w.field || '—', '', 'field'],
+        ['Спущенное оборудование', w.equipment || '—', '', 'equipment'],
+        ['Статус', w.in_operation === null || w.in_operation === undefined ? '—' : (w.in_operation ? 'В работе' : 'Не в работе'), w.in_operation === false ? 'bad' : (w.in_operation ? 'ok' : ''), 'in_operation']], w));
       body.push(dlGroup('Среда и обработка', [
-        ['Отбор проб', yesNo(w.sampling, 'Да', 'Нет'), w.sampling ? 'ok' : (w.sampling === false ? 'na' : '')],
-        ['Среда', yesNo(w.corrosive_environment, 'Коррозионная', 'Некоррозионная'), w.corrosive_environment ? 'bad' : (w.corrosive_environment === false ? 'ok' : '')],
-        ['Тоннаж, т', w.tonnage_t === null || w.tonnage_t === undefined ? '—' : w.tonnage_t.toFixed(1)],
-        ['НОО, сут', w.noo_days === null || w.noo_days === undefined ? '—' : String(Math.round(w.noo_days))]]));
+        ['Отбор проб', yesNo(w.sampling, 'Да', 'Нет'), w.sampling ? 'ok' : (w.sampling === false ? 'na' : ''), 'sampling'],
+        ['Среда', yesNo(w.corrosive_environment, 'Коррозионная', 'Некоррозионная'), w.corrosive_environment ? 'bad' : (w.corrosive_environment === false ? 'ok' : ''), 'corrosive_environment'],
+        ['Тоннаж, т', w.tonnage_t === null || w.tonnage_t === undefined ? '—' : w.tonnage_t.toFixed(1), '', 'tonnage_t'],
+        ['НОО, сут', w.noo_days === null || w.noo_days === undefined ? '—' : String(Math.round(w.noo_days)), '', 'noo_days']], w));
       body.push(dlGroup('Демонтаж и разбор на базе', [
-        ['Акт демонтажа', yesNo(w.demount_act, 'Есть', 'Нет')], ['Признак коррозии', yesNo(w.demount_corrosion, 'Есть', 'Нет'), w.demount_corrosion ? 'bad' : (w.demount_corrosion === false ? 'ok' : '')],
-        ['Акт разбора на базе', yesNo(w.base_act, 'Есть', 'Нет')], ['Результат разбора', yesNo(w.base_corrosion, 'Коррозия есть', 'Коррозии нет'), w.base_corrosion ? 'bad' : (w.base_corrosion === false ? 'ok' : '')]]));
-      body.push(dlGroup('Оценка', [['Категория скважины', w.category_label || '—', w.category === 'corrosive' ? 'bad' : ''], ['Оценки получены', w.assessed_at ? fmtIso(w.assessed_at) : '—']]));
+        ['Акт демонтажа', yesNo(w.demount_act, 'Есть', 'Нет'), '', 'demount_act'],
+        ['Признак коррозии', yesNo(w.demount_corrosion, 'Есть', 'Нет'), w.demount_corrosion ? 'bad' : (w.demount_corrosion === false ? 'ok' : ''), 'demount_corrosion'],
+        ['Акт разбора на базе', yesNo(w.base_act, 'Есть', 'Нет'), '', 'base_act'],
+        ['Результат разбора', yesNo(w.base_corrosion, 'Коррозия есть', 'Коррозии нет'), w.base_corrosion ? 'bad' : (w.base_corrosion === false ? 'ok' : ''), 'base_corrosion']], w));
+      body.push(dlGroup('Оценка', [
+        ['Категория скважины', w.category_label || '—', w.category === 'corrosive' ? 'bad' : '', 'category'],
+        ['Мероприятие назначено', w.measure_since ? fmtIso(w.measure_since) : '—'],
+        ['Рейтинг рассчитан', w.computed_at ? fmtTime(w.computed_at) : 'ещё не рассчитан']], w));
+      body.push(el('div', { class: 'row', style: 'display:flex; flex-wrap:wrap; gap:8px; align-items:center' },
+        el('button', { class: 'btn secondary small', type: 'button', text: 'Пересчитать скважину', onClick: (event) => recomputeWell(w.well_id, event.currentTarget) }),
+        el('span', { class: 'hint', text: 'Запрос данных из настроенных API, расчёт риска и рейтинга.' })));
       body.push(planBox(w));
       body.push(proposalBox(w));
       body.push(telemetryBox(w));
@@ -692,6 +749,31 @@
       return postJson('/api/v1/agent/well', { analysis_id: analysisId, context: run.analysis.context, external_data: external });
     }
 
+    async function recomputeWell(wellId, button) {
+      button.disabled = true; state.busy = true; notice(`Пересчитывается скважина ${wellId}…`);
+      try {
+        const result = await postJson(`/api/v1/monitor/wells/${encodeURIComponent(wellId)}/analyze`, { horizon_days: state.rating.settings.horizon_days || 90 });
+        notice(result.status === 'skipped_insufficient_data'
+          ? `Рейтинг скважины ${wellId} обновлён без оценок моделей: ${result.operator_message}`
+          : `Рейтинг скважины ${wellId} пересчитан.`, result.status === 'skipped_insufficient_data' ? 'warning' : '');
+      } catch (error) { notice(error.message, 'error'); }
+      finally { state.busy = false; state.cardLocked = false; await refresh({ keepNotice: true }); }
+    }
+
+    async function exportRating(button) {
+      button.disabled = true;
+      try {
+        const response = await fetch('/api/v1/rating/export.xlsx', { headers: headers() });
+        if (!response.ok) throw new Error(response.status === 401 ? 'Нужен ключ API: введите его в верхней панели.' : `Выгрузка не удалась (HTTP ${response.status}).`);
+        const blob = await response.blob();
+        const match = /filename="([^"]+)"/.exec(response.headers.get('Content-Disposition') || '');
+        const link = el('a', { href: URL.createObjectURL(blob), download: match ? match[1] : 'rating.xlsx' });
+        document.body.append(link); link.click(); link.remove();
+        setTimeout(() => URL.revokeObjectURL(link.href), 10000);
+      } catch (error) { notice(error.message, 'error'); }
+      finally { button.disabled = false; }
+    }
+
     async function analyzeWell(wellId, button) {
       button.disabled = true; state.busy = true; notice(`Пересчитывается скважина ${wellId}…`);
       try {
@@ -713,17 +795,18 @@
         const job = await api(`/api/v1/monitor/jobs/${encodeURIComponent(jobId)}`);
         if (job.status === 'completed') return job.result;
         if (job.status === 'failed' || job.status === 'rejected') throw new Error(job.error || 'Расчёт не выполнен; подробности в журнале backend.');
-        notice(`Обновляются источники и рассчитывается риск по телеметрии… прошло ${Math.round((Date.now() - started) / 1000)} с.`);
+        notice(`Запрашиваются данные из источников, рассчитываются риск и рейтинг… прошло ${Math.round((Date.now() - started) / 1000)} с.`);
       }
     }
     async function runNow() {
-      state.busy = true; $('run').disabled = true; notice('Обновляются источники и рассчитывается риск по телеметрии…');
+      state.busy = true; $('run').disabled = true; notice('Запрашиваются данные из источников, рассчитываются риск и рейтинг…');
       try {
         const job = await postJson('/api/v1/monitor/run?background=true', { horizon_days: 90 });
         const result = await waitForJob(job.job_id);
         let reports = 0, errors = 0;
         for (const alert of result.alerts || []) { try { await createReport(alert.analysis_id, alert.well_id); reports++; } catch { errors++; } }
-        notice((result.alerts || []).length ? `${result.message} Справки ИИ: ${reports}/${result.alerts.length}${errors ? `, ошибок: ${errors}` : ''}.` : `${result.message} Рискованных скважин по телеметрии нет.`, errors ? 'warning' : '');
+        const head = `${result.message} Рейтинг пересчитан.`;
+        notice((result.alerts || []).length ? `${head} Справки ИИ: ${reports}/${result.alerts.length}${errors ? `, ошибок: ${errors}` : ''}.` : `${head} Рискованных скважин по телеметрии нет.`, errors ? 'warning' : '');
       } catch (error) { notice(error.message, 'error'); }
       finally { $('run').disabled = false; state.busy = false; await refresh({ keepNotice: true }); }
     }
@@ -748,7 +831,7 @@
     }
 
     function renderUploads(data) {
-      const order = { rating: 0, telemetry: 1, history: 2, json_schedule: 3 };
+      const order = { telemetry: 1, history: 2, json_schedule: 3 };
       const sources = [...data.sources].sort((a, b) => (order[a.kind] ?? 9) - (order[b.kind] ?? 9));
       const cards = sources.map(source => source.upload_format === 'json' ? crewCard(source, data) : excelCard(source, data));
       cards.push(el('div', { class: 'panel src future', id: 'sec-future', style: 'scroll-margin-top:72px' },
@@ -773,7 +856,10 @@
           const wells = new Set((r.imported_wells || []).map(item => item.well_id)).size;
           result.textContent = `Статус: ${r.status}. Листы: ${(r.sheet_names || []).join(', ') || '—'}. Строк принято: ${r.rows_accepted}, отклонено: ${r.rows_rejected}. Скважин: ${wells}.`
             + (r.errors?.length ? `\nПримеры ошибок: ${r.errors.slice(0, 3).map(e => `${e.sheet_name || ''} строка ${e.row}: ${e.message}`).join(' | ')}` : '');
-          notice(wells ? `${source.title}: загружено, скважин ${wells}.` : (r.message || 'В файле не найдено строк для загрузки.'), wells ? '' : 'warning');
+          const ratingNote = !r.rating || r.rating.mode === 'none' ? ''
+            : r.rating.mode === 'background' ? ` Рейтинг пересчитывается в фоне (${r.rating.wells} скв.), нажмите «Обновить» через минуту.`
+            : ` Рейтинг пересчитан (${r.rating.wells} скв.${r.rating.failed?.length ? `, ошибок: ${r.rating.failed.length}` : ''}).`;
+          notice(wells ? `${source.title}: загружено, скважин ${wells}.${ratingNote}` : (r.message || 'В файле не найдено строк для загрузки.'), wells ? '' : 'warning');
           file.value = '';
           await refresh({ keepNotice: true }); loadSources();
         } catch (error) { result.textContent = error.message; notice(error.message, 'error'); }
@@ -781,8 +867,8 @@
       } },
         el('label', { class: 'field' }, 'Файл Excel', file),
         wellId ? el('label', { class: 'field' }, 'ID скважины', wellId) : null,
-        el('div', { class: 'row' }, button, source.kind === 'rating' ? el('a', { href: '/dashboard/templates/rating.xlsx', download: true, text: 'Скачать шаблон Excel' }) : null));
-      return el('div', { class: 'panel src', id: source.kind === 'rating' ? 'sec-upload-rating' : null },
+        el('div', { class: 'row' }, button));
+      return el('div', { class: 'panel src' },
         el('h3', { text: source.title }), source.description ? el('div', { class: 'sub', text: source.description }) : null, form, result);
     }
 
@@ -833,6 +919,7 @@
     $('fieldFilter').addEventListener('change', () => { if (state.rating) renderTable(); });
     $('refresh').addEventListener('click', () => { state.cardLocked = false; refresh(); loadSources(); });
     $('run').addEventListener('click', runNow);
+    $('export').addEventListener('click', (event) => exportRating(event.currentTarget));
     setInterval(() => { if (!document.hidden && !state.busy) refresh({ keepNotice: true, auto: true }); }, AUTO_REFRESH_SECONDS * 1000);
     watchSections();
     refresh();
