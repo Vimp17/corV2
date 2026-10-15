@@ -27,15 +27,14 @@ MEASURE_LABELS = {
     MEASURE_NONE: "Мероприятия не требуются",
 }
 # Short codes for the ППР (ДДО) schedule.
-MEASURE_CODES = {MEASURE_REPAIR: "ПКР", MEASURE_ENGINEER: "РИ", MEASURE_UD: "УДР", MEASURE_NONE: "—"}
+MEASURE_CODES = {MEASURE_REPAIR: "ППР", MEASURE_ENGINEER: "РИ", MEASURE_UD: "УДР", MEASURE_NONE: "—"}
 # Short category names for the table ("Категория фонда").
 CATEGORY_SHORT = {"corrosive": "Корр.", "medium": "Среднекорр.", "noncorrosive": "Некорр."}
+# Data completeness is judged on three sections only: telemetry, chemistry, acts.
 GAP_LABELS = {
-    "telemetry": "Телеметрия ДАРС",
-    "samples": "Пробы ХИМИК",
-    "base_act": "Акты разбора",
-    "equipment": "Оборудование (ЭРА)",
-    "models": "Оценка моделей",
+    "telemetry": "Телеметрия (ДАРС)",
+    "samples": "Химия (пробы ХИМИК)",
+    "base_act": "Акты (разбор на базе)",
 }
 MEASURES_WITH_ACTION = (MEASURE_REPAIR, MEASURE_ENGINEER, MEASURE_UD)
 
@@ -145,7 +144,9 @@ def evaluate(row: dict[str, Any]) -> dict[str, Any]:
     plan = _as_date(row.get("plan_date"))
     status = plan_status_for(measure, plan, deadline)
     installed = _as_date(row.get("installed_at"))
-    gaps = [item for item in (row.get("data_gaps") or []) if isinstance(item, dict) and item.get("key")]
+    gaps = [item for item in (row.get("data_gaps") or [])
+            if isinstance(item, dict) and item.get("key") in GAP_LABELS]
+    protection_prov = (row.get("provenance") or {}).get("protection") or {}
     return {
         **row,
         "index": index,
@@ -165,7 +166,12 @@ def evaluate(row: dict[str, Any]) -> dict[str, Any]:
         "promine_status_label": PROMINE_STATUS_LABELS.get(row.get("promine_status") or "", ""),
         "category_short": CATEGORY_SHORT.get(row.get("category") or "", ""),
         "run_days": (date.today() - installed).days if installed else None,
+        # Oil per day in litres: liquid rate × oil share.
+        "oil_l_day": (round(row["liquid_rate_m3_day"] * row["oil_pct"] * 10)
+                      if row.get("liquid_rate_m3_day") is not None and row.get("oil_pct") is not None else None),
         "data_gaps": gaps,
+        # Protection means present (inhibitor, coated tubing), whatever their effect.
+        "protection_means": list(protection_prov.get("means") or []),
         "data_gap_labels": [GAP_LABELS.get(item["key"], item["key"]) for item in gaps],
         # A well with a measure and no decision yet (no planned date).
         "awaiting_decision": measure in MEASURES_WITH_ACTION and plan is None,
@@ -195,8 +201,7 @@ def action_text(measure: str | None, deadline: date | None, plan: date | None, s
     if measure == MEASURE_ENGINEER:
         text += " Мероприятие выбирает инженер."
     if measure == MEASURE_REPAIR:
-        doc = PROMINE_STATUS_LABELS.get(row.get("promine_status") or "not_created", "").lower()
-        text += f" Включить в ЭРА ремонта, документ Промайн: {doc.replace('эра', 'ЭРА')}."
+        text += " Включить в ЭРА ремонта."
     if index is not None and index_raw is not None and index_raw != index:
         text += f" Индекс снижен с учётом защиты ({index_raw}→{index})."
     return text

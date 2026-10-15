@@ -50,6 +50,7 @@ COLUMNS = [
     ("in_operation", "Статус", 12, "Скважина"),
     ("run_days", "Наработка, сут", 10, "Скважина"),
     ("liquid_rate_m3_day", "Жидкость, м³/сут", 10, "Скважина"),
+    ("oil_l_day", "Нефть, л/сут", 10, "Скважина"),
     ("oil_pct", "Нефть, %", 8, "Скважина"),
     ("sampling", "Отбор проб", 10, "Среда и обработка"),
     ("corrosive_environment", "Среда", 15, "Среда и обработка"),
@@ -99,6 +100,7 @@ def _cell_values(well: dict) -> dict[str, Any]:
         "run_days": well.get("run_days"),
         "liquid_rate_m3_day": well.get("liquid_rate_m3_day"),
         "oil_pct": well.get("oil_pct"),
+        "oil_l_day": well.get("oil_l_day"),
         "action": well.get("action"),
         "data_gaps": ", ".join(well.get("data_gap_labels") or []) or "полные",
         "sampling": _yn(well.get("sampling"), "Да", "Нет"),
@@ -106,9 +108,9 @@ def _cell_values(well: dict) -> dict[str, Any]:
         "tonnage_t": well.get("tonnage_t"),
         "noo_days": well.get("noo_days"),
         "demount_act": _yn(well.get("demount_act"), "Есть", "Нет"),
-        "demount_corrosion": _yn(well.get("demount_corrosion"), "Есть", "Нет") if well.get("demount_act") else "—",
+        "demount_corrosion": _yn(well.get("demount_corrosion"), "Есть коррозия", "Коррозии нет") if well.get("demount_act") else "—",
         "base_act": _yn(well.get("base_act"), "Есть", "Нет"),
-        "base_corrosion": (_yn(well.get("base_corrosion"), "Коррозия есть", "Коррозии нет")
+        "base_corrosion": (_yn(well.get("base_corrosion"), "Есть коррозия", "Коррозии нет")
                            if well.get("base_act") else "—"),
         "category": well.get("category_label") or "—",
         "protection": well.get("protection_label") or "Нет данных",
@@ -172,15 +174,15 @@ def _rating_sheet(book: Workbook, wells: list[dict], generated: datetime) -> Non
                 cell.number_format = "0.00"
             elif key in {"tonnage_t", "liquid_rate_m3_day", "oil_pct"}:
                 cell.number_format = "0.0"
-            elif key in {"noo_days", "index", "index_raw"}:
+            elif key in {"noo_days", "index", "index_raw", "oil_l_day"}:
                 cell.number_format = "0"
             elif key in {"deadline", "plan_date"}:
                 cell.number_format = "DD.MM.YYYY"
             if key in {"index", "measure", "era"} and colors:
                 cell.fill = PatternFill("solid", fgColor=colors[0])
                 cell.font = Font(name=FONT, size=10, bold=key != "era", color=colors[1])
-        for key, bad in (("corrosive_environment", "Коррозионная"), ("demount_corrosion", "Есть"),
-                         ("base_corrosion", "Коррозия есть"), ("category", "Коррозионная"),
+        for key, bad in (("corrosive_environment", "Коррозионная"), ("demount_corrosion", "Есть коррозия"),
+                         ("base_corrosion", "Есть коррозия"), ("category", "Коррозионная"),
                          ("protection", "Недостаточна")):
             if values[key] == bad:
                 sheet.cell(row, [k for k, *_ in COLUMNS].index(key) + 1).font = F_BAD
@@ -276,7 +278,7 @@ def _summary_sheet(book: Workbook, wells: list[dict], counts: dict) -> None:
         ["Мероприятие назначено, но не запланировано", counts.get("plan_missing", 0)],
     ])
     fields = sorted({well.get("field") or "не указано" for well in wells})
-    nxt = rows(nxt, ["Месторождение", "ПКР", "РИ", "УДР", "Всего"], [
+    nxt = rows(nxt, ["Месторождение", "ППР", "РИ", "УДР", "Всего"], [
         [name] + [sum(1 for well in wells if (well.get("field") or "не указано") == name and well.get("measure") == key)
                   for key in measures[:3]]
         + [sum(1 for well in wells if (well.get("field") or "не указано") == name)]

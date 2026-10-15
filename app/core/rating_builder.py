@@ -317,9 +317,12 @@ def build_values(well_id: str, records: list[TelemetryPoint], events: list[dict]
 
     protection, protection_note = _assess_protection(values, prepared, rate, sources)
     values["protection"] = protection
-    if protection_note:
+    current = prepared.features.current_values if prepared is not None else {}
+    means = (["ингибитор"] if current.get("inhibitor_efficiency") is not None else []) + (
+        ["защитное исполнение НКТ"] if sources.protective_equipment(values.get("equipment")) else [])
+    if protection_note or means:
         when = prepared.features.latest_timestamp if prepared is not None else None
-        prov["protection"] = _prov(sources, None, when, protection_note)
+        prov["protection"] = {**_prov(sources, None, when, protection_note), "means": means}
 
     scores, score_prov = _model_scores(result, sources, protection)
     values.update(scores)
@@ -340,10 +343,6 @@ def build_values(well_id: str, records: list[TelemetryPoint], events: list[dict]
         last_demount = _utc(demounts[-1]["event_date"])
         if not any(_utc(event["event_date"]) >= last_demount for event in by_kind["base_inspection"]):
             gaps.append({"key": "base_act", "note": "Демонтаж был, акта разбора на базе нет."})
-    if not values.get("equipment"):
-        gaps.append({"key": "equipment", "note": "Нет данных о спущенном оборудовании."})
-    if values.get("model_ntc") is None and values.get("model_math") is None:
-        gaps.append({"key": "models", "note": "Нет оценки моделей."})
     values["data_gaps"] = gaps
     return values, prov
 

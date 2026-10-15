@@ -146,7 +146,7 @@ class Settings:
     smtp_security: str = os.getenv("MAI_SMTP_SECURITY", "starttls").strip().lower()
     smtp_from: str = os.getenv("MAI_SMTP_FROM", "").strip()
     app_name: str = "MAI Corrosion Control API"
-    app_version: str = "0.7.0"
+    app_version: str = "0.7.1"
 
 
 settings = Settings()

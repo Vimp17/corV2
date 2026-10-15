@@ -35,13 +35,13 @@ INITIAL_WALL = 12.0
 #   ДАРС: water cut %, injection deviation %, corrosion rate mm/yr, wall mm
 #   ХИМИК: CO₂ %, chlorides mg/l, inhibitor efficiency, incompatible waters, tonnage t, НОО days
 WELLS = {
-    # ПКР: CO₂ critical 7 + corrosion rate critical 7 = 14 -> 100
+    # ППР: CO₂ critical 7 + corrosion rate critical 7 = 14 -> 100
     "DEMO-001": dict(field="Северное", wc=68, inj=6, rate=0.65, wall=10.6, co2=5.6, cl=24000, inh=0.82,
                      compat=False, tonnage=3.0, noo=38),
-    # ПКР: inhibitor critical 7 + injection high 4 + wall warning 2 = 13 -> 93
+    # ППР: inhibitor critical 7 + injection high 4 + wall warning 2 = 13 -> 93
     "DEMO-002": dict(field="Озёрное", wc=61, inj=21, rate=0.25, wall=7.5, co2=2.1, cl=21000, inh=0.35,
                      compat=False, tonnage=2.5, noo=52),
-    # ПКР: injection high 4 + inhibitor low 4 + chlorides high 4 = 12 -> 86
+    # ППР: injection high 4 + inhibitor low 4 + chlorides high 4 = 12 -> 86
     "DEMO-003": dict(field="Восточное", wc=58, inj=22, rate=0.22, wall=10.9, co2=2.3, cl=34000, inh=0.62,
                      compat=False, tonnage=2.0, noo=61),
     # РИ: corrosion rate critical 7 + CO₂ high 4 = 11 -> 79
