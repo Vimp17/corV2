@@ -46,6 +46,7 @@ class TelemetryPoint(BaseModel):
     field: str | None = Field(default=None, max_length=256)
     in_operation: bool | None = None
     tonnage_t: float | None = Field(default=None, ge=0, le=10000)
+    liquid_rate_m3_day: float | None = Field(default=None, ge=0, le=100000)
     noo_days: float | None = Field(default=None, ge=0, le=100000)
 
     @model_validator(mode="before")
@@ -59,6 +60,7 @@ class TelemetryPoint(BaseModel):
         "water_cut_pct", "co2_pct", "chlorides_mg_l", "inhibitor_efficiency",
         "injection_deviation_pct", "corrosion_rate_mm_year", "wall_thickness_mm",
         "initial_wall_thickness_mm", "metal_loss_mm", "corrosion_load", "tonnage_t", "noo_days",
+        "liquid_rate_m3_day",
     )
     @classmethod
     def finite_measurements(cls, value: float | None) -> float | None:

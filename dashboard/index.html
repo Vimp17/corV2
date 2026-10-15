@@ -30,7 +30,6 @@
     /* App bar and shell */
     .appbar { position:sticky; top:0; z-index:50; background:var(--navy); color:#fff; display:flex; flex-wrap:wrap; align-items:center; gap:12px 16px; padding:10px 20px; min-height:56px }
     .brand { display:flex; align-items:center; gap:10px; min-width:0 }
-    .brand-mark { width:32px; height:32px; border-radius:4px; background:var(--blue); display:flex; align-items:center; justify-content:center; font-weight:800; font-size:11px; flex:0 0 auto }
     .brand-title { font-size:15px; font-weight:650; white-space:nowrap }
     .brand-sub { font-size:11px; color:#B9C6D6; white-space:nowrap }
     .spacer { flex:1 }
@@ -87,7 +86,7 @@
     .alert.warn b { color:var(--ud) }
 
     /* Measure tiles */
-    .tiles { display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:12px }
+    .tiles { display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:12px }
     .tile { display:flex; flex-direction:column; align-items:flex-start; gap:2px; min-width:0; padding:12px 14px; border:1px solid var(--line); border-radius:var(--radius); background:#fff; color:var(--ink); cursor:pointer; text-align:left }
     .tile:hover { border-color:#9DB4CC }
     .tile[aria-pressed="true"] { border-color:var(--blue); box-shadow:inset 0 0 0 1px var(--blue); background:#F4F9FE }
@@ -104,8 +103,23 @@
     .toolbar label { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--muted) }
     .toolbar input, .toolbar select { padding:7px 9px; border:1px solid #C9D2DC; border-radius:4px; min-height:36px; background:#fff; color:var(--ink) }
     .table-box { overflow:auto; max-height:720px }
-    .grid-row { display:grid; grid-template-columns:48px minmax(104px,1fr) 160px 132px 62px 72px 62px minmax(150px,1.2fr) 128px minmax(140px,1fr); align-items:center; column-gap:10px; padding:0 14px }
-    .table-inner { min-width:1160px }
+    .grid-row { display:grid; grid-template-columns:40px 128px 56px minmax(230px,1.6fr) 96px 76px 100px 100px minmax(170px,1.1fr) 70px 92px 110px; align-items:center; column-gap:10px; padding:0 14px }
+    .table-inner { min-width:1380px }
+    .trow > div { padding:8px 0 }
+    .actbtn { display:inline-flex; align-items:center; gap:8px; padding:8px 14px; min-height:40px; border-radius:4px; border:1px solid var(--line); background:#fff; font-size:13px; color:var(--ink); cursor:pointer; text-align:left }
+    .actbtn b { font-size:16px; font-variant-numeric:tabular-nums }
+    .actbtn[aria-pressed="true"], .actbtn[aria-expanded="true"] { border-color:var(--blue); box-shadow:inset 0 0 0 1px var(--blue); background:#F4F9FE }
+    .gapwrap { position:relative }
+    .gapmenu { position:absolute; top:calc(100% + 6px); left:0; z-index:30; width:340px; max-width:calc(100vw - 32px); background:#fff; border:1px solid var(--line); border-radius:6px; box-shadow:0 10px 28px rgba(14,42,71,.18); padding:6px }
+    .gapmenu[hidden] { display:none }
+    .gapmenu button { display:flex; width:100%; justify-content:space-between; gap:12px; border:0; background:transparent; padding:9px 10px; border-radius:4px; cursor:pointer; font-size:13px; color:var(--ink); text-align:left }
+    .gapmenu button:hover, .gapmenu button:focus-visible { background:var(--bg) }
+    .gapmenu button:disabled { color:var(--muted); cursor:default }
+    .gap { display:inline-flex; padding:1px 6px; border-radius:4px; font-size:11px; font-weight:600; background:var(--ud-bg); color:var(--ud); margin:1px 3px 1px 0 }
+    .ev.warn { background:var(--ud-bg); color:var(--ud) }
+    .mchip { display:inline-flex; padding:2px 8px; border-radius:10px; font-size:12px; font-weight:700 }
+    .mchip.repair { background:var(--repair-bg); color:var(--repair) } .mchip.engineer { background:var(--engineer-bg); color:var(--engineer) } .mchip.ud { background:var(--ud-bg); color:var(--ud) } .mchip.none { background:var(--none-bg); color:var(--none) } .mchip.unscored { background:#EEF1F4; color:var(--muted) }
+    .num-cell { font-variant-numeric:tabular-nums }
     .thead-wrap { position:sticky; top:0; z-index:2 }
     .thead { background:var(--navy); color:#fff; font-size:12px; font-weight:600; min-height:44px }
     .thead.group { min-height:24px; background:var(--navy-2); color:#B9C6D6; font-size:11px }
@@ -118,6 +132,7 @@
     .wellbtn:hover { color:var(--blue); text-decoration-color:var(--blue) }
     .idx { display:flex; align-items:center; gap:12px }
     .idx strong { font-size:22px; font-variant-numeric:tabular-nums; min-width:30px }
+    .idxnum.repair { color:var(--repair) } .idxnum.engineer { color:var(--engineer) } .idxnum.ud { color:var(--ud) } .idxnum.none { color:var(--none) } .idxnum.unscored { color:var(--muted) }
     .idx strong.repair { color:var(--repair) } .idx strong.engineer { color:var(--engineer) } .idx strong.ud { color:var(--ud) } .idx strong.none { color:var(--none) }
     .bars { display:flex; flex-direction:column; gap:4px; flex:1; min-width:0 }
     .barline { display:grid; grid-template-columns:28px minmax(0,1fr) 30px; align-items:center; gap:6px; font-size:11px; color:var(--muted) }
@@ -229,7 +244,6 @@
 <body>
   <header class="appbar">
     <div class="brand">
-      <div class="brand-mark" aria-hidden="true">МАИ</div>
       <div>
         <div class="brand-title">Контроль коррозии скважин</div>
         <div class="brand-sub">Рейтинг, мероприятия и график ППР</div>
@@ -264,11 +278,15 @@
           <div class="sub" id="ratingSub">Индекс приоритета 0–100 — более высокая из оценок моделей НТЦ и математической. По индексу рейтинг предлагает мероприятие.</div>
           <div class="datastate" id="dataState"></div>
         </div>
-        <div class="alerts">
-          <span class="alert"><b id="aPromine">0</b> скв. ждут документа Промайн на включение в ЭРА ремонта</span>
-          <span class="alert"><b id="aLate">0</b> скв. с планом ППР позже срока</span>
-          <span class="alert warn"><b id="aNoPlan">0</b> скв. без плановой даты</span>
+      </div>
+
+      <div class="alerts" role="group" aria-label="Требуют внимания">
+        <button class="actbtn" id="waitBtn" type="button" aria-pressed="false"><b id="waitCount" style="color:var(--repair)">0</b> скважин с риском коррозии ожидают решения</button>
+        <div class="gapwrap">
+          <button class="actbtn" id="gapBtn" type="button" aria-expanded="false" aria-controls="gapMenu"><b id="gapCount" style="color:var(--ud)">0</b> скв. — отсутствие полной информации ▾</button>
+          <div class="gapmenu" id="gapMenu" role="menu" hidden></div>
         </div>
+        <button class="btn secondary small" id="resetFilter" type="button" hidden>Сбросить фильтр</button>
       </div>
 
       <div class="tiles" id="tiles" role="group" aria-label="Фильтр по мероприятию"></div>
@@ -284,15 +302,10 @@
         </div>
         <div class="table-box"><div class="table-inner">
           <div class="thead-wrap">
-            <div class="grid-row thead group" aria-hidden="true">
-              <div></div><div></div><div></div><div></div>
-              <div style="grid-column:span 3; text-align:center; border-bottom:1px solid #35547A">Признаки коррозии</div>
-              <div></div><div></div><div></div>
-            </div>
             <div class="grid-row thead" role="row">
-              <div>Место</div><div>Скважина</div><div>Индекс · НТЦ / Мат.</div><div>Категория</div>
-              <div style="text-align:center">Среда</div><div style="text-align:center">Демонтаж</div><div style="text-align:center">Разбор</div>
-              <div>Мероприятие</div><div>План ППР (ДДО)</div><div>ЭРА ремонта / Промайн</div>
+              <div>Место</div><div>Скважина</div><div>Индекс</div><div>Мероприятие и предложение</div><div>Категория фонда</div>
+              <div>Среда</div><div>Демонтаж</div><div>Разбор на базе</div><div>Оборудование и защита</div>
+              <div>Наработка, сут</div><div>Жидкость, м³/сут · нефть</div><div>Полнота данных</div>
             </div>
           </div>
           <div id="rows"><div class="empty">Загружаем рейтинг…</div></div>
@@ -310,7 +323,7 @@
               <span class="lg"><i style="width:22px; height:10px; border-radius:2px; background:var(--repair-win)"></i>Окно до срока</span>
               <span class="lg"><i style="width:18px; height:12px; border-radius:6px; background:var(--repair-mk)"></i>ПКР — плановый комплекс по ремонту</span>
               <span class="lg"><i style="width:18px; height:12px; border-radius:6px; background:var(--engineer)"></i>РИ — решение инженера</span>
-              <span class="lg"><i style="width:18px; height:12px; border-radius:6px; background:var(--ud)"></i>УД</span>
+              <span class="lg"><i style="width:18px; height:12px; border-radius:6px; background:var(--ud)"></i>УДР</span>
               <span class="lg"><i style="width:18px; height:12px; border-radius:6px; background:var(--ink)"></i>Позже срока</span>
               <span class="lg"><i style="width:2px; height:14px; background:var(--blue)"></i>Сегодня</span>
             </div>
@@ -437,9 +450,7 @@
     // ---------------------------------------------------------------- render: summary, tiles, table
     function render() {
       const { counts, settings, wells } = state.rating;
-      $('aPromine').textContent = counts.promine_pending;
-      $('aLate').textContent = counts.plan_late;
-      $('aNoPlan').textContent = counts.plan_missing;
+      renderAlerts(counts, settings);
       const combine = settings.combine === 'mean' ? 'среднее оценок' : 'более высокая из оценок';
       $('ratingSub').textContent = `Индекс приоритета 0–100 — ${combine} моделей НТЦ и математической. По индексу рейтинг предлагает мероприятие.`;
       $('updated').textContent = `Обновлено ${fmtTime(state.rating.generated_at)}`;
@@ -461,31 +472,61 @@
       $('dataState').replaceChildren(...parts);
     }
 
-    const SHORT = { repair: 'ПКР — комплекс по ремонту', engineer: 'РИ — решение инженера', ud: 'УД — ударная дозировка', none: 'Без мероприятий' };
+    const GAP_FALLBACK = { telemetry: 'Телеметрия ДАРС', samples: 'Пробы ХИМИК', base_act: 'Акты разбора', equipment: 'Оборудование (ЭРА)', models: 'Оценка моделей' };
+    const gapLabels = () => state.rating?.settings?.gap_labels || GAP_FALLBACK;
+    function setFilter(filter) { state.filter = filter; closeGapMenu(); render(); }
+    function filterLabel(filter) {
+      if (filter === 'waiting') return 'ожидают решения';
+      if (filter.startsWith('gap:')) return `нет данных: ${(gapLabels()[filter.slice(4)] || '').toLowerCase()}`;
+      return { repair: 'ПКР', engineer: 'РИ', ud: 'УДР', none: 'без мероприятий' }[filter] || '';
+    }
+    function renderAlerts(counts) {
+      $('waitCount').textContent = counts.awaiting_decision ?? 0;
+      $('gapCount').textContent = counts.data_gaps ?? 0;
+      $('waitBtn').setAttribute('aria-pressed', String(state.filter === 'waiting'));
+      $('gapBtn').classList.toggle('on', state.filter.startsWith('gap:'));
+      $('gapBtn').setAttribute('aria-pressed', String(state.filter.startsWith('gap:')));
+      const labels = gapLabels();
+      $('gapMenu').replaceChildren(el('div', { class: 'sub', style: 'padding:6px 10px', text: 'Чего не хватает — нажмите, чтобы отфильтровать' }),
+        ...Object.keys(labels).map(key => el('button', { type: 'button', role: 'menuitem', disabled: !counts[`gap_${key}`], onClick: () => setFilter(`gap:${key}`) },
+          el('span', { text: labels[key] }), el('b', { text: counts[`gap_${key}`] ?? 0 }))));
+      const reset = $('resetFilter');
+      reset.hidden = state.filter === 'all';
+      reset.textContent = `Сбросить фильтр: ${filterLabel(state.filter)}`;
+    }
+    function openGapMenu() { $('gapMenu').hidden = false; $('gapBtn').setAttribute('aria-expanded', 'true'); $('gapMenu').querySelector('button:not(:disabled)')?.focus(); }
+    function closeGapMenu() { $('gapMenu').hidden = true; $('gapBtn').setAttribute('aria-expanded', 'false'); }
+
+    const TOP_MEASURES = ['repair', 'ud'];
+    const SHORT = { repair: 'ПКР — комплекс по ремонту', ud: 'УДР' };
     function renderNavSummary(measures, counts) {
       const items = [el('div', { class: 'nav-title', text: 'Сводка' })];
-      const all = [{ key: 'all', label: 'Все скважины', count: counts.total }].concat(measures.map(m => ({ key: m.key, label: SHORT[m.key] || m.label, count: counts[m.key] })));
+      const all = [{ key: 'all', label: 'Все скважины', count: counts.total }]
+        .concat(measures.filter(m => TOP_MEASURES.includes(m.key)).map(m => ({ key: m.key, label: SHORT[m.key] || m.label, count: counts[m.key] })))
+        .concat([{ key: 'waiting', label: 'Ожидают решения', count: counts.awaiting_decision }, { key: 'gaps', label: 'Неполные данные', count: counts.data_gaps }]);
       for (const item of all) {
-        items.push(el('button', { type: 'button', 'aria-pressed': String(state.filter === item.key), onClick: () => { state.filter = item.key; render(); $('sec-rating').scrollIntoView({ block: 'start' }); } },
+        const pressed = item.key === 'gaps' ? state.filter.startsWith('gap:') : state.filter === item.key;
+        items.push(el('button', { type: 'button', 'aria-pressed': String(pressed), onClick: () => { if (item.key === 'gaps') { $('sec-rating').scrollIntoView({ block: 'start' }); openGapMenu(); return; } setFilter(item.key); $('sec-rating').scrollIntoView({ block: 'start' }); } },
           el('span', { class: `sq ${item.key}` }), el('span', { text: item.label }), el('b', { text: item.count ?? 0 })));
       }
       const notes = [];
       if (counts.protection_adjusted) notes.push(`Индекс снижен с учётом защиты: ${counts.protection_adjusted}`);
       if (counts.protection_insufficient) notes.push(`Защита недостаточна: ${counts.protection_insufficient}`);
-      if (counts.promine_pending) notes.push(`Ждут документа Промайн: ${counts.promine_pending}`);
+      if (counts.engineer) notes.push(`Решение инженера (индекс 61–79): ${counts.engineer}`);
       notes.forEach(text => items.push(el('div', { class: 'note', text })));
       $('navSummary').replaceChildren(...items);
     }
 
     function renderTiles(measures, counts) {
+      // Top summary: all wells, planned repair package and УДР (engineer decisions stay in «Все»).
       const defs = [{ key: 'all', label: 'Все скважины', range: 'Весь рейтинг', count: counts.total }]
-        .concat(measures.map(m => ({
-          key: m.key, label: m.key === 'ud' ? 'Ударная дозировка (УД)' : m.label, count: counts[m.key],
-          range: m.key === 'none' ? `Индекс ниже ${m.index_to + 1}` : m.key === 'repair' ? `Индекс ${m.index_from} и выше → ЭРА ремонта` : `Индекс ${m.index_from}–${m.index_to}${m.key === 'engineer' ? ' · порог уточнить' : ''}`,
+        .concat(measures.filter(m => TOP_MEASURES.includes(m.key)).map(m => ({
+          key: m.key, label: m.key === 'repair' ? 'ПКР — плановый комплекс по ремонту' : m.label, count: counts[m.key],
+          range: m.key === 'repair' ? `Индекс ${m.index_from} и выше → ЭРА ремонта` : `Индекс ${m.index_from}–${m.index_to}`,
         })));
       $('tiles').replaceChildren(...defs.map(d => el('button', {
         class: 'tile', type: 'button', 'aria-pressed': String(state.filter === d.key),
-        onClick: () => { state.filter = d.key; render(); },
+        onClick: () => setFilter(d.key),
       }, el('span', { class: 'tl' }, el('span', { class: `sq ${d.key}` }), d.label), el('span', { class: 'tn', text: d.count ?? 0 }), el('span', { class: 'tr', text: d.range }))));
     }
 
@@ -500,7 +541,10 @@
     function visibleWells() {
       const query = $('search').value.trim().toLowerCase();
       const field = $('fieldFilter').value;
-      return state.rating.wells.filter(w => (state.filter === 'all' || w.measure === state.filter)
+      const f = state.filter;
+      const keep = (w) => f === 'all' || (f === 'waiting' ? w.awaiting_decision
+        : f.startsWith('gap:') ? (w.data_gaps || []).some(g => g.key === f.slice(4)) : w.measure === f);
+      return state.rating.wells.filter(w => keep(w)
         && (!field || w.field === field) && (!query || String(w.well_id).toLowerCase().includes(query)));
     }
 
@@ -509,19 +553,32 @@
       return el('span', { class: `ev ${value === badWhen ? 'bad' : 'ok'}`, text: value === badWhen ? labels.bad : labels.ok });
     }
 
-    function planCell(w) {
-      if (!w.measure || w.measure === 'none') return el('div', {}, el('span', { text: '—' }));
-      const statusCls = w.plan_status === 'late' ? 'late' : w.plan_status === 'not_planned' ? 'noplan' : 'ok';
-      return el('div', { style: 'display:flex; flex-direction:column' },
-        el('span', { style: 'font-variant-numeric:tabular-nums', text: w.plan_date ? fmtIso(w.plan_date) : 'нет даты' }),
-        el('span', { class: `sub ${statusCls}`, text: `${w.plan_status_label}${w.deadline ? ', срок ' + fmtIso(w.deadline).slice(0, 5) : ''}` }));
+    const ACT_WORDS = (act, corrosion, missing) => missing ? ['нет акта разбора', 'warn']
+      : act === null || act === undefined ? ['нет данных', 'na']
+      : !act ? ['нет акта', 'na']
+      : corrosion === true ? ['коррозия есть', 'bad'] : corrosion === false ? ['коррозии нет', 'ok'] : ['признак не указан', 'warn'];
+    function envCell(w) {
+      if (w.sampling !== true) return el('span', { class: 'ev warn', text: 'нет пробы' });
+      if (w.corrosive_environment === null || w.corrosive_environment === undefined) return el('span', { class: 'ev na', text: 'нет данных' });
+      return el('span', { class: `ev ${w.corrosive_environment ? 'bad' : 'ok'}`, text: w.corrosive_environment ? 'корр.' : 'некорр.' });
     }
-
-    function eraCell(w) {
-      const parts = [el('span', { style: 'font-size:13px; font-weight:600', text: w.era_required ? 'Включить' : '—' })];
-      if (w.era_required) parts.push(el('span', { class: `doc ${w.promine_status || 'not_created'}`, text: `Документ: ${(w.promine_status_label || 'не сформирован').toLowerCase().replace('эра', 'ЭРА')}` }));
-      if (w.last_proposal) parts.push(el('span', { class: 'sub', text: `Предложение: ${PROPOSAL_STATUS[w.last_proposal.status] || w.last_proposal.status}` }));
-      return el('div', { style: 'display:flex; flex-direction:column' }, parts);
+    function actCell(act, corrosion, missing) {
+      const [text, cls] = ACT_WORDS(act, corrosion, missing);
+      return el('span', { class: `ev ${cls}`, text });
+    }
+    const PROT_SHORT = { effective: 'эффективна', unconfirmed: 'не подтверждена', insufficient: 'недостаточна' };
+    function equipCell(w) {
+      const prot = w.protection ? `защита: ${PROT_SHORT[w.protection]}` : 'защита: нет данных';
+      return el('div', { style: 'display:flex; flex-direction:column' },
+        el('span', { text: w.equipment || 'нет данных' }),
+        el('span', { class: `prot ${w.protection || ''}`, style: w.protection ? null : 'color:var(--muted)', text: prot }));
+    }
+    const fmtNum = (value, digits = 0) => value === null || value === undefined ? '—' : Number(value).toLocaleString('ru-RU', { maximumFractionDigits: digits, minimumFractionDigits: digits });
+    function gapsCell(w) {
+      const gaps = w.data_gaps || [];
+      if (!gaps.length) return el('span', { class: 'sub', text: 'полные' });
+      const short = { telemetry: 'телеметрия', samples: 'пробы', base_act: 'акт разбора', equipment: 'оборудование', models: 'модели' };
+      return el('div', {}, gaps.map(g => el('span', { class: 'gap', title: g.note || '', text: short[g.key] || g.key })));
     }
 
     function renderTable() {
@@ -535,17 +592,22 @@
           el('div', { style: 'display:flex; flex-direction:column; padding:6px 0' },
             el('button', { class: 'wellbtn', type: 'button', 'aria-label': `Открыть карточку скважины ${w.well_id}`, text: w.well_id }),
             el('span', { class: 'sub', text: [w.field, w.in_operation === null || w.in_operation === undefined ? null : (w.in_operation ? 'в работе' : 'не в работе')].filter(Boolean).join(', ') || '—' })),
-          el('div', { class: 'idx' },
-            el('strong', { class: key, text: w.index ?? '—' }),
-            el('div', { class: 'bars' }, barLine('НТЦ', w.model_ntc, ''), barLine('Мат.', w.model_math, 'm'))),
+          el('div', { style: 'display:flex; flex-direction:column' },
+            el('strong', { class: `idxnum ${key}`, style: 'font-size:22px; font-variant-numeric:tabular-nums', text: w.index ?? '—' }),
+            w.protection_adjusted ? el('span', { class: 'sub', text: `без защиты ${w.index_raw}` }) : null),
           el('div', { style: 'display:flex; flex-direction:column; align-items:flex-start; gap:3px' },
-            el('span', { class: `cat ${w.category || 'unknown'}`, text: w.category_label || 'нет данных' }), protLine(w)),
-          el('div', { style: 'text-align:center' }, evidence(w.corrosive_environment, true, { bad: 'корр.', ok: 'нет', na: '—' })),
-          el('div', { style: 'text-align:center' }, w.demount_act === false ? el('span', { class: 'ev na', text: 'нет акта' }) : evidence(w.demount_corrosion, true, { bad: 'есть', ok: 'нет', na: w.demount_act ? '—' : 'нет акта' })),
-          el('div', { style: 'text-align:center' }, w.base_act === false ? el('span', { class: 'ev na', text: 'нет акта' }) : evidence(w.base_corrosion, true, { bad: 'есть', ok: 'нет', na: w.base_act ? '—' : 'нет акта' })),
-          el('div', {}, el('span', { class: `chip ${key}`, text: w.measure_label })),
-          planCell(w),
-          eraCell(w));
+            el('span', { class: `mchip ${key}`, text: w.measure ? (w.measure === 'none' ? 'Не требуются' : w.measure_code) : 'Нет оценки' }),
+            el('span', { style: 'font-size:12px', text: w.action || '' })),
+          el('div', {}, el('span', { class: `cat ${w.category || 'unknown'}`, text: w.category_short || 'нет данных' })),
+          el('div', {}, envCell(w)),
+          el('div', {}, actCell(w.demount_act, w.demount_corrosion, false)),
+          el('div', {}, actCell(w.base_act, w.base_corrosion, (w.data_gaps || []).some(g => g.key === 'base_act'))),
+          equipCell(w),
+          el('div', { class: 'num-cell', text: fmtNum(w.run_days) }),
+          el('div', { class: 'num-cell', style: 'display:flex; flex-direction:column' },
+            el('span', { text: fmtNum(w.liquid_rate_m3_day, 1) }),
+            el('span', { class: 'sub', text: w.oil_pct === null || w.oil_pct === undefined ? 'нефть —' : `нефть ${fmtNum(w.oil_pct)} %` })),
+          el('div', {}, gapsCell(w)));
       }));
     }
 
@@ -702,7 +764,7 @@
       switch (w.measure) {
         case 'repair': return `Плановый комплекс мероприятий по ремонту до ${deadline}. Скважина включается в ЭРА ремонта: Промайн формирует документ на включение.`;
         case 'engineer': return `Индекс ${w.index} выше порога УД, но ниже порога планового комплекса по ремонту. Мероприятие назначает инженер до ${deadline}.`;
-        case 'ud': return `Ударная дозировка до ${deadline}.`;
+        case 'ud': return `УДР до ${deadline}.`;
         case 'none': return 'Мероприятия не требуются.';
         default: return w.skip_reason
           ? `Модели не рассчитаны: ${w.skip_reason}`
@@ -717,8 +779,8 @@
       const key = measureKey(w);
       $('cardTitle').textContent = `Скважина ${w.well_id}`;
       $('cardSub').textContent = `${w.field ? w.field + ' · ' : ''}${w.rank ? 'место ' + w.rank + ' в рейтинге' : 'без места в рейтинге'}`;
-      $('cardIdx').replaceChildren(el('strong', { class: key, text: w.index ?? '—' }), el('div', { class: 'sub', text: 'индекс' }),
-        w.protection_adjusted ? el('div', { class: 'raw-idx', text: `без защиты ${w.index_raw}` }) : null);
+      $('cardIdx').replaceChildren(...[el('strong', { class: key, text: w.index ?? '—' }), el('div', { class: 'sub', text: 'индекс' }),
+        w.protection_adjusted ? el('div', { class: 'raw-idx', text: `без защиты ${w.index_raw}` }) : null].filter(Boolean));
       const order = cardOrder();
       const position = order.findIndex(item => item.well_id === w.well_id);
       $('cardPrev').disabled = position <= 0;
@@ -733,7 +795,8 @@
       const body = [];
       body.push(el('div', { class: 'bars' }, barLine('Модель НТЦ', w.model_ntc, '', true), provLine(w, 'model_ntc'),
         barLine('Мат. модель', w.model_math, 'm', true), provLine(w, 'model_math')));
-      const prop = el('div', { class: `prop ${key}` }, el('h3', { text: `Предложение рейтинга: ${w.measure_label}` }), el('div', { style: 'font-size:13px', text: proposalText(w) }));
+      const prop = el('div', { class: `prop ${key}` }, el('h3', { text: `Предложение рейтинга: ${w.measure_label}` }), el('div', { style: 'font-size:13px', text: w.action || proposalText(w) }));
+      if (w.skip_reason && !w.measure) prop.append(el('div', { style: 'font-size:12px', text: w.skip_reason }));
       if (w.protection_adjusted) prop.append(el('div', { style: 'font-size:13px', text: `С учётом подтверждённой защиты индекс снижен с ${w.index_raw} до ${w.index}.` }));
       if (w.era_required) prop.append(el('div', { class: 'sep' }, el('div', { style: 'font-size:13px' }, 'Документ Промайн: ',
         el('span', { class: `doc ${w.promine_status || 'not_created'}`, text: (w.promine_status_label || 'Не сформирован').toLowerCase().replace('эра', 'ЭРА') }), ' — вкладка «План и Промайн».')));
@@ -741,7 +804,15 @@
       body.push(dlGroup('Скважина', [
         ['Месторождение', w.field || '—', '', 'field'],
         ['Спущенное оборудование', w.equipment || '—', '', 'equipment'],
-        ['Статус', w.in_operation === null || w.in_operation === undefined ? '—' : (w.in_operation ? 'В работе' : 'Не в работе'), w.in_operation === false ? 'bad' : (w.in_operation ? 'ok' : ''), 'in_operation']], w));
+        ['Статус', w.in_operation === null || w.in_operation === undefined ? '—' : (w.in_operation ? 'В работе' : 'Не в работе'), w.in_operation === false ? 'bad' : (w.in_operation ? 'ok' : ''), 'in_operation'],
+        ['Наработка, сут', fmtNum(w.run_days), '', 'run_days'],
+        ['Дебит жидкости, м³/сут', fmtNum(w.liquid_rate_m3_day, 1), '', 'liquid_rate_m3_day'],
+        ['Доля нефти, %', fmtNum(w.oil_pct, 1), '', 'oil_pct']], w));
+      if ((w.data_gaps || []).length) {
+        body.splice(2, 0, el('div', { class: 'box', style: 'border-style:dashed; border-color:#C99A3A; background:#FFFBEF' },
+          el('h3', { text: 'Не хватает данных' }),
+          el('ul', { style: 'margin:0; padding-left:18px; font-size:13px' }, w.data_gaps.map(g => el('li', { text: `${gapLabels()[g.key] || g.key}: ${g.note || ''}` })))));
+      }
       body.push(dlGroup('Среда и обработка', [
         ['Отбор проб', yesNo(w.sampling, 'Да', 'Нет'), w.sampling ? 'ok' : (w.sampling === false ? 'na' : ''), 'sampling'],
         ['Среда', yesNo(w.corrosive_environment, 'Коррозионная', 'Некоррозионная'), w.corrosive_environment ? 'bad' : (w.corrosive_environment === false ? 'ok' : ''), 'corrosive_environment'],
@@ -1080,6 +1151,11 @@
     syncAppbar();
     if ('ResizeObserver' in window) new ResizeObserver(syncAppbar).observe(document.querySelector('.appbar')); else window.addEventListener('resize', syncAppbar);
     $('export').addEventListener('click', (event) => exportRating(event.currentTarget));
+    $('waitBtn').addEventListener('click', () => setFilter(state.filter === 'waiting' ? 'all' : 'waiting'));
+    $('resetFilter').addEventListener('click', () => setFilter('all'));
+    $('gapBtn').addEventListener('click', () => ($('gapMenu').hidden ? openGapMenu() : closeGapMenu()));
+    document.addEventListener('pointerdown', (event) => { if (!$('gapMenu').hidden && !event.target.closest('.gapwrap')) closeGapMenu(); });
+    $('gapMenu').addEventListener('keydown', (event) => { if (event.key === 'Escape') { event.stopPropagation(); closeGapMenu(); $('gapBtn').focus(); } });
     setInterval(() => { if (!document.hidden && !state.busy) refresh({ keepNotice: true, auto: true }); }, AUTO_REFRESH_SECONDS * 1000);
     watchSections();
     refresh();

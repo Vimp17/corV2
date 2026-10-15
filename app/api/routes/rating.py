@@ -69,6 +69,7 @@ def _payload() -> dict:
             "thresholds": rating.thresholds(),
             "measures": rating.measures_catalog(),
             "promine": {"transport": settings.promine_transport, "ready": ready, "message": explanation},
+            "gap_labels": rating.GAP_LABELS,
             "change_types": [{"key": key, "label": label} for key, label in promine.CHANGE_LABELS.items()],
         },
         "counts": rating.summarize(wells),

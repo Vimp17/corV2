@@ -10,7 +10,7 @@ acts, category and the НТЦ score. The values are tuned so the measures cover 
 3 × planned repair package (index 86–100), 3 × engineer decision (64–79), 3 × shock dosing
 (43–57), 3 × no measures, and DEMO-013 with too little telemetry (rating without model scores).
 DEMO-014 has a corrosive environment but confirmed protection (coated tubing, inhibitor 0.90,
-corrosion rate 0.06 mm/yr): its index drops from 71 (engineer decision) to 43 (shock dosing).
+corrosion rate 0.06 mm/yr): its index drops from 71 (engineer decision) to 43 (УДР).
 Data older than MAI_MAX_TELEMETRY_AGE_HOURS is flagged as stale, so regenerate the files with a
 recent --end-date before a demo. Every value is synthetic and describes no real equipment.
 """
@@ -81,6 +81,11 @@ WELLS = {
 }
 WELLS = dict(sorted(WELLS.items()))
 
+# Liquid rate, m³/day (ДАРС).
+LIQUID = {"DEMO-001": 45, "DEMO-002": 62, "DEMO-003": 38, "DEMO-004": 80, "DEMO-005": 120, "DEMO-006": 25,
+          "DEMO-007": 40, "DEMO-008": 70, "DEMO-009": 55, "DEMO-010": 95, "DEMO-011": 30, "DEMO-012": 22,
+          "DEMO-013": 50, "DEMO-014": 66}
+
 EQUIPMENT = {
     "DEMO-001": ("УЭЦН-5-80, НКТ-73", "УЭЦН-5-80, НКТ-73 (с покрытием)"),
     "DEMO-002": ("УЭЦН-5А-125, НКТ-73", "УЭЦН-5А-125, НКТ-73"),
@@ -141,7 +146,7 @@ def dars_rows(end: date) -> list[list]:
                 "Не в работе" if stopped else "В работе",
                 round(wobble(spec["wc"], i, seed), 2), round(wobble(spec["inj"], i, seed + 1), 2),
                 round(wobble(spec["rate"], i, seed + 2), 3), round(wobble(spec["wall"], i, seed + 3, 0.001), 3),
-                INITIAL_WALL,
+                INITIAL_WALL, round(wobble(LIQUID[well], i, seed + 4, 0.02), 1),
             ])
     return rows
 
@@ -218,7 +223,7 @@ def main() -> None:
     write(args.out / "sample_dars.xlsx", "ДАРС",
           ["Номер скважины", "Месторождение", "Дата измерения", "Статус", "Обводнённость, %",
            "Отклонение закачки, %", "Скорость коррозии, мм/год", "Толщина стенки, мм",
-           "Начальная толщина стенки, мм"],
+           "Начальная толщина стенки, мм", "Дебит жидкости, м³/сут"],
           dars_rows(args.end_date), {"Номер скважины", "Дата измерения"})
     write(args.out / "sample_khimik.xlsx", "ХИМИК",
           ["Номер скважины", "Дата отбора проб", "CO₂, %", "Хлориды, мг/л", "Эффективность ингибитора",
