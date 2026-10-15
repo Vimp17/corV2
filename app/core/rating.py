@@ -23,11 +23,21 @@ MEASURE_NONE = "none"
 MEASURE_LABELS = {
     MEASURE_REPAIR: "Плановый комплекс мероприятий по ремонту",
     MEASURE_ENGINEER: "Решение инженера",
-    MEASURE_UD: "Ударная дозировка (УД)",
+    MEASURE_UD: "УДР",
     MEASURE_NONE: "Мероприятия не требуются",
 }
 # Short codes for the ППР (ДДО) schedule.
-MEASURE_CODES = {MEASURE_REPAIR: "ПКР", MEASURE_ENGINEER: "РИ", MEASURE_UD: "УД", MEASURE_NONE: "—"}
+MEASURE_CODES = {MEASURE_REPAIR: "ПКР", MEASURE_ENGINEER: "РИ", MEASURE_UD: "УДР", MEASURE_NONE: "—"}
+# Short category names for the table ("Категория фонда").
+CATEGORY_SHORT = {"corrosive": "Корр.", "medium": "Среднекорр.", "noncorrosive": "Некорр."}
+GAP_LABELS = {
+    "telemetry": "Телеметрия ДАРС",
+    "samples": "Пробы ХИМИК",
+    "base_act": "Акты разбора",
+    "equipment": "Оборудование (ЭРА)",
+    "models": "Оценка моделей",
+}
+MEASURES_WITH_ACTION = (MEASURE_REPAIR, MEASURE_ENGINEER, MEASURE_UD)
 
 CATEGORY_LABELS = {
     "corrosive": "Коррозионная",
@@ -134,6 +144,8 @@ def evaluate(row: dict[str, Any]) -> dict[str, Any]:
     deadline = deadline_for(measure, assessed)
     plan = _as_date(row.get("plan_date"))
     status = plan_status_for(measure, plan, deadline)
+    installed = _as_date(row.get("installed_at"))
+    gaps = [item for item in (row.get("data_gaps") or []) if isinstance(item, dict) and item.get("key")]
     return {
         **row,
         "index": index,
@@ -151,7 +163,43 @@ def evaluate(row: dict[str, Any]) -> dict[str, Any]:
         "plan_status_label": PLAN_STATUS_LABELS.get(status or "", ""),
         "category_label": CATEGORY_LABELS.get(row.get("category") or "", ""),
         "promine_status_label": PROMINE_STATUS_LABELS.get(row.get("promine_status") or "", ""),
+        "category_short": CATEGORY_SHORT.get(row.get("category") or "", ""),
+        "run_days": (date.today() - installed).days if installed else None,
+        "data_gaps": gaps,
+        "data_gap_labels": [GAP_LABELS.get(item["key"], item["key"]) for item in gaps],
+        # A well with a measure and no decision yet (no planned date).
+        "awaiting_decision": measure in MEASURES_WITH_ACTION and plan is None,
+        "action": action_text(measure, deadline, plan, status, row, index, index_raw),
     }
+
+
+def _ddmm(value: date | None) -> str:
+    return value.strftime("%d.%m") if value else "—"
+
+
+def action_text(measure: str | None, deadline: date | None, plan: date | None, status: str | None,
+                row: dict[str, Any], index: int | None, index_raw: int | None) -> str:
+    """One line for the table: what to do, by when, and what has been decided."""
+    if measure is None:
+        return ("Нет оценки: мало данных для моделей (подробности в карточке)." if row.get("skip_reason")
+                else "Нет оценки: модели ещё не рассчитаны.")
+    if measure == MEASURE_NONE:
+        return "Мероприятия не требуются."
+    # The table shows the measure code beside this text, so the text does not repeat it.
+    if plan is None:
+        text = f"До {_ddmm(deadline)}. Ожидает решения."
+    else:
+        text = f"Запланировано на {_ddmm(plan)} (срок {_ddmm(deadline)})."
+        if status == "late":
+            text += " План позже срока."
+    if measure == MEASURE_ENGINEER:
+        text += " Мероприятие выбирает инженер."
+    if measure == MEASURE_REPAIR:
+        doc = PROMINE_STATUS_LABELS.get(row.get("promine_status") or "not_created", "").lower()
+        text += f" Включить в ЭРА ремонта, документ Промайн: {doc.replace('эра', 'ЭРА')}."
+    if index is not None and index_raw is not None and index_raw != index:
+        text += f" Индекс снижен с учётом защиты ({index_raw}→{index})."
+    return text
 
 
 def build_rating(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -168,7 +216,8 @@ def build_rating(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def summarize(wells: list[dict[str, Any]]) -> dict[str, int]:
     counts = {"total": len(wells), MEASURE_REPAIR: 0, MEASURE_ENGINEER: 0, MEASURE_UD: 0,
               MEASURE_NONE: 0, "unscored": 0, "promine_pending": 0, "plan_late": 0, "plan_missing": 0,
-              "protection_adjusted": 0, "protection_insufficient": 0}
+              "protection_adjusted": 0, "protection_insufficient": 0, "awaiting_decision": 0,
+              "data_gaps": 0, **{f"gap_{key}": 0 for key in GAP_LABELS}}
     for well in wells:
         counts[well["measure"] or "unscored"] += 1
         if well["era_required"] and well.get("promine_status") != "sent":
@@ -181,4 +230,10 @@ def summarize(wells: list[dict[str, Any]]) -> dict[str, int]:
             counts["protection_adjusted"] += 1
         if well.get("protection") == "insufficient":
             counts["protection_insufficient"] += 1
+        if well.get("awaiting_decision"):
+            counts["awaiting_decision"] += 1
+        if well.get("data_gaps"):
+            counts["data_gaps"] += 1
+        for gap in well.get("data_gaps") or []:
+            counts[f"gap_{gap['key']}"] = counts.get(f"gap_{gap['key']}", 0) + 1
     return counts

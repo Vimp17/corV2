@@ -168,9 +168,12 @@ def _model_scores(result: PipelineResult | None, sources: _Sources,
     return values, provenance
 
 
+GAP_LABELS = rating.GAP_LABELS
+
+
 def build_values(well_id: str, records: list[TelemetryPoint], events: list[dict],
                  prepared: PreparedAnalysis | None, result: PipelineResult | None,
-                 now: datetime | None = None) -> tuple[dict, dict]:
+                 now: datetime | None = None, skipped: SkippedAnalysis | None = None) -> tuple[dict, dict]:
     """Rating field values and their provenance for one well."""
     now = now or datetime.now(timezone.utc)
     sources = _Sources()
@@ -178,12 +181,19 @@ def build_values(well_id: str, records: list[TelemetryPoint], events: list[dict]
     values: dict[str, Any] = {}
     prov: dict[str, dict] = {}
 
-    # Field, tonnage and НОО: the latest reported value.
-    for field in ("field", "tonnage_t", "noo_days"):
+    # Field, tonnage, НОО and liquid rate: the latest reported value.
+    for field in ("field", "tonnage_t", "noo_days", "liquid_rate_m3_day"):
         value, point = _latest(records, field)
         values[field] = value
         if point is not None:
             prov[field] = _prov(sources, _record_sources(point), point.timestamp)
+
+    # Oil share from the latest water cut (by volume).
+    water_cut, point = _latest(records, "water_cut_pct")
+    values["oil_pct"] = round(max(0.0, min(100.0, 100.0 - water_cut)), 1) if water_cut is not None else None
+    if point is not None:
+        prov["oil_pct"] = _prov(sources, _record_sources(point), point.timestamp,
+                                f"100 % − обводнённость {water_cut:g} %.")
 
     # Operating status: the latest DARS status, else fresh telemetry implies the well runs.
     value, point = _latest(records, "in_operation")
@@ -232,6 +242,12 @@ def build_values(well_id: str, records: list[TelemetryPoint], events: list[dict]
     values["equipment"] = install["payload"].get("equipment") if install else None
     if install:
         prov["equipment"] = _prov(sources, install["source_id"], install["event_date"], note)
+    # Run time counts from the latest equipment run (ЭРА «Спуск оборудования»).
+    last_run = by_kind["install"][-1] if by_kind["install"] else None
+    values["installed_at"] = _utc(last_run["event_date"]) if last_run else None
+    if last_run:
+        prov["run_days"] = _prov(sources, last_run["source_id"], last_run["event_date"],
+                                 "Наработка считается от даты последнего спуска оборудования.")
 
     window_start = now - timedelta(days=settings.rating_act_days)
     for kind, act_field, corrosion_field in (("demount", "demount_act", "demount_corrosion"),
@@ -308,6 +324,27 @@ def build_values(well_id: str, records: list[TelemetryPoint], events: list[dict]
     scores, score_prov = _model_scores(result, sources, protection)
     values.update(scores)
     prov.update(score_prov)
+
+    # What is missing, by section, so the dashboard can say what to request.
+    gaps: list[dict] = []
+    if not records:
+        gaps.append({"key": "telemetry", "note": "Нет телеметрии ДАРС."})
+    elif skipped is not None:
+        gaps.append({"key": "telemetry", "note": "Мало замеров для расчёта моделей."})
+    elif (now - _utc(records[-1].timestamp)).total_seconds() / 3600 > settings.max_telemetry_age_hours:
+        gaps.append({"key": "telemetry", "note": "Телеметрия устарела."})
+    if values.get("sampling") is not True:
+        gaps.append({"key": "samples", "note": f"Нет пробы ХИМИК за {settings.rating_sampling_days} сут."})
+    demounts = [event for event in by_kind["demount"] if _utc(event["event_date"]) >= window_start]
+    if demounts:
+        last_demount = _utc(demounts[-1]["event_date"])
+        if not any(_utc(event["event_date"]) >= last_demount for event in by_kind["base_inspection"]):
+            gaps.append({"key": "base_act", "note": "Демонтаж был, акта разбора на базе нет."})
+    if not values.get("equipment"):
+        gaps.append({"key": "equipment", "note": "Нет данных о спущенном оборудовании."})
+    if values.get("model_ntc") is None and values.get("model_math") is None:
+        gaps.append({"key": "models", "note": "Нет оценки моделей."})
+    values["data_gaps"] = gaps
     return values, prov
 
 
@@ -380,7 +417,7 @@ def update_from_analysis(well_id: str, records: list[TelemetryPoint],
             except Exception:  # evidence is optional for a skipped well
                 logger.info("Rating evidence could not be prepared for well_id=%s", well_id, exc_info=True)
         events = db.load_history_events(well_id)
-        values, provenance = build_values(well_id, records, events, prepared, result)
+        values, provenance = build_values(well_id, records, events, prepared, result, skipped=skipped)
         measure = rating.measure_for(rating.priority_index(values["model_ntc"], values["model_math"]))
         return db.save_computed_rating(
             well_id, values, measure=measure, provenance=provenance,

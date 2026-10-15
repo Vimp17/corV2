@@ -48,6 +48,9 @@ COLUMNS = [
     ("field", "Месторождение", 16, "Скважина"),
     ("equipment", "Спущенное оборудование", 22, "Скважина"),
     ("in_operation", "Статус", 12, "Скважина"),
+    ("run_days", "Наработка, сут", 10, "Скважина"),
+    ("liquid_rate_m3_day", "Жидкость, м³/сут", 10, "Скважина"),
+    ("oil_pct", "Нефть, %", 8, "Скважина"),
     ("sampling", "Отбор проб", 10, "Среда и обработка"),
     ("corrosive_environment", "Среда", 15, "Среда и обработка"),
     ("tonnage_t", "Тоннаж, т", 10, "Среда и обработка"),
@@ -63,11 +66,13 @@ COLUMNS = [
     ("index_raw", "Индекс без учёта защиты", 11, "Оценка"),
     ("index", "Индекс приоритета (0–100)", 11, "Оценка"),
     ("measure", "Мероприятие", 26, "Решение и график ППР"),
+    ("action", "Предложение", 44, "Решение и график ППР"),
     ("era", "ЭРА ремонта", 11, "Решение и график ППР"),
     ("promine_status", "Документ Промайн", 16, "Решение и график ППР"),
     ("deadline", "Крайний срок", 12, "Решение и график ППР"),
     ("plan_date", "План ППР (ДДО)", 12, "Решение и график ППР"),
     ("plan_status", "Статус плана", 15, "Решение и график ППР"),
+    ("data_gaps", "Полнота данных", 30, ""),
     ("comment", "Комментарий", 34, ""),
 ]
 FIELD_LABELS = {key: header for key, header, *_ in COLUMNS}
@@ -91,6 +96,11 @@ def _cell_values(well: dict) -> dict[str, Any]:
         "field": well.get("field"),
         "equipment": well.get("equipment"),
         "in_operation": _yn(well.get("in_operation"), "В работе", "Не в работе"),
+        "run_days": well.get("run_days"),
+        "liquid_rate_m3_day": well.get("liquid_rate_m3_day"),
+        "oil_pct": well.get("oil_pct"),
+        "action": well.get("action"),
+        "data_gaps": ", ".join(well.get("data_gap_labels") or []) or "полные",
         "sampling": _yn(well.get("sampling"), "Да", "Нет"),
         "corrosive_environment": _yn(well.get("corrosive_environment"), "Коррозионная", "Некоррозионная"),
         "tonnage_t": well.get("tonnage_t"),
@@ -157,10 +167,10 @@ def _rating_sheet(book: Workbook, wells: list[dict], generated: datetime) -> Non
         for column, (key, *_rest) in enumerate(COLUMNS, start=1):
             cell = sheet.cell(row, column, values[key])
             cell.font, cell.border = F_BASE, BORDER
-            cell.alignment = LEFT if key in {"field", "equipment", "measure", "comment", "category"} else CENTER
+            cell.alignment = LEFT if key in {"field", "equipment", "measure", "comment", "category", "action", "data_gaps"} else CENTER
             if key in {"model_ntc", "model_math"}:
                 cell.number_format = "0.00"
-            elif key == "tonnage_t":
+            elif key in {"tonnage_t", "liquid_rate_m3_day", "oil_pct"}:
                 cell.number_format = "0.0"
             elif key in {"noo_days", "index", "index_raw"}:
                 cell.number_format = "0"
@@ -266,7 +276,7 @@ def _summary_sheet(book: Workbook, wells: list[dict], counts: dict) -> None:
         ["Мероприятие назначено, но не запланировано", counts.get("plan_missing", 0)],
     ])
     fields = sorted({well.get("field") or "не указано" for well in wells})
-    nxt = rows(nxt, ["Месторождение", "ПКР", "РИ", "УД", "Всего"], [
+    nxt = rows(nxt, ["Месторождение", "ПКР", "РИ", "УДР", "Всего"], [
         [name] + [sum(1 for well in wells if (well.get("field") or "не указано") == name and well.get("measure") == key)
                   for key in measures[:3]]
         + [sum(1 for well in wells if (well.get("field") or "не указано") == name)]

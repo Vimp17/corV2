@@ -19,7 +19,7 @@ MEASUREMENT_FIELDS = {
     "water_cut_pct", "co2_pct", "chlorides_mg_l", "inhibitor_efficiency",
     "injection_deviation_pct", "corrosion_rate_mm_year", "wall_thickness_mm",
     "initial_wall_thickness_mm", "metal_loss_mm", "corrosion_load", "water_compatibility_issue",
-    "tonnage_t", "noo_days",
+    "tonnage_t", "noo_days", "liquid_rate_m3_day",
 }
 # Non-numeric telemetry columns carried into the well rating (DARS passport data).
 TEXT_FIELDS = {"field"}

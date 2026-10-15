@@ -120,6 +120,8 @@ well_rating = Table(
     Column("provenance", JSON), Column("computed_at", DateTime(timezone=True)),
     Column("skip_reason", String(2000)), Column("analysis_id", String(64)),
     Column("protection", String(32)), Column("model_ntc_raw", Float),
+    Column("installed_at", DateTime(timezone=True)), Column("liquid_rate_m3_day", Float),
+    Column("oil_pct", Float), Column("data_gaps", JSON),
 )
 
 # Proposals to change the ERA repair plan, sent through Промайн.
@@ -702,6 +704,7 @@ COMPUTED_RATING_FIELDS = (
     "field", "equipment", "in_operation", "sampling", "corrosive_environment", "tonnage_t",
     "noo_days", "demount_act", "demount_corrosion", "base_act", "base_corrosion", "category",
     "model_ntc", "model_math", "model_ntc_raw", "protection",
+    "installed_at", "liquid_rate_m3_day", "oil_pct", "data_gaps",
 )
 # Edited by the operator on the dashboard; a recomputation never touches them.
 OPERATOR_RATING_FIELDS = ("plan_date", "promine_status", "comment")
@@ -709,7 +712,7 @@ OPERATOR_RATING_FIELDS = ("plan_date", "promine_status", "comment")
 
 def _rating_row(row) -> dict:
     data = dict(row)
-    for key in ("assessed_at", "updated_at", "measure_since", "computed_at"):
+    for key in ("assessed_at", "updated_at", "measure_since", "computed_at", "installed_at"):
         if data.get(key) is not None:
             data[key] = data[key].isoformat()
     if data.get("plan_date") is not None:
