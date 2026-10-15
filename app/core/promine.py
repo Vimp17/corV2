@@ -92,6 +92,8 @@ def compose(proposal_id: str, well: dict, change_type: str, reason: str,
         f"- Мероприятие по рейтингу: {well.get('measure_label') or '—'}",
         f"- Категория скважины: {well.get('category_label') or 'нет данных'}; "
         f"среда: {_yes_no(well.get('corrosive_environment'), 'коррозионная', 'некоррозионная')}",
+        f"- Защита: {well.get('protection_label') or 'нет данных'}"
+        + (f" (индекс без учёта защиты {well.get('index_raw')})" if well.get("protection_adjusted") else ""),
         f"- Признак коррозии при демонтаже: {_yes_no(well.get('demount_corrosion'))}; "
         f"результат разбора на базе: {_yes_no(well.get('base_corrosion'), 'коррозия есть', 'коррозии нет')}",
         f"- План ППР (ДДО): {_fmt_date(well.get('plan_date'))}; крайний срок: {_fmt_date(well.get('deadline'))}",
@@ -196,7 +198,7 @@ def create_and_send(well: dict, change_type: str, reason: str, proposed_date: da
     snapshot = {key: well.get(key) for key in (
         "rank", "index", "measure", "measure_label", "model_ntc", "model_math", "category",
         "corrosive_environment", "demount_corrosion", "base_corrosion", "plan_date", "deadline",
-        "promine_status", "field")}
+        "promine_status", "field", "protection", "index_raw")}
     db.create_era_proposal({
         "proposal_id": proposal_id, "well_id": well["well_id"], "change_type": change_type,
         "reason": reason, "proposed_date": proposed_date, "author": author,

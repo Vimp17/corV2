@@ -60,6 +60,12 @@ def _payload() -> dict:
         "settings": {
             "combine": settings.rating_combine,
             "horizon_days": settings.rating_horizon_days,
+            "protection": {"mode": settings.rating_protection_mode,
+                           "factor": settings.rating_protection_factor,
+                           "min_inhibitor": settings.rating_protection_min_inhibitor,
+                           "max_injection_dev": settings.rating_protection_max_injection_dev,
+                           "max_rate": settings.rating_protection_max_rate,
+                           "labels": rating.PROTECTION_LABELS},
             "thresholds": rating.thresholds(),
             "measures": rating.measures_catalog(),
             "promine": {"transport": settings.promine_transport, "ready": ready, "message": explanation},
