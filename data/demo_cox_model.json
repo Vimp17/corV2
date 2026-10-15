@@ -1,0 +1,54 @@
+{
+  "model_version": "демо-синтетическая",
+  "note": "ДЕМОНСТРАЦИОННАЯ модель с подобранными вручную коэффициентами, не обучена на фактических отказах. Только для показа дашборда; для эксплуатации обучите модель scripts/train_cox.py на истории отказов.",
+  "features": [
+    "corrosion_rate_mm_year",
+    "co2_pct",
+    "chlorides_mg_l",
+    "inhibitor_efficiency",
+    "water_cut_pct"
+  ],
+  "medians": {
+    "corrosion_rate_mm_year": 0.2,
+    "co2_pct": 2.3,
+    "chlorides_mg_l": 20000,
+    "inhibitor_efficiency": 0.82,
+    "water_cut_pct": 58
+  },
+  "means": {
+    "corrosion_rate_mm_year": 0.25,
+    "co2_pct": 2.5,
+    "chlorides_mg_l": 20000,
+    "inhibitor_efficiency": 0.8,
+    "water_cut_pct": 60
+  },
+  "coefficients": {
+    "corrosion_rate_mm_year": 4.0,
+    "co2_pct": 0.35,
+    "chlorides_mg_l": 3e-05,
+    "inhibitor_efficiency": -3.0,
+    "water_cut_pct": 0.02
+  },
+  "baseline_survival": [
+    {
+      "time_days": 0,
+      "survival": 1.0
+    },
+    {
+      "time_days": 30,
+      "survival": 0.95
+    },
+    {
+      "time_days": 90,
+      "survival": 0.85
+    },
+    {
+      "time_days": 180,
+      "survival": 0.72
+    },
+    {
+      "time_days": 365,
+      "survival": 0.55
+    }
+  ]
+}
