@@ -119,6 +119,7 @@ well_rating = Table(
     Column("measure", String(32)), Column("measure_since", DateTime(timezone=True)),
     Column("provenance", JSON), Column("computed_at", DateTime(timezone=True)),
     Column("skip_reason", String(2000)), Column("analysis_id", String(64)),
+    Column("protection", String(32)), Column("model_ntc_raw", Float),
 )
 
 # Proposals to change the ERA repair plan, sent through Промайн.
@@ -700,7 +701,7 @@ def get_monitor_job(job_id: str) -> dict | None:
 COMPUTED_RATING_FIELDS = (
     "field", "equipment", "in_operation", "sampling", "corrosive_environment", "tonnage_t",
     "noo_days", "demount_act", "demount_corrosion", "base_act", "base_corrosion", "category",
-    "model_ntc", "model_math",
+    "model_ntc", "model_math", "model_ntc_raw", "protection",
 )
 # Edited by the operator on the dashboard; a recomputation never touches them.
 OPERATOR_RATING_FIELDS = ("plan_date", "promine_status", "comment")

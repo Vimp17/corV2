@@ -3,12 +3,14 @@
     python scripts/build_sample_data.py                 # data ending today
     python scripts/build_sample_data.py --end-date 2026-10-14 --out data
 
-All three files describe the same wells (DEMO-001 … DEMO-013 on three fields), so after
+All three files describe the same wells (DEMO-001 … DEMO-014 on three fields), so after
 uploading them (ДАРС and ХИМИК first, then ЭРА ремонта) the rating has every column filled:
 field, status, equipment, sampling, environment, tonnage and НОО, demount and base-inspection
 acts, category and the НТЦ score. The values are tuned so the measures cover every range:
 3 × planned repair package (index 86–100), 3 × engineer decision (64–79), 3 × shock dosing
 (43–57), 3 × no measures, and DEMO-013 with too little telemetry (rating without model scores).
+DEMO-014 has a corrosive environment but confirmed protection (coated tubing, inhibitor 0.90,
+corrosion rate 0.06 mm/yr): its index drops from 71 (engineer decision) to 43 (shock dosing).
 Data older than MAI_MAX_TELEMETRY_AGE_HOURS is flagged as stale, so regenerate the files with a
 recent --end-date before a demo. Every value is synthetic and describes no real equipment.
 """
@@ -70,6 +72,10 @@ WELLS = {
     "DEMO-012": dict(field="Восточное", wc=44, inj=3, rate=0.12, wall=7.9, co2=None, cl=None, inh=None,
                      compat=None, tonnage=None, noo=None, no_lab=True),
     # Only 3 days of telemetry: the models are skipped, the rating shows the ЭРА evidence
+    # Protected: CO₂ high 4 + chlorides high 4 + wall warning 2 = 10 -> 71; effective protection
+    # counts the 8 environment points × 0.5 -> 6 -> 43
+    "DEMO-014": dict(field="Восточное", wc=60, inj=4, rate=0.06, wall=7.6, co2=3.6, cl=32000, inh=0.90,
+                     compat=False, tonnage=2.0, noo=210),
     "DEMO-013": dict(field="Северное", wc=50, inj=4, rate=0.13, wall=11.0, co2=None, cl=None, inh=None,
                      compat=None, tonnage=None, noo=None, no_lab=True, dars_days=3),
 }
@@ -88,6 +94,7 @@ EQUIPMENT = {
     "DEMO-010": ("УШГН-44, НКТ-60", "УШГН-44, НКТ-60"),
     "DEMO-011": ("УЭЦН-5-80, НКТ-73", None),
     "DEMO-013": ("УЭЦН-5-45, НКТ-60", None),
+    "DEMO-014": ("УЭЦН-5-80, НКТ-73 с покрытием", None),
 }
 
 HEAD_FONT = Font(bold=True, color="FFFFFF")

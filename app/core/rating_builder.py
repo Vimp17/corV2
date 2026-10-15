@@ -27,6 +27,10 @@ from app.schemas import PipelineResult, SkippedAnalysis, TelemetryPoint
 logger = logging.getLogger(__name__)
 
 NTC_MODEL_ID = "ntc"
+# Words in the equipment description that mean a protective design (coated or corrosion-
+# resistant tubing, inhibitor containers). Profiles may override them ("protection_keywords").
+_DEFAULT_PROTECTION_WORDS = ["покрыт", "коррозионностойк", "нержав", "стеклопластик", "футеров",
+                             "протектор", "контейнер ингибитора", "ингибиторный контейнер"]
 _DEFAULT_WORK_TYPES = {
     "install": ["спуск оборудования", "спуск", "монтаж оборудования"],
     "demount": ["демонтаж", "акт демонтажа", "подъем оборудования"],
@@ -54,6 +58,7 @@ class _Sources:
         self.titles: dict[str, str] = {}
         self.lab_ids: set[str] = set()
         work_types: dict[str, list[str]] = {}
+        protection_words: list[str] = []
         for profile_id, profile in profiles.items():
             source_id = str(profile.get("source_id", profile_id)).upper()
             self.titles[source_id] = str(profile.get("short_title") or profile.get("title") or source_id)
@@ -61,6 +66,8 @@ class _Sources:
                 self.lab_ids.add(source_id)
             for key, words in (profile.get("rating_work_types") or {}).items():
                 work_types.setdefault(key, []).extend(_norm(word) for word in words)
+            protection_words.extend(_norm(word) for word in profile.get("protection_keywords") or [])
+        self.protection_words = protection_words or [_norm(word) for word in _DEFAULT_PROTECTION_WORDS]
         self.work_types = {key: work_types.get(key) or _DEFAULT_WORK_TYPES[key] for key in _DEFAULT_WORK_TYPES}
 
     def title(self, source_id: str | None) -> str:
@@ -76,6 +83,10 @@ class _Sources:
             if any(word and word in text for word in self.work_types[key]):
                 return key
         return None
+
+    def protective_equipment(self, equipment: Any) -> bool:
+        text = _norm(equipment)
+        return bool(text) and any(word in text for word in self.protection_words)
 
 
 def _record_sources(point: TelemetryPoint) -> str:
@@ -95,8 +106,15 @@ def _latest(records: list[TelemetryPoint], field: str) -> tuple[Any, TelemetryPo
     return None, None
 
 
-def _model_scores(result: PipelineResult | None, sources: _Sources) -> tuple[dict, dict]:
-    values = {"model_ntc": None, "model_math": None}
+ENV_RULE_PREFIX = "ENV_"
+
+
+def _model_scores(result: PipelineResult | None, sources: _Sources,
+                  protection: str | None = None) -> tuple[dict, dict]:
+    """НТЦ and math scores. With confirmed effective protection (and MAI_RATING_PROTECTION_MODE
+    = adjust) the environment rule points of the rule-based НТЦ score count with
+    MAI_RATING_PROTECTION_FACTOR; points for measured damage are never reduced."""
+    values = {"model_ntc": None, "model_math": None, "model_ntc_raw": None}
     provenance: dict[str, dict] = {}
     if result is None:
         return values, provenance
@@ -114,11 +132,26 @@ def _model_scores(result: PipelineResult | None, sources: _Sources) -> tuple[dic
         provenance["model_ntc"] = _prov(sources, None, when,
                                         f"Модель НТЦ (плагин {plugin.model_id} v{plugin.model_version}), "
                                         f"горизонт {horizon} сут.")
+        if protection == "effective":
+            provenance["model_ntc"]["note"] += " Защита учитывается логикой модели НТЦ, корректировки нет."
     elif result.rule_risk.status == "ok" and result.rule_risk.risk_score is not None:
-        values["model_ntc"] = round(float(result.rule_risk.risk_score), 4)
-        provenance["model_ntc"] = _prov(sources, None, when,
-                                        f"Правила НТЦ: {result.rule_risk.risk_points} баллов из 14, "
-                                        f"горизонт {horizon} сут.")
+        raw = round(float(result.rule_risk.risk_score), 4)
+        points = result.rule_risk.risk_points or 0
+        env_points = sum(item.points for item in result.rule_risk.findings
+                         if item.rule_id.startswith(ENV_RULE_PREFIX))
+        values["model_ntc"] = values["model_ntc_raw"] = raw
+        note = f"Правила НТЦ: {points} баллов из 14, горизонт {horizon} сут."
+        if protection == "effective" and env_points:
+            factor = settings.rating_protection_factor
+            adjusted_points = points - env_points * (1 - factor)
+            if settings.rating_protection_mode == "adjust":
+                values["model_ntc"] = round(min(adjusted_points / 14.0, 1.0), 4)
+                note += (f" Защита эффективна: баллы среды ({env_points}) учтены с коэффициентом "
+                         f"{factor:g}, итого {adjusted_points:g} баллов.")
+            else:
+                note += (f" Защита эффективна; с её учётом было бы {adjusted_points:g} баллов "
+                         "(режим MAI_RATING_PROTECTION_MODE=info, индекс не корректируется).")
+        provenance["model_ntc"] = _prov(sources, None, when, note)
     else:
         provenance["model_ntc"] = _prov(sources, None, when, "Недостаточно данных для правил НТЦ.")
     cox = result.cox_risk
@@ -266,10 +299,66 @@ def build_values(well_id: str, records: list[TelemetryPoint], events: list[dict]
             parts.append(f"скорость коррозии {rate:g} мм/год (порог {THRESHOLDS['corrosion_rate_high']:g})")
         prov["category"] = _prov(sources, None, None, "; ".join(parts) or "признаков коррозии нет")
 
-    scores, score_prov = _model_scores(result, sources)
+    protection, protection_note = _assess_protection(values, prepared, rate, sources)
+    values["protection"] = protection
+    if protection_note:
+        when = prepared.features.latest_timestamp if prepared is not None else None
+        prov["protection"] = _prov(sources, None, when, protection_note)
+
+    scores, score_prov = _model_scores(result, sources, protection)
     values.update(scores)
     prov.update(score_prov)
     return values, prov
+
+
+def _assess_protection(values: dict, prepared: PreparedAnalysis | None, rate: float | None,
+                       sources: _Sources) -> tuple[str | None, str | None]:
+    """Protection status: effective / unconfirmed / insufficient, or None without data.
+
+    Measures: inhibitor efficiency at or above MAI_RATING_PROTECTION_MIN_INHIBITOR with the
+    injection deviation below MAI_RATING_PROTECTION_MAX_INJECTION_DEV, or a protective design
+    in the equipment description. Confirmation: a measured corrosion rate below
+    MAI_RATING_PROTECTION_MAX_RATE and no corrosion in the latest demount or base act.
+    Insufficient: a measure fails, corrosion is found in the latest act, or the corrosion rate
+    reaches the high threshold despite the measures; a rate between the two is unconfirmed.
+    """
+    current = prepared.features.current_values if prepared is not None else {}
+    inhibitor = current.get("inhibitor_efficiency")
+    deviation = current.get("injection_deviation_pct")
+    design = sources.protective_equipment(values.get("equipment"))
+    min_inhibitor = settings.rating_protection_min_inhibitor
+    max_deviation = settings.rating_protection_max_injection_dev
+    max_rate = settings.rating_protection_max_rate
+
+    measures, problems = [], []
+    if design:
+        measures.append(f"защитное исполнение: {values.get('equipment')}")
+    if inhibitor is not None:
+        if inhibitor >= min_inhibitor and (deviation is None or deviation < max_deviation):
+            measures.append(f"ингибитор {inhibitor:.2f}"
+                            + (f", отклонение закачки {deviation:.0f} %" if deviation is not None else ""))
+        elif inhibitor < min_inhibitor:
+            problems.append(f"эффективность ингибитора {inhibitor:.2f} ниже {min_inhibitor:g}")
+        else:
+            problems.append(f"отклонение закачки {deviation:.0f} % (порог {max_deviation:g} %)")
+    if not measures and not problems:
+        return None, None
+    if values.get("base_corrosion") is True or values.get("demount_corrosion") is True:
+        problems.append("коррозия в последнем акте демонтажа или разбора")
+    high_rate = THRESHOLDS["corrosion_rate_high"]
+    if rate is not None and rate >= high_rate and measures:
+        problems.append(f"скорость коррозии {rate:.2f} мм/год при мерах защиты (порог {high_rate:g})")
+    if problems:
+        return "insufficient", "Защита недостаточна: " + "; ".join(problems) + (
+            ". Меры: " + "; ".join(measures) + "." if measures else ".")
+    if rate is None:
+        return "unconfirmed", ("Защита заявлена (" + "; ".join(measures) + "), но не подтверждена: "
+                               "нет замера скорости коррозии. Подтвердите эффективность.")
+    if rate >= max_rate:
+        return "unconfirmed", ("Защита заявлена (" + "; ".join(measures) + f"), но скорость коррозии "
+                               f"{rate:.2f} мм/год не ниже порога подтверждения {max_rate:g}.")
+    return "effective", ("Защита эффективна: " + "; ".join(measures)
+                         + f"; скорость коррозии {rate:.2f} мм/год ниже {max_rate:g}.")
 
 
 def update_from_analysis(well_id: str, records: list[TelemetryPoint],

@@ -39,6 +39,11 @@ PROMINE_STATUS_LABELS = {
     "created": "Сформирован",
     "sent": "Направлен в ЭРА",
 }
+PROTECTION_LABELS = {
+    "effective": "Эффективна",
+    "unconfirmed": "Не подтверждена",
+    "insufficient": "Недостаточна",
+}
 PLAN_STATUS_LABELS = {
     "on_time": "В срок",
     "late": "Позже срока",
@@ -120,6 +125,8 @@ def _as_date(value: Any) -> date | None:
 def evaluate(row: dict[str, Any]) -> dict[str, Any]:
     """Add the computed rating fields to one stored well_rating row."""
     index = priority_index(row.get("model_ntc"), row.get("model_math"))
+    raw_ntc = row.get("model_ntc_raw")
+    index_raw = priority_index(raw_ntc if raw_ntc is not None else row.get("model_ntc"), row.get("model_math"))
     measure = measure_for(index)
     # The deadline runs from the day the current measure was first assigned, so a daily
     # recomputation does not keep pushing it forward.
@@ -130,6 +137,10 @@ def evaluate(row: dict[str, Any]) -> dict[str, Any]:
     return {
         **row,
         "index": index,
+        # Index before the protection adjustment; differs from index only when it was applied.
+        "index_raw": index_raw,
+        "protection_adjusted": index is not None and index_raw is not None and index_raw != index,
+        "protection_label": PROTECTION_LABELS.get(row.get("protection") or "", ""),
         "measure": measure,
         "measure_label": MEASURE_LABELS.get(measure or "", "Нет оценок моделей"),
         "measure_code": MEASURE_CODES.get(measure or "", ""),
@@ -156,7 +167,8 @@ def build_rating(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def summarize(wells: list[dict[str, Any]]) -> dict[str, int]:
     counts = {"total": len(wells), MEASURE_REPAIR: 0, MEASURE_ENGINEER: 0, MEASURE_UD: 0,
-              MEASURE_NONE: 0, "unscored": 0, "promine_pending": 0, "plan_late": 0, "plan_missing": 0}
+              MEASURE_NONE: 0, "unscored": 0, "promine_pending": 0, "plan_late": 0, "plan_missing": 0,
+              "protection_adjusted": 0, "protection_insufficient": 0}
     for well in wells:
         counts[well["measure"] or "unscored"] += 1
         if well["era_required"] and well.get("promine_status") != "sent":
@@ -165,4 +177,8 @@ def summarize(wells: list[dict[str, Any]]) -> dict[str, int]:
             counts["plan_late"] += 1
         if well["plan_status"] == "not_planned":
             counts["plan_missing"] += 1
+        if well.get("protection_adjusted"):
+            counts["protection_adjusted"] += 1
+        if well.get("protection") == "insufficient":
+            counts["protection_insufficient"] += 1
     return counts

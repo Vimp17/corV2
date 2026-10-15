@@ -57,8 +57,10 @@ COLUMNS = [
     ("base_act", "Акт разбора на базе", 11, "Демонтаж и разбор"),
     ("base_corrosion", "Результат разбора", 14, "Демонтаж и разбор"),
     ("category", "Категория скважины", 21, "Оценка"),
+    ("protection", "Защита", 14, "Оценка"),
     ("model_ntc", "Модель НТЦ (0–1)", 10, "Оценка"),
     ("model_math", "Мат. модель (0–1)", 10, "Оценка"),
+    ("index_raw", "Индекс без учёта защиты", 11, "Оценка"),
     ("index", "Индекс приоритета (0–100)", 11, "Оценка"),
     ("measure", "Мероприятие", 26, "Решение и график ППР"),
     ("era", "ЭРА ремонта", 11, "Решение и график ППР"),
@@ -99,6 +101,8 @@ def _cell_values(well: dict) -> dict[str, Any]:
         "base_corrosion": (_yn(well.get("base_corrosion"), "Коррозия есть", "Коррозии нет")
                            if well.get("base_act") else "—"),
         "category": well.get("category_label") or "—",
+        "protection": well.get("protection_label") or "Нет данных",
+        "index_raw": well.get("index_raw"),
         "model_ntc": well.get("model_ntc"),
         "model_math": well.get("model_math"),
         "index": well.get("index"),
@@ -158,7 +162,7 @@ def _rating_sheet(book: Workbook, wells: list[dict], generated: datetime) -> Non
                 cell.number_format = "0.00"
             elif key == "tonnage_t":
                 cell.number_format = "0.0"
-            elif key in {"noo_days", "index"}:
+            elif key in {"noo_days", "index", "index_raw"}:
                 cell.number_format = "0"
             elif key in {"deadline", "plan_date"}:
                 cell.number_format = "DD.MM.YYYY"
@@ -166,7 +170,8 @@ def _rating_sheet(book: Workbook, wells: list[dict], generated: datetime) -> Non
                 cell.fill = PatternFill("solid", fgColor=colors[0])
                 cell.font = Font(name=FONT, size=10, bold=key != "era", color=colors[1])
         for key, bad in (("corrosive_environment", "Коррозионная"), ("demount_corrosion", "Есть"),
-                         ("base_corrosion", "Коррозия есть"), ("category", "Коррозионная")):
+                         ("base_corrosion", "Коррозия есть"), ("category", "Коррозионная"),
+                         ("protection", "Недостаточна")):
             if values[key] == bad:
                 sheet.cell(row, [k for k, *_ in COLUMNS].index(key) + 1).font = F_BAD
         status_cell = sheet.cell(row, [k for k, *_ in COLUMNS].index("plan_status") + 1)
@@ -324,6 +329,12 @@ def _parameters_sheet(book: Workbook, payload: dict) -> None:
             cell = sheet.cell(offset, column, value)
             cell.font, cell.border = F_BASE, BORDER
             cell.alignment = LEFT if column == 1 else CENTER
+    protection = settings_block.get("protection") or {}
+    sheet["A13"] = (f"Защита (режим {protection.get('mode', '—')}): эффективна, если ингибитор ≥ "
+                    f"{protection.get('min_inhibitor', '—')} при отклонении закачки < {protection.get('max_injection_dev', '—')} % "
+                    f"или НКТ в защитном исполнении, и это подтверждено скоростью коррозии < {protection.get('max_rate', '—')} мм/год "
+                    f"без коррозии в последнем акте. Тогда баллы среды учитываются с коэффициентом {protection.get('factor', '—')}.")
+    sheet["A13"].font = F_NOTE
     sheet["A12"] = ("Индекс = ОКРУГЛ(объединение оценок НТЦ и мат. модели × 100). Срок мероприятия "
                     "отсчитывается от даты, когда скважине впервые назначено текущее мероприятие. "
                     "Пороги и сроки задаются переменными MAI_RATING_*.")

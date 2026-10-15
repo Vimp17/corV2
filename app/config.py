@@ -41,6 +41,13 @@ def _positive_float(name: str, default: str, maximum: float) -> float:
     return value
 
 
+def _fraction_env(name: str, default: str) -> float:
+    value = float(os.getenv(name, default))
+    if not math.isfinite(value) or not 0 <= value <= 1:
+        raise ValueError(f"{name} must be between 0 and 1")
+    return value
+
+
 def _probability_threshold() -> float:
     value = float(os.getenv("MAI_ALERT_PROBABILITY_THRESHOLD", "0.7"))
     if not math.isfinite(value) or not 0 <= value <= 1:
@@ -112,6 +119,14 @@ class Settings:
     rating_sampling_days: int = _int_env("MAI_RATING_SAMPLING_DAYS", "30", 1, 3650)
     # Demount and base-inspection acts older than this are not counted.
     rating_act_days: int = _int_env("MAI_RATING_ACT_DAYS", "365", 1, 3650)
+    # Protection (inhibitor, coated tubing): "adjust" counts the environment rule points with
+    # the factor when protection is confirmed effective; "info" only shows the status.
+    rating_protection_mode: str = os.getenv("MAI_RATING_PROTECTION_MODE", "adjust").strip().lower()
+    rating_protection_factor: float = _fraction_env("MAI_RATING_PROTECTION_FACTOR", "0.5")
+    rating_protection_min_inhibitor: float = _fraction_env("MAI_RATING_PROTECTION_MIN_INHIBITOR", "0.80")
+    rating_protection_max_injection_dev: float = _positive_float(
+        "MAI_RATING_PROTECTION_MAX_INJECTION_DEV", "15", 1000)
+    rating_protection_max_rate: float = _positive_float("MAI_RATING_PROTECTION_MAX_RATE", "0.1", 100)
     # Uploads touching at most this many wells recompute their rating before responding;
     # larger uploads recompute in the background.
     rating_recompute_sync_limit: int = _int_env("MAI_RATING_RECOMPUTE_SYNC_LIMIT", "50", 0, 100000)
@@ -131,12 +146,14 @@ class Settings:
     smtp_security: str = os.getenv("MAI_SMTP_SECURITY", "starttls").strip().lower()
     smtp_from: str = os.getenv("MAI_SMTP_FROM", "").strip()
     app_name: str = "MAI Corrosion Control API"
-    app_version: str = "0.5.0"
+    app_version: str = "0.6.0"
 
 
 settings = Settings()
 if settings.rating_combine not in {"max", "mean"}:
     raise ValueError("MAI_RATING_COMBINE must be max or mean")
+if settings.rating_protection_mode not in {"adjust", "info"}:
+    raise ValueError("MAI_RATING_PROTECTION_MODE must be adjust or info")
 if not settings.rating_ud_from < settings.rating_ud_to < settings.rating_repair_from:
     raise ValueError("Rating thresholds must satisfy MAI_RATING_UD_FROM < MAI_RATING_UD_TO < MAI_RATING_REPAIR_FROM")
 if settings.promine_transport not in {"none", "smtp", "api"}:
