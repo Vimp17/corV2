@@ -61,9 +61,10 @@
     .sidenav a:hover { background:var(--navy-3); color:#fff }
     .sidenav a[aria-current="true"] { background:var(--navy-3); color:#fff; box-shadow:inset 3px 0 0 var(--blue) }
     .sidenav .nav-sep { height:1px; background:#2A4B70; margin:8px 12px }
-    main { flex:999 1 640px; min-width:0; padding:22px clamp(16px, 3vw, 32px) 40px; max-width:1500px; display:flex; flex-direction:column; gap:16px }
-    @media (max-width: 900px) {
-      /* On a phone the menu is a strip pinned under the app bar, scrolled sideways. */
+    main { flex:999 1 640px; min-width:0; padding:22px clamp(14px, 2.4vw, 32px) 40px; max-width:1880px; display:flex; flex-direction:column; gap:16px }
+    @media (max-width: 1230px) {
+      /* On small laptops, tablets and phones the menu is a strip pinned under the app bar, scrolled sideways,
+         so the rating table gets the full width. */
       .sidenav { max-width:100%; min-width:0; flex-basis:100%; position:sticky; top:var(--appbar-h); z-index:40 }
       .nav-inner { position:static; max-height:none; flex-direction:row; overflow-x:auto; padding:6px 10px; width:100% }
       .nav-title, .sidenav .nav-sep, .nav-summary { display:none }
@@ -102,16 +103,39 @@
     .toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:10px 16px; padding:12px 16px; border-bottom:1px solid var(--line-2) }
     .toolbar label { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--muted) }
     .toolbar input, .toolbar select { padding:7px 9px; border:1px solid #C9D2DC; border-radius:4px; min-height:36px; background:#fff; color:var(--ink) }
-    .table-box { overflow:auto; max-height:720px }
-    .grid-row { display:grid; grid-template-columns:40px 126px 54px 132px minmax(210px,1.5fr) 140px 116px 116px 116px minmax(180px,1.1fr) 70px 136px 128px; align-items:center; column-gap:10px; padding:0 14px }
-    .table-inner { min-width:1640px }
+    /* The table fits the window: no inner scroll, compact type, columns share the width.
+       All 13 columns from 960 px of table width (a 1024 px window); narrower (tablet, phone) — a card per well. */
+    .table-box { container-type:inline-size }
+    .grid-row { display:grid; grid-template-columns:38px minmax(76px,.9fr) 42px minmax(80px,1fr) minmax(100px,2fr) minmax(70px,1.1fr) minmax(70px,.9fr) minmax(70px,.9fr) minmax(70px,.9fr) minmax(84px,1.3fr) 46px minmax(72px,1fr) minmax(76px,1fr); align-items:center; column-gap:5px; padding:0 8px }
+    .grid-row > div { min-width:0; overflow-wrap:anywhere }
+    .table-inner { min-width:0 }
+    .thead-wrap { top:calc(var(--appbar-h) + var(--navstrip-h, 0px)) }
+    .trow .cat, .trow .ev { display:inline-block; max-width:100%; hyphens:manual }
+    .trow .wellbtn, .trow .idxnum { white-space:nowrap }
+    @container (min-width: 1300px) {
+      .grid-row { column-gap:9px; padding:0 12px }
+      .trow { font-size:13px }
+      .trow .wellbtn { font-size:15px }
+      .trow .idxnum { font-size:20px !important }
+      .thead { font-size:12px }
+    }
+    @container (max-width: 959px) {
+      /* A card per well: number, well and index on top, the other columns as labelled lines. */
+      .thead-wrap { display:none }
+      .grid-row.trow { grid-template-columns:24px minmax(0,1fr) auto; column-gap:10px; row-gap:4px; padding:10px 12px; align-items:start }
+      .grid-row.trow > div { padding:0 }
+      .grid-row.trow > div:nth-child(n+4) { grid-column:1 / -1; display:grid; grid-template-columns:minmax(110px, 34%) minmax(0,1fr); gap:8px; align-items:start }
+      .grid-row.trow > div:nth-child(n+4)::before { content:attr(data-label); color:var(--muted); font-size:12px }
+      .grid-row.trow > div:nth-child(n+4) > * { min-width:0 }
+      .grid-row.trow :is(.cat, .ev, .gapbox, .okmark) { justify-self:start }
+    }
     .fc { display:flex; flex-direction:column; gap:3px }
-    .fc .barline { grid-template-columns:30px minmax(0,1fr) 32px }
-    .gapbox { display:inline-flex; flex-direction:column; gap:1px; max-width:100%; box-sizing:border-box; overflow-wrap:anywhere; padding:4px 8px; border:1.5px solid #E08A1E; border-radius:6px; background:#FFF8EC; color:#8A4B00; font-size:12px; font-weight:600; line-height:1.3 }
+    .fc .barline { grid-template-columns:26px minmax(16px,1fr) 28px; gap:4px }
+    .gapbox { display:inline-flex; flex-direction:column; gap:1px; max-width:100%; box-sizing:border-box; overflow-wrap:anywhere; padding:3px 6px; border:1.5px solid #E08A1E; border-radius:6px; background:#FFF8EC; color:#8A4B00; font-size:12px; font-weight:600; line-height:1.3 }
     .okmark { display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; border-radius:50%; background:var(--none-bg); color:var(--none); font-size:16px; font-weight:700 }
-    .protline { font-size:12px; font-weight:600 }
+    .protline { font-size:11px; font-weight:600 }
     .protline.yes { color:var(--none) } .protline.no { color:var(--muted) }
-    .trow > div { padding:8px 0 }
+    .trow > div { padding:7px 0 }
     .actbtn { display:inline-flex; align-items:center; gap:8px; padding:8px 14px; min-height:40px; border-radius:4px; border:1px solid var(--line); background:#fff; font-size:13px; color:var(--ink); cursor:pointer; text-align:left }
     .actbtn b { font-size:16px; font-variant-numeric:tabular-nums }
     .actbtn[aria-pressed="true"], .actbtn[aria-expanded="true"] { border-color:var(--blue); box-shadow:inset 0 0 0 1px var(--blue); background:#F4F9FE }
@@ -123,18 +147,19 @@
     .gapmenu button:disabled { color:var(--muted); cursor:default }
     .gap { display:inline-flex; padding:1px 6px; border-radius:4px; font-size:11px; font-weight:600; background:var(--ud-bg); color:var(--ud); margin:1px 3px 1px 0 }
     .ev.warn { background:var(--ud-bg); color:var(--ud) }
-    .mchip { display:inline-flex; padding:2px 8px; border-radius:10px; font-size:12px; font-weight:700 }
+    .mchip { display:inline-flex; padding:1px 7px; border-radius:10px; font-size:11px; font-weight:700 }
     .mchip.repair { background:var(--repair-bg); color:var(--repair) } .mchip.engineer { background:var(--engineer-bg); color:var(--engineer) } .mchip.ud { background:var(--ud-bg); color:var(--ud) } .mchip.none { background:var(--none-bg); color:var(--none) } .mchip.unscored { background:#EEF1F4; color:var(--muted) }
     .num-cell { font-variant-numeric:tabular-nums }
-    .thead-wrap { position:sticky; top:0; z-index:2 }
-    .thead { background:var(--navy); color:#fff; font-size:12px; font-weight:600; min-height:44px }
+    .thead-wrap { position:sticky; z-index:2 }
+    .thead { background:var(--navy); color:#fff; font-size:11px; font-weight:600; line-height:1.25; min-height:40px }
+    .thead > div { padding:6px 0 }
     .thead.group { min-height:24px; background:var(--navy-2); color:#B9C6D6; font-size:11px }
-    .trow { min-height:56px; border-bottom:1px solid var(--line-2); font-size:13px }
+    .trow { min-height:52px; border-bottom:1px solid var(--line-2); font-size:12px; line-height:1.35 }
     .trow:hover { background:#F7F9FB }
     .trow.sel { background:var(--sky) }
     .trow.muted { color:var(--muted) }
     .empty { padding:28px 16px; color:var(--muted); text-align:center }
-    .wellbtn { border:0; background:transparent; padding:0; color:var(--navy); font-weight:700; font-size:15px; cursor:pointer; text-align:left; text-decoration:underline; text-decoration-color:#B9C6D6; text-underline-offset:3px; min-height:24px }
+    .wellbtn { border:0; background:transparent; padding:0; color:var(--navy); font-weight:700; font-size:14px; cursor:pointer; text-align:left; text-decoration:underline; text-decoration-color:#B9C6D6; text-underline-offset:3px; min-height:24px }
     .wellbtn:hover { color:var(--blue); text-decoration-color:var(--blue) }
     .idx { display:flex; align-items:center; gap:12px }
     .idx strong { font-size:22px; font-variant-numeric:tabular-nums; min-width:30px }
@@ -148,7 +173,7 @@
     .num { font-variant-numeric:tabular-nums; text-align:right }
     .chip { display:inline-flex; align-items:center; padding:3px 9px; border-radius:12px; font-size:12px; font-weight:600; line-height:1.3 }
     .chip.repair { background:var(--repair-bg); color:var(--repair) } .chip.engineer { background:var(--engineer-bg); color:var(--engineer) } .chip.ud { background:var(--ud-bg); color:var(--ud) } .chip.none { background:var(--none-bg); color:var(--none) } .chip.unscored { background:#EEF1F4; color:var(--muted) }
-    .cat { display:inline-flex; padding:2px 8px; border-radius:4px; font-size:12px; font-weight:600; border:1px solid }
+    .cat { display:inline-flex; padding:2px 6px; border-radius:4px; font-size:11px; font-weight:600; border:1px solid; line-height:1.3 }
     .cat.corrosive { color:var(--repair); border-color:#F3B8B3; background:#FFF7F6 } .cat.medium { color:var(--ud); border-color:#EBCF8F; background:#FFFBEF } .cat.noncorrosive { color:var(--none); border-color:#B7DDB9; background:#F6FBF6 } .cat.unknown { color:var(--muted); border-color:var(--line); background:#fff }
     .ev { display:inline-flex; justify-content:center; min-width:52px; padding:2px 6px; border-radius:4px; font-size:12px; font-weight:600 }
     .ev.bad { background:var(--repair-bg); color:var(--repair) } .ev.ok { background:var(--none-bg); color:var(--none) } .ev.na { background:#EEF1F4; color:var(--muted) }
@@ -243,8 +268,8 @@
     .dstatus.not_recognized { background:var(--ud-bg); color:var(--ud) }
     .dstatus.failed { background:var(--repair-bg); color:var(--repair) }
     .dstatus.queued, .dstatus.processing { background:var(--sky); color:var(--blue-d) }
-    .docs-table-box { overflow-x:auto; border:1px solid var(--line-2); border-radius:var(--radius) }
-    .doc-table { width:100%; border-collapse:collapse; font-size:13px; min-width:720px }
+    .docs-table-box { border:1px solid var(--line-2); border-radius:var(--radius) }
+    .doc-table { width:100%; border-collapse:collapse; font-size:13px }
     .doc-table th { text-align:left; font-size:12px; color:var(--muted); font-weight:600; padding:8px 10px; border-bottom:1px solid var(--line); background:#FAFBFC; white-space:nowrap }
     .doc-table td { padding:8px 10px; border-bottom:1px solid var(--line-2); vertical-align:top; overflow-wrap:anywhere }
     .doc-table tr.drow { cursor:pointer } .doc-table tr.drow:hover { background:#F7F9FB } .doc-table tr.drow.open { background:var(--sky) }
@@ -268,7 +293,7 @@
     .welldocs { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px }
     .welldocs li { font-size:13px; display:flex; flex-wrap:wrap; gap:4px 8px; align-items:center; border-top:1px solid var(--line-2); padding-top:6px }
     .welldocs .msg { flex-basis:100%; font-size:12px; color:var(--muted) }
-    @media (max-width: 640px) {
+    @media (max-width: 760px) {
       .docs { padding:12px }
       .doc-table { min-width:0 }
       .doc-table thead { display:none }
@@ -351,7 +376,7 @@
 
       <div class="tiles" id="tiles" role="group" aria-label="Фильтр по мероприятию"></div>
 
-      <section class="panel anchor" id="sec-rating" aria-labelledby="ratingTitle" style="overflow:hidden">
+      <section class="panel anchor" id="sec-rating" aria-labelledby="ratingTitle" style="overflow:clip">
         <h2 id="ratingTitle" class="visually-hidden">Таблица рейтинга</h2>
         <div class="toolbar">
           <label>Поиск скважины <input id="search" type="search" placeholder="номер" autocomplete="off"></label>
@@ -365,7 +390,7 @@
             <div class="grid-row thead" role="row">
               <div>Место</div><div>Скважина</div><div>Индекс</div><div>Прогноз НТЦ / Мат.</div><div>Мероприятие и предложение</div><div>Категория фонда</div>
               <div>Среда</div><div>Демонтаж</div><div>Разбор на базе</div><div>Оборудование и защита</div>
-              <div>Наработка, сут</div><div>Жидкость, м³ / нефть, л (%)</div><div>Полнота данных</div>
+              <div>Нара&shy;ботка, сут</div><div>Жидкость, м³ / нефть, л (%)</div><div>Полнота данных</div>
             </div>
           </div>
           <div id="rows"><div class="empty">Загружаем рейтинг…</div></div>
@@ -641,14 +666,16 @@
       : act === null || act === undefined ? ['Нет данных', 'na']
       : !act ? ['Нет акта', 'na']
       : corrosion === true ? ['Есть коррозия', 'bad'] : corrosion === false ? ['Коррозии нет', 'ok'] : ['Признак не указан', 'warn'];
+    // «Среднекоррозионная» wraps as «Средне-/коррозионная» in a narrow column; nothing is abbreviated.
+    const soft = (text) => String(text || '').replace(/(средне|не)(?=корроз)/gi, '$1\u00AD').replace(/(корро)(зи)(он)(ная)/gi, '$1\u00AD$2$3\u00AD$4').replace(/(корро)(зи[ия])(?![а-я])/gi, '$1\u00AD$2');
     function envCell(w) {
       if (w.sampling !== true) return el('span', { class: 'ev warn', text: 'Нет пробы' });
       if (w.corrosive_environment === null || w.corrosive_environment === undefined) return el('span', { class: 'ev na', text: 'Нет данных' });
-      return el('span', { class: `ev ${w.corrosive_environment ? 'bad' : 'ok'}`, text: w.corrosive_environment ? 'Коррозионная' : 'Некоррозионная' });
+      return el('span', { class: `ev ${w.corrosive_environment ? 'bad' : 'ok'}`, text: soft(w.corrosive_environment ? 'Коррозионная' : 'Некоррозионная') });
     }
     function actCell(act, corrosion, missing) {
       const [text, cls] = ACT_WORDS(act, corrosion, missing);
-      return el('span', { class: `ev ${cls}`, text });
+      return el('span', { class: `ev ${cls}`, text: soft(text) });
     }
     function equipCell(w) {
       const means = w.protection_means || [];
@@ -661,7 +688,7 @@
     function gapsCell(w) {
       const gaps = w.data_gaps || [];
       if (!gaps.length) return el('span', { class: 'okmark', title: 'Телеметрия, химия и акты — данные полные', 'aria-label': 'Данные полные', text: '✓' });
-      const short = { telemetry: 'Телеметрия', samples: 'Химия', base_act: 'Акт разбора' };
+      const short = { telemetry: 'Теле\u00ADметрия', samples: 'Химия', base_act: 'Акт разбора' };
       return el('div', { class: 'gapbox', title: gaps.map(g => g.note).filter(Boolean).join(' ') },
         el('span', { text: 'Нет данных:' }), el('span', { text: gaps.map(g => short[g.key] || g.key).join(', ') }));
     }
@@ -674,26 +701,26 @@
         const key = measureKey(w);
         return el('div', { class: `grid-row trow${state.selected === w.well_id && state.drawerOpen ? ' sel' : ''}${key === 'none' ? ' muted' : ''}`, role: 'row', 'data-well': w.well_id, style: 'cursor:pointer', onClick: (event) => openWell(w.well_id, event.target.closest('button') || event.currentTarget) },
           el('div', { style: 'font-weight:700; font-variant-numeric:tabular-nums; color:var(--navy-2)', text: w.rank ?? '—' }),
-          el('div', { style: 'display:flex; flex-direction:column; padding:6px 0' },
-            el('button', { class: 'wellbtn', type: 'button', 'aria-label': `Открыть карточку скважины ${w.well_id}`, text: w.well_id }),
-            el('span', { class: 'sub', text: [w.field, w.in_operation === null || w.in_operation === undefined ? null : (w.in_operation ? 'в работе' : 'не в работе')].filter(Boolean).join(', ') || '—' })),
           el('div', { style: 'display:flex; flex-direction:column' },
-            el('strong', { class: `idxnum ${key}`, style: 'font-size:22px; font-variant-numeric:tabular-nums', text: w.index ?? '—' }),
-            w.protection_adjusted ? el('span', { class: 'sub', text: `без защиты ${w.index_raw}` }) : null),
-          el('div', { class: 'fc' }, barLine('НТЦ', w.model_ntc, ''), barLine('Мат.', w.model_math, 'm')),
-          el('div', { style: 'display:flex; flex-direction:column; align-items:flex-start; gap:3px' },
+            el('button', { class: 'wellbtn', type: 'button', 'aria-label': `Открыть карточку скважины ${w.well_id}`, text: w.well_id }),
+            el('span', { class: 'sub', style: 'font-size:11px', text: [w.field, w.in_operation === null || w.in_operation === undefined ? null : (w.in_operation ? 'в работе' : 'не в работе')].filter(Boolean).join(', ') || '—' })),
+          el('div', { style: 'display:flex; flex-direction:column' },
+            el('strong', { class: `idxnum ${key}`, style: 'font-size:18px; line-height:1.1; font-variant-numeric:tabular-nums', text: w.index ?? '—' }),
+            w.protection_adjusted ? el('span', { class: 'sub', style: 'font-size:10px; line-height:1.2', title: `Без учёта защиты: ${w.index_raw}`, text: `было ${w.index_raw}` }) : null),
+          el('div', { 'data-label': 'Прогноз НТЦ / Мат.' }, el('div', { class: 'fc' }, barLine('НТЦ', w.model_ntc, ''), barLine('Мат.', w.model_math, 'm'))),
+          el('div', { 'data-label': 'Мероприятие' }, el('div', { style: 'display:flex; flex-direction:column; align-items:flex-start; gap:2px' },
             el('span', { class: `mchip ${key}`, text: w.measure ? (w.measure === 'none' ? 'Не требуются' : w.measure_code) : 'Нет оценки' }),
-            el('span', { style: 'font-size:12px', text: w.action || '' })),
-          el('div', {}, el('span', { class: `cat ${w.category || 'unknown'}`, text: w.category_label || 'Нет данных' })),
-          el('div', {}, envCell(w)),
-          el('div', {}, actCell(w.demount_act, w.demount_corrosion, false)),
-          el('div', {}, actCell(w.base_act, w.base_corrosion, (w.data_gaps || []).some(g => g.key === 'base_act'))),
-          equipCell(w),
-          el('div', { class: 'num-cell', text: fmtNum(w.run_days) }),
-          el('div', { class: 'num-cell', style: 'display:flex; flex-direction:column' },
+            el('span', { style: 'font-size:11px', text: w.action || '' }))),
+          el('div', { 'data-label': 'Категория фонда' }, el('span', { class: `cat ${w.category || 'unknown'}`, text: soft(w.category_label || 'Нет данных') })),
+          el('div', { 'data-label': 'Среда' }, envCell(w)),
+          el('div', { 'data-label': 'Демонтаж' }, actCell(w.demount_act, w.demount_corrosion, false)),
+          el('div', { 'data-label': 'Разбор на базе' }, actCell(w.base_act, w.base_corrosion, (w.data_gaps || []).some(g => g.key === 'base_act'))),
+          el('div', { 'data-label': 'Оборудование и защита' }, equipCell(w)),
+          el('div', { class: 'num-cell', 'data-label': 'Наработка, сут', text: fmtNum(w.run_days) }),
+          el('div', { class: 'num-cell', 'data-label': 'Жидкость / нефть' }, el('div', { style: 'display:flex; flex-direction:column' },
             el('span', { text: `${fmtNum(w.liquid_rate_m3_day, 1)} м³` }),
-            el('span', { class: 'sub', text: w.oil_l_day === null || w.oil_l_day === undefined ? 'нефть —' : `${fmtNum(w.oil_l_day)} л нефти (${fmtNum(w.oil_pct)} %)` })),
-          el('div', {}, gapsCell(w)));
+            el('span', { class: 'sub', style: 'font-size:11px', text: w.oil_l_day === null || w.oil_l_day === undefined ? 'нефть —' : `${fmtNum(w.oil_l_day)} л нефти (${fmtNum(w.oil_pct)} %)` }))),
+          el('div', { 'data-label': 'Полнота данных' }, gapsCell(w)));
       }));
     }
 
@@ -1475,9 +1502,14 @@
     });
     window.addEventListener('hashchange', () => { const id = hashWell(); if (id && id !== state.selected) openWell(id); else if (!id && state.drawerOpen && location.hash === '') closeWell(); });
     // Sticky offsets follow the real app bar height (it wraps on narrow screens).
-    const syncAppbar = () => document.documentElement.style.setProperty('--appbar-h', `${document.querySelector('.appbar').offsetHeight}px`);
+    const syncAppbar = () => {
+      document.documentElement.style.setProperty('--appbar-h', `${document.querySelector('.appbar').offsetHeight}px`);
+      const nav = document.querySelector('.sidenav');
+      const strip = getComputedStyle(nav).position === 'sticky' ? nav.offsetHeight : 0;
+      document.documentElement.style.setProperty('--navstrip-h', `${strip}px`);
+    };
     syncAppbar();
-    if ('ResizeObserver' in window) new ResizeObserver(syncAppbar).observe(document.querySelector('.appbar')); else window.addEventListener('resize', syncAppbar);
+    if ('ResizeObserver' in window) { const watcher = new ResizeObserver(syncAppbar); watcher.observe(document.querySelector('.appbar')); watcher.observe(document.querySelector('.sidenav')); } else window.addEventListener('resize', syncAppbar);
     $('export').addEventListener('click', (event) => exportRating(event.currentTarget));
     $('waitBtn').addEventListener('click', () => setFilter(state.filter === 'waiting' ? 'all' : 'waiting'));
     $('resetFilter').addEventListener('click', () => setFilter('all'));
