@@ -521,3 +521,40 @@ def test_excel_documents_load_without_llm(client, tmp_path, monkeypatch):
     assert unknown["status"] == "not_recognized" and "нет в справочнике" in unknown["status_message"]
     detail = client.get(f"/api/v1/documents/{table['document_id']}").json()
     assert detail["field_labels"]["chlorides_mg_l"] == "Хлориды, мг/л"
+
+
+@needs_db
+def test_reupload_after_failure_processes_again(client, generated):
+    from app import db
+
+    path = generated / "documents" / "protokol_khim_analiza_15.xlsx"
+    first = _upload(client, path)
+    assert first["status"] == "loaded"
+    # As if it had failed before (e.g. uploaded before the Excel reader existed).
+    db.update_document(first["document_id"], status="failed", status_message="Языковая модель не настроена")
+    with open(path, "rb") as handle:
+        body = client.post("/api/v1/documents?wait=true", files=[("files", ("protocol khim analyzs.xlsx", handle))]).json()
+    again = body["documents"][0]
+    assert again["document_id"] == first["document_id"]
+    assert again["status"] == "loaded" and again["requeued"] is True
+    assert body["requeued"] == 1 and body["duplicates"] == 0
+    # A loaded file sent again is just a duplicate.
+    with open(path, "rb") as handle:
+        body = client.post("/api/v1/documents?wait=true", files=[("files", (path.name, handle))]).json()
+    assert body["duplicates"] == 1 and body["requeued"] == 0
+
+
+@needs_db
+def test_clear_document_list(client, generated):
+    memo = _upload(client, generated / "documents" / "sluzhebnaya_zapiska.pdf")
+    protocol = _upload(client, generated / "documents" / "protokol_khim_analiza_15.xlsx")
+    assert memo["status"] == "not_recognized" and protocol["status"] == "loaded"
+    assert client.delete("/api/v1/documents").status_code == 422
+    result = client.delete("/api/v1/documents?status=failed,not_recognized").json()
+    assert result == {"deleted": 1, "wells": []}
+    assert [row["document_id"] for row in client.get("/api/v1/documents").json()["documents"]] == [protocol["document_id"]]
+    assert "samples" not in _gap_keys(_well(client, "DEMO-012"))
+    result = client.delete("/api/v1/documents?all=true").json()
+    assert result["deleted"] == 1 and result["wells"] == ["DEMO-012", "DEMO-013"]
+    assert client.get("/api/v1/documents").json()["documents"] == []
+    assert "samples" in _gap_keys(_well(client, "DEMO-012"))        # its data went with it

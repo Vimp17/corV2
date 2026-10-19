@@ -264,6 +264,10 @@
     .docs-meta > span { display:inline-flex; align-items:center; flex-wrap:wrap; gap:4px 8px; min-height:32px }
     .docs-meta .ok { color:var(--none); font-weight:600 } .docs-meta .warn { color:var(--ud); font-weight:600 }
     .docs-counts { display:flex; flex-wrap:wrap; gap:6px }
+    .docs-bar { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px 16px }
+    .clearwrap { position:relative }
+    .clearwrap .gapmenu { left:auto; right:0; width:380px }
+    .gapmenu .menu-note { font-size:11px; color:var(--muted); padding:2px 10px 6px }
     .dstatus { display:inline-flex; align-items:center; padding:2px 8px; border-radius:10px; font-size:12px; font-weight:600; white-space:nowrap; line-height:1.4 }
     .dstatus.loaded { background:var(--none-bg); color:var(--none) }
     .dstatus.not_recognized { background:var(--ud-bg); color:var(--ud) }
@@ -436,7 +440,13 @@
           <button class="btn" id="docPick" type="button">Выбрать файлы</button>
         </div>
         <div class="docs-meta" id="docsMeta"></div>
-        <div class="docs-counts" id="docsCounts" role="group" aria-label="Документы по статусу"></div>
+        <div class="docs-bar">
+          <div class="docs-counts" id="docsCounts" role="group" aria-label="Документы по статусу"></div>
+          <div class="clearwrap">
+            <button class="btn secondary small" id="docClear" type="button" aria-expanded="false" aria-controls="docClearMenu" hidden>Очистить список ▾</button>
+            <div class="gapmenu" id="docClearMenu" role="menu" hidden></div>
+          </div>
+        </div>
         <div class="docs-table-box">
           <table class="doc-table">
             <thead><tr><th>Файл</th><th>Тип документа</th><th>Скважина</th><th>Дата документа</th><th>Статус</th><th>Получен</th></tr></thead>
@@ -1273,6 +1283,8 @@
       $('docsMeta').replaceChildren(...meta);
       $('docsCounts').replaceChildren(...Object.entries(labels).filter(([key]) => counts[key]).map(([key, label]) =>
         el('span', { class: `dstatus ${key}`, text: `${label}: ${counts[key]}` })));
+      $('docClear').hidden = !documents.length;
+      if (!documents.length) closeClearMenu();
       if (!documents.length) {
         $('docRows').replaceChildren(el('tr', {}, el('td', { colspan: '6', class: 'empty', text: 'Документов пока нет. Загрузите файлы или положите их в папку-приёмник.' })));
         return;
@@ -1355,6 +1367,41 @@
       return parts;
     }
 
+    // ---------------------------------------------------------------- clearing the list
+    function openClearMenu() {
+      const counts = state.docs?.counts || {};
+      const unneeded = (counts.failed || 0) + (counts.not_recognized || 0);
+      const all = Object.entries(counts).filter(([key]) => !['queued', 'processing'].includes(key)).reduce((sum, [, n]) => sum + n, 0);
+      const loaded = counts.loaded || 0;
+      $('docClearMenu').replaceChildren(
+        el('button', { type: 'button', role: 'menuitem', disabled: !unneeded, onClick: () => clearDocuments('failed,not_recognized', unneeded) },
+          el('span', { text: 'Нераспознанные и с ошибкой' }), el('b', { text: String(unneeded) })),
+        el('div', { class: 'menu-note', text: 'Из них ничего не загружено — рейтинг не изменится.' }),
+        el('button', { type: 'button', role: 'menuitem', disabled: !all, onClick: () => clearDocuments(null, all, loaded) },
+          el('span', { text: 'Все документы' }), el('b', { text: String(all) })),
+        el('div', { class: 'menu-note', text: loaded ? `Данные из загруженных документов (${loaded}) тоже удалятся, рейтинг их скважин пересчитается.` : 'Документы в очереди и в обработке не удаляются.' }));
+      $('docClearMenu').hidden = false;
+      $('docClear').setAttribute('aria-expanded', 'true');
+      $('docClearMenu').querySelector('button:not([disabled])')?.focus();
+    }
+    function closeClearMenu() {
+      $('docClearMenu').hidden = true;
+      $('docClear').setAttribute('aria-expanded', 'false');
+    }
+    async function clearDocuments(statuses, count, loaded = 0) {
+      closeClearMenu();
+      if (!statuses && loaded && !confirm(`Удалить все документы (${count})? Данные, загруженные из ${loaded} документов, тоже удалятся, рейтинг скважин пересчитается.`)) return;
+      $('docClear').disabled = true;
+      try {
+        const result = await api(`/api/v1/documents?${statuses ? `status=${encodeURIComponent(statuses)}` : 'all=true'}`, { method: 'DELETE' });
+        notice(`Удалено документов: ${result.deleted}.${result.wells.length ? ` Рейтинг пересчитан для скважин: ${result.wells.join(', ')}.` : ''}`);
+        state.docOpen = null;
+        await loadDocuments();
+        if (result.wells.length) await refresh({ keepNotice: true });
+      } catch (error) { notice(error.message, 'error'); }
+      finally { $('docClear').disabled = false; }
+    }
+
     async function uploadDocuments(files) {
       const list = [...files];
       if (!list.length) return;
@@ -1365,8 +1412,9 @@
       try {
         const result = await api('/api/v1/documents', { method: 'POST', body: form });
         const errors = result.documents.filter(d => d.error).map(d => `${d.filename}: ${d.error}`);
-        const text = [`Принято файлов: ${result.accepted}`, result.duplicates ? `уже были загружены: ${result.duplicates}` : null, result.rejected ? `отклонено: ${result.rejected}` : null].filter(Boolean).join(', ');
-        notice(`${text}.${errors.length ? ' ' + errors.join('; ') : ' Обработка идёт в фоне — статус обновится в таблице.'}`, errors.length ? 'warning' : '');
+        const text = [result.accepted ? `Новых файлов: ${result.accepted}` : null, result.requeued ? `загружены повторно и обрабатываются заново: ${result.requeued}` : null,
+          result.duplicates ? `уже были загружены и обработаны: ${result.duplicates}` : null, result.rejected ? `отклонено: ${result.rejected}` : null].filter(Boolean).join(', ') || 'Файлы не приняты';
+        notice(`${text[0].toUpperCase()}${text.slice(1)}.${errors.length ? ' ' + errors.join('; ') : ' Обработка идёт в фоне — статус обновится в таблице.'}`, errors.length ? 'warning' : '');
         state.docOpen = null;
         await loadDocuments();
       } catch (error) { notice(error.message, 'error'); }
@@ -1553,6 +1601,9 @@
     $('gapMenu').addEventListener('keydown', (event) => { if (event.key === 'Escape') { event.stopPropagation(); closeGapMenu(); $('gapBtn').focus(); } });
     setInterval(() => { if (!document.hidden && !state.busy) refresh({ keepNotice: true, auto: true }); }, AUTO_REFRESH_SECONDS * 1000);
     $('docPick').addEventListener('click', () => $('docFiles').click());
+    $('docClear').addEventListener('click', () => ($('docClearMenu').hidden ? openClearMenu() : closeClearMenu()));
+    document.addEventListener('pointerdown', (event) => { if (!$('docClearMenu').hidden && !event.target.closest('.clearwrap')) closeClearMenu(); });
+    $('docClearMenu').addEventListener('keydown', (event) => { if (event.key === 'Escape') { event.stopPropagation(); closeClearMenu(); $('docClear').focus(); } });
     $('docFiles').addEventListener('change', () => uploadDocuments($('docFiles').files));
     const zone = $('dropzone');
     ['dragenter', 'dragover'].forEach(type => zone.addEventListener(type, (event) => { event.preventDefault(); zone.classList.add('over'); }));

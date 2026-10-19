@@ -91,14 +91,34 @@ async def upload_documents(request: Request, files: list[UploadFile] = File(...)
             if row.get("document_id") and row.get("status") == "queued":
                 processed = await run_in_threadpool(pipeline.process_now, row["document_id"], request.app.state)
                 if processed:
-                    results[index] = {**processed, "duplicate": row.get("duplicate", False)}
+                    results[index] = {**processed, "duplicate": row.get("duplicate", False),
+                                      "requeued": row.get("requeued", False)}
     else:
         _wake(request)
     titles = pipeline.type_titles()
     return {"documents": [pipeline.decorate(row, titles) if row.get("document_id") else row for row in results],
             "accepted": sum(1 for row in results if row.get("document_id") and not row.get("duplicate")),
-            "duplicates": sum(1 for row in results if row.get("duplicate")),
+            "duplicates": sum(1 for row in results if row.get("duplicate") and not row.get("requeued")),
+            "requeued": sum(1 for row in results if row.get("requeued")),
             "rejected": sum(1 for row in results if row.get("error"))}
+
+
+@router.delete("")
+def clear_documents(request: Request,
+                    status: str | None = Query(default=None, max_length=200,
+                                               description="Статусы через запятую, например failed,not_recognized"),
+                    all_documents: bool = Query(default=False, alias="all")) -> dict:
+    """Clear the document list: by status, or every document (?all=true). Data loaded from the
+    deleted documents is deleted too and the rating of their wells is recomputed. Documents in
+    the queue or being processed are kept."""
+    if all_documents:
+        statuses = None
+    else:
+        statuses = {item.strip() for item in (status or "").split(",") if item.strip()}
+        unknown = statuses - set(pipeline.STATUS_LABELS)
+        if not statuses or unknown:
+            raise HTTPException(status_code=422, detail="Укажите status (например failed,not_recognized) или all=true.")
+    return pipeline.delete_documents(statuses, request.app.state)
 
 
 @router.post("/inbox/scan")

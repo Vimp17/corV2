@@ -288,7 +288,22 @@ def reset_for_processing(document_id: str) -> dict | None:
     return db.get_document(document_id)
 
 
-def delete_document(document_id: str, app_state=None) -> dict | None:
+def delete_documents(statuses: set[str] | None, app_state=None) -> dict:
+    """Delete documents with the given statuses (None = every document except those being
+    processed) and the data they loaded; the rating of the affected wells is recomputed once."""
+    deleted, wells = 0, set()
+    for row in db.list_documents(limit=100000):
+        if row["status"] in {"queued", "processing"} or (statuses is not None and row["status"] not in statuses):
+            continue
+        removed = delete_document(row["document_id"], app_state, recompute=False)
+        if removed is not None:
+            deleted += 1
+            wells |= set((removed.get("loaded") or {}).get("wells") or [])
+    _recompute(sorted(wells), app_state)
+    return {"deleted": deleted, "wells": sorted(wells)}
+
+
+def delete_document(document_id: str, app_state=None, recompute: bool = True) -> dict | None:
     """Remove a document, the data it loaded and its stored original; recompute its wells."""
     document = db.get_document(document_id)
     if document is None:
@@ -300,7 +315,8 @@ def delete_document(document_id: str, app_state=None) -> dict | None:
         (settings.docs_storage_dir / document["storage_path"]).unlink(missing_ok=True)
     except OSError:
         logger.warning("Stored original could not be removed document_id=%s", document_id)
-    _recompute(loaded.get("wells") or [], app_state)
+    if recompute:
+        _recompute(loaded.get("wells") or [], app_state)
     return document
 
 

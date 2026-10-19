@@ -26,6 +26,10 @@ _SKIP_SUFFIXES = (".tmp", ".part", ".crdownload", ".download", ".error.txt")
 _SETTLE_SECONDS = 5
 
 
+# Statuses a document leaves when the same file is uploaded again.
+RETRY_ON_REUPLOAD = {"failed", "not_recognized"}
+
+
 class DocumentRejected(ValueError):
     """The file cannot be accepted (type, size); the message is shown to the user."""
 
@@ -89,7 +93,15 @@ def accept_file(content: bytes, filename: str, channel: str) -> dict:
         "storage_path": relative.as_posix(), "status": "queued", "attempts": 0,
         "created_at": datetime.now(timezone.utc),
     })
-    return {**row, "duplicate": not created}
+    requeued = False
+    if not created and row.get("status") in RETRY_ON_REUPLOAD:
+        # The same file sent again after it failed or was not recognised (e.g. before OCR or the
+        # Excel reader was set up) is processed again instead of returning the old result.
+        db.update_document(row["document_id"], status="queued", attempts=0, started_at=None,
+                           filename=filename, status_message="Загружен повторно — обрабатывается заново.")
+        row = db.get_document(row["document_id"]) or row
+        requeued = True
+    return {**row, "duplicate": not created, "requeued": requeued}
 
 
 def _move(path: Path, folder: str, reason: str | None = None) -> Path:
@@ -161,7 +173,7 @@ def scan_inbox() -> dict:
             logger.exception("Inbox file could not be taken name=%s", name)
             continue
         _safe_move(path, "processed")
-        summary["duplicates" if row["duplicate"] else "accepted"] += 1
+        summary["duplicates" if row["duplicate"] and not row["requeued"] else "accepted"] += 1
         summary["documents"].append({"document_id": row["document_id"], "filename": row["filename"],
                                      "duplicate": row["duplicate"], "status": row["status"]})
     return summary
