@@ -9,8 +9,8 @@ from pathlib import Path
 from contextlib import contextmanager
 from typing import Iterable, Iterator
 
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, JSON, MetaData, String, Table, Column, UniqueConstraint, create_engine, select, text
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, JSON, MetaData, String, Table, Text, Column, UniqueConstraint, create_engine, delete, select, text, update
+from sqlalchemy.dialects.postgresql import JSONB, insert as pg_insert
 from sqlalchemy.engine import Engine
 
 from app.config import settings
@@ -122,6 +122,8 @@ well_rating = Table(
     Column("protection", String(32)), Column("model_ntc_raw", Float),
     Column("installed_at", DateTime(timezone=True)), Column("liquid_rate_m3_day", Float),
     Column("oil_pct", Float), Column("data_gaps", JSON),
+    # Latest proposal drafted by the AI agent from all well data (app.core.proposal_agent).
+    Column("ai_proposal", JSON), Column("ai_proposal_at", DateTime(timezone=True)),
 )
 
 # Proposals to change the ERA repair plan, sent through Промайн.
@@ -151,6 +153,37 @@ source_documents = Table(
     Column("source_id", String(128), primary_key=True), Column("well_id", String(128), primary_key=True),
     Column("payload_json", JSON, nullable=False), Column("updated_at", DateTime(timezone=True), nullable=False),
 )
+
+# Documents received as files (manual upload or the inbox folder): the original is stored on
+# disk, the extracted text and fields here. Data taken from a document is written to the usual
+# telemetry / history tables under batch ids "doc-<document_id>-<well_id>".
+documents = Table(
+    "documents", metadata,
+    Column("document_id", String(36), primary_key=True),
+    Column("sha256", String(64), nullable=False, unique=True),
+    Column("filename", String(512), nullable=False),
+    Column("channel", String(16), nullable=False),
+    Column("file_kind", String(16), nullable=False),
+    Column("size_bytes", BigInteger, nullable=False),
+    Column("storage_path", String(1024), nullable=False),
+    Column("status", String(32), nullable=False),
+    Column("status_message", String(2000)),
+    Column("pages", Integer),
+    Column("doc_type", String(64)),
+    Column("well_ids", JSON),
+    Column("doc_date", Date),
+    Column("text_method", String(32)),
+    Column("text_chars", Integer),
+    Column("text", Text),
+    Column("extraction", JSON),
+    Column("loaded", JSON),
+    Column("attempts", Integer, nullable=False, server_default="0"),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("started_at", DateTime(timezone=True)),
+    Column("processed_at", DateTime(timezone=True)),
+)
+Index("idx_documents_status_created", documents.c.status, documents.c.created_at)
+Index("idx_documents_created", documents.c.created_at)
 
 _engine: Engine | None = None
 
@@ -211,6 +244,7 @@ def check_database() -> bool:
 
 _SOURCE_ORIGINS = {
     "api_push",
+    "document",
     "manual_upload",
     "api_refresh",
     "adapter",
@@ -712,7 +746,7 @@ OPERATOR_RATING_FIELDS = ("plan_date", "promine_status", "comment")
 
 def _rating_row(row) -> dict:
     data = dict(row)
-    for key in ("assessed_at", "updated_at", "measure_since", "computed_at", "installed_at"):
+    for key in ("assessed_at", "updated_at", "measure_since", "computed_at", "installed_at", "ai_proposal_at"):
         if data.get(key) is not None:
             data[key] = data[key].isoformat()
     if data.get("plan_date") is not None:
@@ -812,3 +846,130 @@ def latest_era_proposals() -> dict[str, dict]:
              .order_by(era_proposals.c.well_id, era_proposals.c.created_at.desc()))
     with engine().connect() as conn:
         return {row["well_id"]: _proposal_row(row) for row in conn.execute(query).mappings().all()}
+
+
+# --------------------------------------------------------------------------- documents
+DOCUMENT_LIST_COLUMNS = [column for column in documents.c if column.name != "text"]
+
+
+def _document_row(row, with_text: bool = False) -> dict:
+    data = dict(row)
+    for key in ("created_at", "started_at", "processed_at"):
+        if data.get(key) is not None:
+            data[key] = data[key].isoformat()
+    if data.get("doc_date") is not None:
+        data["doc_date"] = data["doc_date"].isoformat()
+    if not with_text:
+        data.pop("text", None)
+    return data
+
+
+def create_document(values: dict) -> tuple[dict, bool]:
+    """Insert a document row; a file with the same SHA-256 returns the existing row instead.
+
+    Returns (row, created)."""
+    with engine().begin() as conn:
+        inserted = conn.execute(pg_insert(documents).values(**values).on_conflict_do_nothing(
+            index_elements=[documents.c.sha256]).returning(documents.c.document_id)).first()
+        row = conn.execute(select(*DOCUMENT_LIST_COLUMNS).where(
+            documents.c.sha256 == values["sha256"])).mappings().one()
+    return _document_row(row), inserted is not None
+
+
+def get_document(document_id: str, with_text: bool = False) -> dict | None:
+    columns = list(documents.c) if with_text else DOCUMENT_LIST_COLUMNS
+    with engine().connect() as conn:
+        row = conn.execute(select(*columns).where(documents.c.document_id == document_id)).mappings().first()
+    return _document_row(row, with_text) if row else None
+
+
+def list_documents(*, well_id: str | None = None, status: str | None = None, limit: int = 200) -> list[dict]:
+    query = select(*DOCUMENT_LIST_COLUMNS).order_by(documents.c.created_at.desc()).limit(limit)
+    if status:
+        query = query.where(documents.c.status == status)
+    if well_id:
+        query = query.where(documents.c.well_ids.cast(JSONB).contains([well_id]))
+    with engine().connect() as conn:
+        return [_document_row(row) for row in conn.execute(query).mappings().all()]
+
+
+def document_status_counts() -> dict[str, int]:
+    with engine().connect() as conn:
+        rows = conn.execute(text("SELECT status, COUNT(*) FROM documents GROUP BY status")).all()
+    return {status: count for status, count in rows}
+
+
+def update_document(document_id: str, **values) -> None:
+    with engine().begin() as conn:
+        conn.execute(update(documents).where(documents.c.document_id == document_id).values(**values))
+
+
+def claim_next_document(document_id: str | None = None) -> dict | None:
+    """Mark the oldest queued document (or the given one) as processing and return it; safe
+    across workers. A document returned to the queue after a failed attempt waits
+    MAI_DOCS_RETRY_MINUTES before the next automatic attempt."""
+    statement = text("""
+        UPDATE documents SET status = 'processing', started_at = :now, attempts = attempts + 1
+        WHERE document_id = (
+            SELECT document_id FROM documents
+            WHERE status = 'queued'
+              AND (CAST(:document_id AS varchar) IS NULL OR document_id = :document_id)
+              AND (CAST(:document_id AS varchar) IS NOT NULL OR started_at IS NULL
+                   OR started_at < :now - make_interval(mins => :retry))
+            ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1)
+        RETURNING document_id
+    """)
+    with engine().begin() as conn:
+        row = conn.execute(statement, {"now": datetime.now(timezone.utc), "document_id": document_id,
+                                       "retry": settings.docs_retry_minutes}).first()
+    return get_document(row[0]) if row else None
+
+
+def requeue_stale_documents(older_than_minutes: int = 30) -> int:
+    """Documents left in processing by a stopped worker go back to the queue."""
+    with engine().begin() as conn:
+        result = conn.execute(text("""
+            UPDATE documents SET status = 'queued'
+            WHERE status = 'processing' AND started_at < now() - make_interval(mins => :mins)
+        """), {"mins": older_than_minutes})
+    return result.rowcount or 0
+
+
+def delete_document_data(document_id: str, extra_batch_ids: Iterable[str] = ()) -> None:
+    """Remove the telemetry, history and passport rows loaded from one document (and the
+    batches of a source import made from it, when given)."""
+    prefix = f"doc-{document_id}-%"
+    extra = [item for item in extra_batch_ids if item]
+    with engine().begin() as conn:
+        conn.execute(delete(ingestion_batches).where(ingestion_batches.c.batch_id.like(prefix)))
+        conn.execute(delete(history_batches).where(history_batches.c.batch_id.like(prefix)))
+        if extra:
+            conn.execute(delete(ingestion_batches).where(ingestion_batches.c.batch_id.in_(extra)))
+            conn.execute(delete(history_batches).where(history_batches.c.batch_id.in_(extra)))
+        conn.execute(text("""
+            DELETE FROM source_documents
+            WHERE (CAST(payload_json AS jsonb) ->> 'document_id') = :document_id
+        """), {"document_id": document_id})
+
+
+def delete_document_row(document_id: str) -> None:
+    with engine().begin() as conn:
+        conn.execute(delete(documents).where(documents.c.document_id == document_id))
+
+
+def known_well_ids() -> list[str]:
+    """Wells the system knows from any source, the rating or MAI_WELL_IDS."""
+    query = text("""
+        SELECT well_id FROM telemetry UNION SELECT well_id FROM history_events
+        UNION SELECT well_id FROM well_rating UNION SELECT well_id FROM source_health
+    """)
+    with engine().connect() as conn:
+        wells = {row[0] for row in conn.execute(query).all()}
+    return sorted(wells | set(settings.configured_well_ids))
+
+
+def save_ai_proposal(well_id: str, proposal: dict) -> bool:
+    with engine().begin() as conn:
+        result = conn.execute(well_rating.update().where(well_rating.c.well_id == well_id).values(
+            ai_proposal=proposal, ai_proposal_at=datetime.now(timezone.utc)))
+        return result.rowcount == 1

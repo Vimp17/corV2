@@ -46,6 +46,17 @@ services:
       MAI_LLM_MODEL: ${MAI_LLM_MODEL:-}
       MAI_LLM_TIMEOUT_SECONDS: ${MAI_LLM_TIMEOUT_SECONDS:-45}
       MAI_LLM_MAX_RETRIES: ${MAI_LLM_MAX_RETRIES:-1}
+      # Documents: OCR model and extraction model through the same LiteLLM (empty = MAI_LLM_*).
+      MAI_OCR_MODEL: ${MAI_OCR_MODEL:-}
+      MAI_OCR_API_URL: ${MAI_OCR_API_URL:-}
+      MAI_OCR_API_KEY: ${MAI_OCR_API_KEY:-}
+      MAI_OCR_TIMEOUT_SECONDS: ${MAI_OCR_TIMEOUT_SECONDS:-120}
+      MAI_DOCS_LLM_MODEL: ${MAI_DOCS_LLM_MODEL:-}
+      MAI_DOCS_STORAGE_DIR: /app/data/documents
+      MAI_DOCS_INBOX_DIR: /app/inbox
+      MAI_DOCS_INBOX_SCAN_SECONDS: ${MAI_DOCS_INBOX_SCAN_SECONDS:-300}
+      MAI_DOCS_MAX_BYTES: ${MAI_DOCS_MAX_BYTES:-26214400}
+      MAI_DOCS_MAX_PAGES: ${MAI_DOCS_MAX_PAGES:-30}
       MAI_SOURCE_DARS_URL: ${MAI_SOURCE_DARS_URL:-}
       MAI_SOURCE_DARS_TOKEN: ${MAI_SOURCE_DARS_TOKEN:-}
       MAI_SOURCE_KHIMIK_URL: ${MAI_SOURCE_KHIMIK_URL:-}
@@ -88,6 +99,9 @@ services:
     volumes:
       - ./models:/app/models:ro
       - ./config:/app/config:ro
+      # Drop Excel / PDF / scans into ./inbox; taken files move to ./inbox/processed or ./inbox/failed.
+      - ${MAI_DOCS_INBOX_HOST_DIR:-./inbox}:/app/inbox
+      - documents_data:/app/data/documents
     depends_on:
       postgres:
         condition: service_healthy
@@ -132,3 +146,4 @@ services:
 volumes:
   postgres_data:
   n8n_data:
+  documents_data:

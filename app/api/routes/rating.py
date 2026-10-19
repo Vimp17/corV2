@@ -14,7 +14,8 @@ from fastapi.responses import Response
 
 from app import db
 from app.config import settings
-from app.core import promine, rating, rating_export
+from app.core import promine, proposal_agent, rating, rating_export
+from app.core.documents import pipeline as document_pipeline
 from app.core.excel_ingestion import ExcelImportError
 from app.core.source_connectors import source_modes
 from app.schemas import EraProposalRequest, RatingWellPatch
@@ -24,11 +25,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["rating"])
 
 
-def _rated_wells() -> list[dict]:
+def _rated_wells(with_ai_proposal: bool = False) -> list[dict]:
     wells = rating.build_rating(db.list_rating_rows())
     proposals = db.latest_era_proposals()
     for well in wells:
         well["last_proposal"] = proposals.get(well["well_id"])
+        if not with_ai_proposal:
+            # The full AI proposal is served with the well card only.
+            well.pop("ai_proposal", None)
     return wells
 
 
@@ -97,10 +101,24 @@ def export_rating() -> Response:
 
 @router.get("/rating/wells/{well_id}")
 def get_rating_well(well_id: str) -> dict:
-    well = next((item for item in _rated_wells() if item["well_id"] == well_id), None)
+    well = next((item for item in _rated_wells(with_ai_proposal=True) if item["well_id"] == well_id), None)
     if well is None:
         raise HTTPException(status_code=404, detail="Скважины нет в рейтинге")
-    return {**well, "proposals": db.list_era_proposals(well_id, limit=20)}
+    titles = document_pipeline.type_titles()
+    return {**well, "proposals": db.list_era_proposals(well_id, limit=20),
+            "documents": [document_pipeline.decorate(row, titles) for row in db.list_documents(well_id=well_id, limit=50)],
+            "ai_agent_configured": proposal_agent.configured()}
+
+
+@router.post("/rating/wells/{well_id}/ai-proposal")
+def create_ai_proposal(well_id: str) -> dict:
+    """Ask the AI agent for a proposal on the well from all its data (button in the card)."""
+    try:
+        return proposal_agent.generate(well_id)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Скважины нет в рейтинге") from None
+    except proposal_agent.ProposalUnavailable as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
 
 @router.patch("/rating/wells/{well_id}")

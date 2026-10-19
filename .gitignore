@@ -9,3 +9,5 @@ models/*.json
 *.db
 *.sqlite
 *.sqlite3
+inbox/
+data/documents/
