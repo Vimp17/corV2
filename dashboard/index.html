@@ -915,7 +915,7 @@
       if (w.skip_reason && !w.measure) prop.append(el('div', { style: 'font-size:12px', text: w.skip_reason }));
       if (w.protection_adjusted) prop.append(el('div', { style: 'font-size:13px', text: `С учётом подтверждённой защиты индекс снижен с ${w.index_raw} до ${w.index}.` }));
       body.push(prop);
-      const [aiBox, docsBox] = aiBoxes(w);
+      const [aiBox, docsBox, extrasBox] = aiBoxes(w);
       body.push(aiBox);
       body.push(dlGroup('Скважина', [
         ['Месторождение', w.field || '—', '', 'field'],
@@ -934,6 +934,7 @@
         ['Среда', yesNo(w.corrosive_environment, 'Коррозионная', 'Некоррозионная'), w.corrosive_environment ? 'bad' : (w.corrosive_environment === false ? 'ok' : ''), 'corrosive_environment'],
         ['Тоннаж, т', w.tonnage_t === null || w.tonnage_t === undefined ? '—' : w.tonnage_t.toFixed(1), '', 'tonnage_t'],
         ['НОО, сут', w.noo_days === null || w.noo_days === undefined ? '—' : String(Math.round(w.noo_days)), '', 'noo_days']], w));
+      body.push(extrasBox);
       const protCls = { effective: 'ok', insufficient: 'bad', unconfirmed: '' }[w.protection] ?? 'na';
       body.push(dlGroup('Защита от коррозии', [
         ['Средства защиты', (w.protection_means || []).length ? `Есть: ${w.protection_means.join(', ')}` : 'Нет защиты от коррозии', (w.protection_means || []).length ? 'ok' : 'na'],
@@ -1183,6 +1184,8 @@
           const r = await api('/api/v1/ingestion/excel', { method: 'POST', body });
           const wells = new Set((r.imported_wells || []).map(item => item.well_id)).size;
           result.textContent = `Статус: ${r.status}. Листы: ${(r.sheet_names || []).join(', ') || '—'}. Строк принято: ${r.rows_accepted}, отклонено: ${r.rows_rejected}. Скважин: ${wells}.`
+            + ((r.extra_columns || []).length ? `\nДополнительные показатели (в рейтинге не учитываются): ${r.extra_columns.join(', ')}.` : '')
+            + ((r.ignored_columns || []).filter(c => !(r.extra_columns || []).includes(c)).length ? `\nНе использованы: ${(r.ignored_columns || []).filter(c => !(r.extra_columns || []).includes(c)).join(', ')}.` : '')
             + (r.errors?.length ? `\nПримеры ошибок: ${r.errors.slice(0, 3).map(e => `${e.sheet_name || ''} строка ${e.row}: ${e.message}`).join(' | ')}` : '');
           const ratingNote = !r.rating || r.rating.mode === 'none' ? ''
             : r.rating.mode === 'background' ? ` Рейтинг пересчитывается в фоне (${r.rating.wells} скв.), нажмите «Обновить» через минуту.`
@@ -1235,7 +1238,8 @@
     const docBusy = (doc) => doc.status === 'queued' || doc.status === 'processing';
     const dstatus = (doc) => el('span', { class: `dstatus ${doc.status}`, text: doc.status_label || doc.status });
     const fmtBool = (v) => (v === true ? 'да' : v === false ? 'нет' : v);
-    const fmtValue = (v) => (typeof v === 'boolean' ? fmtBool(v) : (/^\d{4}-\d{2}-\d{2}$/.test(String(v)) ? fmtIso(v) : String(v)));
+    const fmtValue = (v) => (Array.isArray(v) ? v.map(item => `${item.name}: ${Number(item.value).toLocaleString('ru-RU', { maximumFractionDigits: 3 })}`).join('; ')
+      : typeof v === 'boolean' ? fmtBool(v) : (/^\d{4}-\d{2}-\d{2}$/.test(String(v)) ? fmtIso(v) : String(v)));
 
     async function loadDocuments() {
       clearTimeout(state.docTimer);
@@ -1304,12 +1308,24 @@
       } catch (error) { box.replaceChildren(el('div', { class: 'sub', text: error.message })); }
     }
 
+    // Which columns of a table were taken: system fields, additional indicators, not used.
+    function columnsList(sourceColumns, extraColumns, unusedColumns) {
+      const used = Object.values(sourceColumns || {});
+      const rows = [];
+      if (used.length) rows.push(['Взяты в расчёт', used.join(', '), 'ok']);
+      if ((extraColumns || []).length) rows.push(['Дополнительные показатели', `${extraColumns.join(', ')} — сохранены, видны в карточке скважины и ИИ-агенту, в рейтинге не учитываются`, '']);
+      if ((unusedColumns || []).length) rows.push(['Не использованы', `${unusedColumns.join(', ')} — нет числовых значений или это не показатели`, 'na']);
+      return el('dl', { class: 'fields' }, rows.map(([label, text, cls]) => [el('dt', { text: label }), el('dd', { class: cls, text })]));
+    }
+
     function docDetail(doc) {
       const parts = [];
       const extraction = doc.extraction || {};
       const labels = doc.field_labels || {};
       if (doc.loaded?.import_profile) {
-        parts.push(el('div', { class: 'hint', text: `Таблица в формате выгрузки ${String(doc.loaded.source_id || '').toUpperCase()} — загружена обычным импортом источника: ${doc.loaded.records} записей, скважин ${doc.loaded.wells.length}.` }));
+        const loaded = doc.loaded;
+        parts.push(el('div', { class: 'hint', text: `Таблица в формате выгрузки ${String(loaded.source_id || '').toUpperCase()} — загружена обычным импортом источника: ${loaded.records} записей, скважин ${loaded.wells.length}.` }));
+        parts.push(columnsList(loaded.source_columns, loaded.extra_columns, loaded.unused_columns));
       }
       (extraction.records || []).forEach((record, index) => {
         const title = `${(extraction.records.length > 1 ? `Запись ${index + 1}` : 'Извлечённые данные')}${record.well_id ? ` — скважина ${record.well_id}` : ''}: ${record.accepted ? 'принята' : 'не принята'}`;
@@ -1319,7 +1335,8 @@
           el('dt', { text: labels[name] || name }),
           el('dd', {}, field.status === 'ok' ? fmtValue(field.value) : el('span', { class: 'na', text: '—' }),
             field.status !== 'ok' && field.status !== 'missing' ? el('span', { class: 'rej', text: field.note || FIELD_STATUS_NOTE[field.status] }) : null,
-            field.quote ? el('span', { class: 'q', text: `«${field.quote}»` }) : null)])));
+            field.quote ? el('span', { class: 'q', text: `«${field.quote}»` }) : null,
+            Array.isArray(field.value) ? [...new Set(field.value.map(item => item.quote))].map(quote => el('span', { class: 'q', text: `«${quote}»` })) : null)])));
       });
       const meta = [doc.text_method ? `Текст: ${{ text_layer: 'текстовый слой PDF', ocr: 'OCR', mixed: 'текстовый слой и OCR', image_ocr: 'OCR изображения', excel_table: 'ячейки Excel', excel_profile: 'импорт выгрузки' }[doc.text_method] || doc.text_method}` : null,
         doc.pages ? `страниц: ${doc.pages}` : null, extraction.type_method ? `тип определён ${extraction.type_method === 'keywords' ? 'по ключевым словам' : 'языковой моделью'}` : null,
@@ -1399,8 +1416,9 @@
     function aiBoxes(w) {
       const ai = el('div', { class: 'aibox', id: 'aiBox' }, el('h3', { text: 'Предложение ИИ-агента' }), el('div', { class: 'sub', text: 'Загружаем…' }));
       const docs = el('div', { class: 'box', id: 'wellDocs' }, el('h3', { text: 'Документы скважины' }), el('div', { class: 'sub', text: 'Загружаем…' }));
+      const extras = el('div', { id: 'wellExtras', hidden: true });
       loadWellExtras(w.well_id);
-      return [ai, docs];
+      return [ai, docs, extras];
     }
 
     async function loadWellExtras(wellId) {
@@ -1409,6 +1427,7 @@
         if (state.selected !== wellId) return;
         renderAiBox(detail);
         renderWellDocs(detail);
+        renderExtraMeasurements(detail);
       } catch (error) {
         const box = $('aiBox'); if (box) box.replaceChildren(el('h3', { text: 'Предложение ИИ-агента' }), el('div', { class: 'sub', text: error.message }));
       }
@@ -1451,6 +1470,20 @@
         await api(`/api/v1/rating/wells/${encodeURIComponent(wellId)}/ai-proposal`, { method: 'POST' });
         await loadWellExtras(wellId);
       } catch (error) { notice(error.message, 'error'); button.disabled = false; button.textContent = old; }
+    }
+
+    // pH, hardness and other indicators without a system field: shown, not used by the rating.
+    function renderExtraMeasurements(detail) {
+      const box = $('wellExtras');
+      if (!box) return;
+      const items = detail.extra_measurements || [];
+      box.hidden = !items.length;
+      if (!items.length) { box.replaceChildren(); return; }
+      box.replaceChildren(el('div', { style: 'display:flex; flex-direction:column; gap:4px' },
+        el('h3', { class: 'group-title', text: 'Дополнительные показатели' }),
+        el('div', { class: 'hint', text: 'Показатели, которых нет среди полей системы. Учитываются ИИ-агентом, в рейтинге не учитываются.' }),
+        el('dl', { class: 'dl' }, items.map(item => [el('dt', { text: item.name }),
+          el('dd', {}, Number(item.value).toLocaleString('ru-RU', { maximumFractionDigits: 3 }), el('span', { class: 'prov', text: [item.source, item.date ? fmtIso(item.date) : null].filter(Boolean).join(' · ') }))]))));
     }
 
     function renderWellDocs(detail) {

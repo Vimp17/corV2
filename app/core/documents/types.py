@@ -7,7 +7,8 @@ from functools import lru_cache
 from app.config import settings
 
 TARGETS = {"work_event", "telemetry", "passport"}
-FIELD_TYPES = {"string", "date", "number", "boolean"}
+# "measurements": a list of other indicators [{name, value, quote}] (pH, hardness…).
+FIELD_TYPES = {"string", "date", "number", "boolean", "measurements"}
 # Fields every target needs to place a record: the well and the date of the event / sample.
 DATE_FIELD = {"work_event": "act_date", "telemetry": "sample_date", "passport": "passport_date"}
 

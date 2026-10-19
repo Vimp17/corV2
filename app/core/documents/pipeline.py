@@ -79,7 +79,13 @@ def _import_by_profile(document: dict, content: bytes, profile_id: str, app_stat
     loaded = {"import_profile": profile_id, "source_id": result.get("source_id"), "wells": wells,
               "records": sum(item.get("record_count") or 0 for item in imported),
               "batch_ids": [item["batch_id"] for item in imported if item.get("batch_id")],
-              "rows_rejected": result.get("rows_rejected")}
+              "rows_rejected": result.get("rows_rejected"),
+              # Which columns were taken: mapped to system fields, kept as additional
+              # indicators (not in the rating), or not used at all.
+              "source_columns": result.get("source_columns") or {},
+              "extra_columns": result.get("extra_columns") or [],
+              "unused_columns": [column for column in result.get("ignored_columns") or []
+                                 if column not in set(result.get("extra_columns") or [])]}
     if not imported:
         return _finish(document["document_id"], "not_recognized",
                        "Таблица похожа на выгрузку источника, но строк для загрузки нет.",

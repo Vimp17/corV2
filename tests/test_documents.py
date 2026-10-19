@@ -348,3 +348,84 @@ def test_scanned_pdf_and_source_table(client, generated, tmp_path):
     assert table["doc_type"] == "source:khimik"
     assert table["type_title"] == "Выгрузка KHIMIK"
     assert len(table["well_ids"]) >= 10
+
+
+# --------------------------------------------------------------------------- mixed chemistry tables
+def _chemistry_book(path, date_header="Дата", title=None, text_dates=True):
+    from datetime import datetime as _dt
+    from openpyxl import Workbook
+
+    when = TODAY - timedelta(days=3)
+    value = when.strftime("%d.%m.%Y") if text_dates else _dt.combine(when, _dt.min.time()).replace(hour=10)
+    book = Workbook()
+    sheet = book.active
+    for line in title or []:
+        sheet.append([line])
+    if title:
+        sheet.append([])
+    sheet.append(["Скважина", date_header, "CO2, %", "pH", "Обводнённость, %", "Хлориды, мг/л", "Жёсткость, мг-экв/л", "Куст"])
+    sheet.append(["DEMO-012", value, 1.4, 6.8, 47, 21000, 125, 7])
+    sheet.append(["DEMO-013", value, 1.2, 7.1, 52, 19500, 98, 7])
+    book.save(path)
+    return path
+
+
+def test_numbers_are_not_merged_across_table_cells():
+    assert extract.value_agrees(21000.0, "number", "DEMO-012 | 16.10.2026 | 1.4 | 6.8 | 47 | 21000 | 125", "x")
+    assert not extract.value_agrees(21000125.0, "number", "DEMO-012 | 47 | 21000 | 125", "x")
+    assert extract.value_agrees(18500.0, "number", "Хлориды: 18 500 мг/л", "x")
+
+
+def test_text_dates_in_excel():
+    from app.core.excel_ingestion import _as_datetime
+
+    assert _as_datetime("16.10.2026").date().isoformat() in {"2026-10-15", "2026-10-16"}   # local midnight in UTC
+    assert _as_datetime("16.10.2026 10:30").hour == 7                                        # Moscow → UTC
+    with pytest.raises(ValueError):
+        _as_datetime("вчера")
+
+
+def test_chemistry_only_table_is_a_khimik_sample(tmp_path):
+    from app.core.documents.text import detect_profile
+    from app.core.excel_ingestion import parse_excel
+
+    path = _chemistry_book(tmp_path / "chem.xlsx")
+    assert detect_profile(path.read_bytes(), path.name) == "khimik"
+    parsed = parse_excel(path.read_bytes(), path.name, "khimik")
+    assert parsed["rows_accepted"] == 2
+    assert parsed["extra_columns"] == ["pH", "Жёсткость, мг-экв/л"]          # «Куст» is an identifier
+    point = parsed["groups"]["DEMO-012"]["records"][0]
+    assert point.extra_measurements == {"pH": 6.8, "Жёсткость, мг-экв/л": 125.0}
+
+
+@needs_db
+def test_mixed_chemistry_table_through_documents(client, tmp_path):
+    document = _upload(client, _chemistry_book(tmp_path / "analizy.xlsx"))
+    assert document["status"] == "loaded", document["status_message"]
+    assert document["doc_type"] == "source:khimik"
+    detail = client.get(f"/api/v1/documents/{document['document_id']}").json()
+    assert detail["loaded"]["extra_columns"] == ["pH", "Жёсткость, мг-экв/л"]
+    assert "Куст" in detail["loaded"]["unused_columns"]
+    well = _well(client, "DEMO-012")
+    assert well["sampling"] is True and "samples" not in _gap_keys(well)
+    extras = {item["name"]: item for item in well["extra_measurements"]}
+    assert extras["pH"]["value"] == 6.8 and extras["pH"]["source"] == "ХИМИК"
+    assert extras["pH"]["date"][:10] == (TODAY - timedelta(days=3)).isoformat()
+
+
+@needs_db
+def test_protocol_with_other_indicators(client, tmp_path):
+    path = _chemistry_book(tmp_path / "protokol.xlsx", title=["ПРОТОКОЛ ХИМИЧЕСКОГО АНАЛИЗА № 21"])
+    document = _upload(client, path)
+    assert document["status"] == "loaded", document["status_message"]
+    assert document["doc_type"] == "lab_protocol"
+    detail = client.get(f"/api/v1/documents/{document['document_id']}").json()
+    record = detail["extraction"]["records"][0]
+    assert record["fields"]["chlorides_mg_l"]["value"] == 21000.0
+    names = {item["name"] for item in record["fields"]["extra_measurements"]["value"]}
+    assert {"pH", "Жёсткость, мг-экв/л"} <= names
+    extras = {item["name"]: item for item in _well(client, "DEMO-012")["extra_measurements"]}
+    assert extras["pH"]["source"] == "Протокол хим. анализа (документ)"
+    # The AI agent sees them as context.
+    from app.core.proposal_agent import build_context
+    assert any(item["name"] == "pH" for item in build_context("DEMO-012")["other_measurements"])

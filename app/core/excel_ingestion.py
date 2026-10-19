@@ -89,8 +89,17 @@ def _as_datetime(value: Any) -> datetime:
             raise ValueError("date is empty")
         try:
             parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        except ValueError as exc:
-            raise ValueError("date must be an Excel date or ISO 8601 value") from exc
+        except ValueError:
+            parsed = None
+            # Dates typed as text the Russian way: 16.10.2026, 16.10.2026 10:30, 16.10.26.
+            for pattern in ("%d.%m.%Y", "%d.%m.%Y %H:%M", "%d.%m.%Y %H:%M:%S", "%d.%m.%y", "%d.%m.%y %H:%M"):
+                try:
+                    parsed = datetime.strptime(" ".join(raw.split()), pattern)
+                    break
+                except ValueError:
+                    continue
+            if parsed is None:
+                raise ValueError("date must be an Excel date, ISO 8601 or ДД.ММ.ГГГГ value") from None
     else:
         raise ValueError("date must be an Excel date or ISO 8601 value")
     if parsed.tzinfo is None:
@@ -163,6 +172,37 @@ def _source_field_metadata(profile: dict, headers: list[Any]) -> dict[str, str]:
                 resolved[canonical] = columns[key]
                 break
     return resolved
+
+
+# Columns that are identifiers, not indicators, even when they hold numbers.
+_EXTRA_EXCLUDE_DEFAULT = ["№", "номер", "куст", "цех", "участок", "код", "id", "пласт", "бригада", "примечание"]
+
+
+def _extra_measurements(headers: list[Any], values: tuple[Any, ...], source_fields: dict[str, str],
+                        profile: dict) -> dict[str, float]:
+    """Numeric values of columns the profile does not map (pH, hardness…), by column name."""
+    if profile.get("extra_columns") is False:
+        return {}
+    used = set(source_fields.values())
+    exclude = [_header_key(word) for word in profile.get("extra_columns_exclude", _EXTRA_EXCLUDE_DEFAULT)]
+    extras: dict[str, float] = {}
+    for index, header in enumerate(headers):
+        if header is None or str(header) in used or index >= len(values):
+            continue
+        name = " ".join(str(header).split())
+        key = _header_key(name)
+        if not key or any(word and (key == word or key.startswith(word)) for word in exclude):
+            continue
+        value = values[index]
+        if value is None or isinstance(value, (bool, datetime, date)):
+            continue
+        try:
+            number = _number(value)
+        except (TypeError, ValueError):
+            continue
+        if number is not None and number == number and abs(number) != float("inf"):
+            extras[name[:100]] = number
+    return extras
 
 
 def _detect_header_row(sheet, profile: dict, scan_rows: int = 15) -> tuple[int, list[Any]]:
@@ -281,6 +321,7 @@ def parse_excel(content: bytes, filename: str, profile_id: str, supplied_well_id
         except (TypeError, ValueError) as exc:
             raise ExcelImportError(f"Profile '{profile_id}' contains an invalid scale_fields multiplier") from exc
 
+        extra_columns: dict[str, None] = {}
         for sheet, header_row_number, headers, _source_fields in selected_sheets:
             for excel_row, values in enumerate(
                 sheet.iter_rows(min_row=header_row_number + 1,
@@ -325,6 +366,10 @@ def parse_excel(content: bytes, filename: str, profile_id: str, supplied_well_id
                             normalized[field] = _text(normalized[field])
                         if "in_operation" in normalized:
                             normalized["in_operation"] = _operation_status(normalized["in_operation"])
+                        extras = _extra_measurements(headers, values, _source_fields, profile)
+                        if extras:
+                            normalized["extra_measurements"] = extras
+                            extra_columns.update(dict.fromkeys(extras))
                         point = TelemetryPoint.model_validate(normalized)
                         telemetry_rows[well_id].append(point)
                     else:
@@ -385,6 +430,8 @@ def parse_excel(content: bytes, filename: str, profile_id: str, supplied_well_id
                 column for columns in ignored_columns_by_sheet.values() for column in columns
             )),
             "ignored_columns_by_sheet": ignored_columns_by_sheet,
+            # Unmapped columns whose numbers were kept as additional indicators (not in the rating).
+            "extra_columns": list(extra_columns),
             "rows_read": rows_read, "rows_accepted": accepted, "rows_rejected": rows_read - accepted,
             "errors": errors, "groups": grouped, "file_sha256": file_hash,
             "status": "ok" if accepted and not errors else ("partial" if accepted else "error"),

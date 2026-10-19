@@ -44,6 +44,8 @@ SYSTEM_PROMPT = (
     "4. deadline — дата ГГГГ-ММ-ДД не позже rating.deadline, если он задан.\n"
     "5. Формулировки действий бери по образцу response_examples для похожих ситуаций.\n"
     "6. based_on — какие данные использованы (например «акт разбора 12.03.2026: язвенная коррозия»).\n"
+    "7. other_measurements (pH, жёсткость и т. п.) не входят в расчёт рейтинга; используй их только как "
+    "дополнительный контекст и прямо укажи, если опираешься на них.\n"
     'Формат: {"measure": "...", "summary": "одно предложение", "actions": ["..."], "deadline": '
     '"ГГГГ-ММ-ДД" или null, "crew": {"crew_id": "...", "date": "ГГГГ-ММ-ДД"} или null, '
     '"reasoning": "...", "missing_data": ["..."], "based_on": ["..."]}'
@@ -150,6 +152,11 @@ def build_context(well_id: str) -> dict | None:
                             **values})
     context["lab_samples"] = samples[-4:]
     context["latest_measurements"] = latest
+    # pH, hardness and other indicators the system has no field for: context only.
+    from app.core.rating_builder import extra_measurements
+
+    context["other_measurements"] = [{"name": item["name"], "value": item["value"], "date": _iso(item["date"]),
+                                      "source": item["source"]} for item in extra_measurements(well_id)]
 
     titles = {}
     try:

@@ -48,6 +48,10 @@ class TelemetryPoint(BaseModel):
     tonnage_t: float | None = Field(default=None, ge=0, le=10000)
     liquid_rate_m3_day: float | None = Field(default=None, ge=0, le=100000)
     noo_days: float | None = Field(default=None, ge=0, le=100000)
+    # Indicators the system has no field for (pH, hardness, iron…), keyed by the column or
+    # indicator name with its unit. Stored and shown in the well card and given to the AI agent;
+    # they do not enter the risk models or the rating.
+    extra_measurements: dict[str, float] | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -55,6 +59,18 @@ class TelemetryPoint(BaseModel):
         if isinstance(value, dict) and "water_compatibility_issue" not in value and "incompatible_water" in value:
             value = {**value, "water_compatibility_issue": value["incompatible_water"]}
         return value
+
+    @field_validator("extra_measurements")
+    @classmethod
+    def valid_extra_measurements(cls, value: dict[str, float] | None) -> dict[str, float] | None:
+        if not value:
+            return None
+        cleaned: dict[str, float] = {}
+        for name, number in list(value.items())[:30]:
+            name = " ".join(str(name).split())[:100]
+            if name and number is not None and math.isfinite(float(number)):
+                cleaned[name] = float(number)
+        return cleaned or None
 
     @field_validator(
         "water_cut_pct", "co2_pct", "chlorides_mg_l", "inhibitor_efficiency",

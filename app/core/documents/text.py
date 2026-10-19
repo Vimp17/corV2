@@ -164,12 +164,14 @@ def detect_profile(content: bytes, filename: str) -> str | None:
     """The source profile (ДАРС / ХИМИК / ЭРА) whose table layout the workbook has, if any.
 
     A profile matches when its parser accepts at least half of the rows and recognises at least
-    three columns; among matches the one recognising the most columns (and ignoring the fewest)
-    wins, so a ХИМИК table with tonnage / НОО columns is not taken for ДАРС."""
+    three columns. Among matches wins the one recognising the most columns and ignoring the
+    fewest; then the one recognising columns no other match knows (дебит, статус → ДАРС;
+    тоннаж, НОО → ХИМИК); a remaining tie — a table of chemistry only (CO₂, хлориды, pH…) —
+    goes to the laboratory profile, so it counts as a sample."""
     from app.core.excel_ingestion import ExcelImportError, load_profiles, parse_excel
 
     name = filename if filename.casefold().endswith(".xlsx") else "document.xlsx"
-    best: tuple[tuple[int, int, int], str] | None = None
+    candidates: list[dict] = []
     for profile_id, profile in load_profiles().items():
         if profile.get("kind") not in {"telemetry", "history"}:
             continue
@@ -178,13 +180,22 @@ def detect_profile(content: bytes, filename: str) -> str | None:
         except (ExcelImportError, ValueError):
             continue
         accepted, read = parsed.get("rows_accepted") or 0, parsed.get("rows_read") or 0
+        fields = {field for columns in (parsed.get("source_columns_by_sheet") or {}).values() for field in columns}
         recognised = sum(len(columns) for columns in (parsed.get("source_columns_by_sheet") or {}).values())
         if not accepted or accepted * 2 < read or recognised < 3:
             continue
-        score = (recognised - len(parsed.get("ignored_columns") or []), recognised, accepted)
-        if best is None or score > best[0]:
-            best = (score, profile_id)
-    return best[1] if best else None
+        candidates.append({"profile_id": profile_id, "fields": fields, "recognised": recognised,
+                           "unknown": len(parsed.get("ignored_columns") or []) - len(parsed.get("extra_columns") or []),
+                           "ignored": len(parsed.get("ignored_columns") or []), "accepted": accepted,
+                           "lab": bool(profile.get("lab_samples"))})
+    if not candidates:
+        return None
+    for item in candidates:
+        others = set().union(*(other["fields"] for other in candidates if other is not item)) if len(candidates) > 1 else set()
+        item["exclusive"] = len(item["fields"] - others)
+    best = max(candidates, key=lambda item: (item["recognised"] - item["ignored"], item["exclusive"], item["lab"],
+                                             item["accepted"]))
+    return best["profile_id"]
 
 
 def document_text(document: dict, content: bytes) -> TextResult:
