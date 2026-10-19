@@ -205,13 +205,16 @@ def _extra_measurements(headers: list[Any], values: tuple[Any, ...], source_fiel
     return extras
 
 
-def _detect_header_row(sheet, profile: dict, scan_rows: int = 15) -> tuple[int, list[Any]]:
+def _detect_header_row(sheet, profile: dict, scan_rows: int = 15,
+                       require_well: bool = False) -> tuple[int, list[Any]]:
     """Find the first of the top rows that holds every required column (header_row: "auto").
 
     Lets one profile read both a plain table (headers in row 1) and the template, whose header
     sits under a title and group rows. Falls back to row 1 so the usual diagnostics apply.
     """
     required = set(profile.get("required_columns", []))
+    if require_well and "well_id" in profile.get("field_map", {}):
+        required.add("well_id")
     first: list[Any] | None = None
     for number, values in enumerate(sheet.iter_rows(min_row=1, max_row=scan_rows, values_only=True), start=1):
         headers = list(values or [])
@@ -222,7 +225,11 @@ def _detect_header_row(sheet, profile: dict, scan_rows: int = 15) -> tuple[int, 
     return 1, first or []
 
 
-def parse_excel(content: bytes, filename: str, profile_id: str, supplied_well_id: str | None = None) -> dict:
+def parse_excel(content: bytes, filename: str, profile_id: str, supplied_well_id: str | None = None,
+                auto_header: bool = False) -> dict:
+    """Parse a workbook with a source profile. auto_header: look for the header row (with the
+    well and date columns) in the first 30 rows instead of the configured row — for tables
+    under a title, e.g. a laboratory protocol saved as Excel."""
     if Path(filename).suffix.casefold() != ".xlsx":
         raise ExcelImportError("Only .xlsx files are supported. Save legacy .xls files as .xlsx first.")
     if len(content) > settings.max_excel_bytes:
@@ -267,8 +274,11 @@ def parse_excel(content: bytes, filename: str, profile_id: str, supplied_well_id
         sheet_header_rows = profile.get("sheet_header_rows", {})
         for sheet in candidate_sheets:
             configured_header = sheet_header_rows.get(sheet.title, profile.get("header_row", 1))
+            if auto_header:
+                configured_header = "auto"
             if configured_header == "auto":
-                header_row_number, headers = _detect_header_row(sheet, profile)
+                header_row_number, headers = (_detect_header_row(sheet, profile, scan_rows=30, require_well=True)
+                                              if auto_header else _detect_header_row(sheet, profile))
             else:
                 try:
                     header_row_number = int(configured_header)
@@ -338,6 +348,9 @@ def parse_excel(content: bytes, filename: str, profile_id: str, supplied_well_id
                 row = _row_values(headers, values, profile.get("field_map", {}))
                 # Notes or totals typed beside the table fill only unmapped columns: not a data row.
                 if not any(value is not None and str(value).strip() for value in row.values()):
+                    continue
+                # A note under the table («Лаборант ____») fills only the well column: not a data row.
+                if {key for key, value in row.items() if value is not None and str(value).strip()} <= {"well_id"}:
                     continue
                 if rows_read >= settings.max_excel_rows:
                     raise ExcelImportError(f"Workbook exceeds the {settings.max_excel_rows} row processing limit")

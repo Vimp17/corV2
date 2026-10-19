@@ -224,7 +224,8 @@ def test_lab_protocol_excel_form_counts_as_samples(client, generated):
     assert "samples" in _gap_keys(_well(client, "DEMO-012"))
     document = _upload(client, generated / "documents" / "protokol_khim_analiza_15.xlsx")
     assert document["status"] == "loaded", document["status_message"]
-    assert document["doc_type"] == "lab_protocol"
+    # The table under the protocol title is found by its header row: a ХИМИК import, no AI.
+    assert document["doc_type"] == "source:khimik"
     assert document["well_ids"] == ["DEMO-012", "DEMO-013"]
     well = _well(client, "DEMO-012")
     assert well["sampling"] is True
@@ -414,18 +415,109 @@ def test_mixed_chemistry_table_through_documents(client, tmp_path):
 
 
 @needs_db
-def test_protocol_with_other_indicators(client, tmp_path):
+def test_protocol_with_other_indicators(client, tmp_path, fake):
     path = _chemistry_book(tmp_path / "protokol.xlsx", title=["ПРОТОКОЛ ХИМИЧЕСКОГО АНАЛИЗА № 21"])
     document = _upload(client, path)
     assert document["status"] == "loaded", document["status_message"]
-    assert document["doc_type"] == "lab_protocol"
+    assert document["doc_type"] == "source:khimik"
+    assert not [call for call in fake.calls if call["kind"] in {"extract", "classify"}]
     detail = client.get(f"/api/v1/documents/{document['document_id']}").json()
-    record = detail["extraction"]["records"][0]
-    assert record["fields"]["chlorides_mg_l"]["value"] == 21000.0
-    names = {item["name"] for item in record["fields"]["extra_measurements"]["value"]}
-    assert {"pH", "Жёсткость, мг-экв/л"} <= names
+    assert detail["loaded"]["extra_columns"] == ["pH", "Жёсткость, мг-экв/л"]
     extras = {item["name"]: item for item in _well(client, "DEMO-012")["extra_measurements"]}
-    assert extras["pH"]["source"] == "Протокол хим. анализа (документ)"
+    assert extras["pH"]["value"] == 6.8 and extras["pH"]["source"] == "ХИМИК"
     # The AI agent sees them as context.
     from app.core.proposal_agent import build_context
     assert any(item["name"] == "pH" for item in build_context("DEMO-012")["other_measurements"])
+
+
+# --------------------------------------------------------------------------- Excel without AI
+def _book(path, rows):
+    from openpyxl import Workbook
+
+    book = Workbook()
+    sheet = book.active
+    sheet.title = "Анализы"
+    for row in rows:
+        sheet.append(row)
+    book.save(path)
+    return path
+
+
+def _custom_table(path, date_in_title=True, wells=("DEMO-012", "DEMO-013")):
+    when = (TODAY - timedelta(days=2)).strftime("%d.%m.%Y")
+    rows = [["Результаты анализа попутной воды"]]
+    if date_in_title:
+        rows.append([f"Дата отбора проб: {when}"])
+    rows += [[], ["№ п/п", "№ скв.", "Обводн., %", "Cl-, мг/л", "Содержание CO2, %", "pH", "Fe общ., мг/л", "Эффективность ингибитора, %"]]
+    for index, well in enumerate(wells, start=1):
+        rows.append([index, well, 40 + index, f"{20 + index} 500", 1.1 + index / 10, 6.5 + index / 10, 0.3, 86])
+    return _book(path, rows)
+
+
+def test_excel_table_with_custom_headers_and_date_in_title(tmp_path):
+    from app.core.documents.excel_reader import read_workbook
+
+    result = read_workbook(_custom_table(tmp_path / "t.xlsx").read_bytes(), ["DEMO-012", "DEMO-013"])
+    assert result["layout"] == "table" and result["accepted"] == 2
+    record = result["records"][0]
+    fields = {name: entry["value"] for name, entry in record["fields"].items() if entry["status"] == "ok"}
+    assert record["well_id"] == "DEMO-012"
+    assert fields["sample_date"] == (TODAY - timedelta(days=2)).isoformat()
+    assert fields["water_cut_pct"] == 41 and fields["chlorides_mg_l"] == 21500 and fields["co2_pct"] == 1.2
+    assert fields["inhibitor_efficiency"] == 0.86                     # percent -> fraction
+    assert {item["name"] for item in fields["extra_measurements"]} == {"pH", "Fe общ., мг/л"}   # «№ п/п» skipped
+    assert record["fields"]["chlorides_mg_l"]["quote"].startswith("Лист «Анализы», D5")
+
+
+def test_excel_numeric_well_unknown_well_and_missing_date(tmp_path):
+    from app.core.documents.excel_reader import not_found_reason, read_workbook
+
+    path = _book(tmp_path / "n.xlsx", [["Скважина", "Дата", "Хлориды, мг/л"], [1234, TODAY, 21000], [5555, TODAY, 20000]])
+    result = read_workbook(path.read_bytes(), ["1234"])
+    assert result["accepted"] == 1 and result["records"][0]["well_id"] == "1234"
+    assert "Скважины «5555» нет в справочнике." in result["records"][1]["issues"]
+    no_date = read_workbook(_custom_table(tmp_path / "d.xlsx", date_in_title=False).read_bytes(), ["DEMO-012", "DEMO-013"])
+    assert no_date["accepted"] == 0 and "Не найдена дата" in not_found_reason(no_date)
+    nothing = read_workbook(_book(tmp_path / "x.xlsx", [["Итоги квартала"], ["План", 10]]).read_bytes(), ["DEMO-012"])
+    assert "не найдена скважина" in not_found_reason(nothing)
+
+
+def _form(path, well="DEMO-012"):
+    when = (TODAY - timedelta(days=1)).strftime("%d.%m.%Y")
+    return _book(path, [["ПРОТОКОЛ ИСПЫТАНИЙ № 7"], [f"Скважина № {well}"], ["Дата отбора", when], [],
+                        ["Показатель", "Ед. изм.", "Значение"], ["Обводнённость", "%", 48], ["Хлориды", "мг/л", "21 000"],
+                        ["pH", None, "6,9"], ["Сульфаты", "мг/л", 140], ["Номер пробы", None, 15]])
+
+
+def test_excel_form_with_one_sample(tmp_path):
+    from app.core.documents.excel_reader import read_workbook
+
+    result = read_workbook(_form(tmp_path / "f.xlsx").read_bytes(), ["DEMO-012"])
+    assert result["layout"] == "form" and result["accepted"] == 1
+    fields = {name: entry["value"] for name, entry in result["records"][0]["fields"].items() if entry["status"] == "ok"}
+    assert fields["water_cut_pct"] == 48 and fields["chlorides_mg_l"] == 21000
+    assert {item["name"] for item in fields["extra_measurements"]} == {"pH", "Сульфаты, мг/л"}
+
+
+@needs_db
+def test_excel_documents_load_without_llm(client, tmp_path, monkeypatch):
+    from app.config import settings
+    from app.core import llm
+
+    def no_llm(*args, **kwargs):
+        raise AssertionError("Excel must not call the LLM")
+
+    monkeypatch.setattr(llm, "chat", no_llm)
+    monkeypatch.setattr(type(settings), "extraction_model", property(lambda self: ""))
+    table = _upload(client, _custom_table(tmp_path / "analizy.xlsx"))
+    assert table["status"] == "loaded", table["status_message"]
+    assert table["doc_type"] == "excel:table" and table["type_title"] == "Таблица показателей (Excel)"
+    well = _well(client, "DEMO-012")
+    assert well["sampling"] is True and "samples" not in _gap_keys(well)
+    assert {"pH", "Fe общ., мг/л"} <= {item["name"] for item in well["extra_measurements"]}
+    form = _upload(client, _form(tmp_path / "forma.xlsx", well="DEMO-013"))
+    assert form["status"] == "loaded" and form["doc_type"] == "excel:form", form["status_message"]
+    unknown = _upload(client, _custom_table(tmp_path / "chuzhie.xlsx", wells=("X-1", "X-2")))
+    assert unknown["status"] == "not_recognized" and "нет в справочнике" in unknown["status_message"]
+    detail = client.get(f"/api/v1/documents/{table['document_id']}").json()
+    assert detail["field_labels"]["chlorides_mg_l"] == "Хлориды, мг/л"

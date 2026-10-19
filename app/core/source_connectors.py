@@ -44,8 +44,9 @@ def ingest_excel_bytes(
     profile_id: str,
     well_id: str | None = None,
     origin: str = "manual_upload",
+    auto_header: bool = False,
 ) -> dict:
-    parsed = parse_excel(content, filename, profile_id, well_id)
+    parsed = parse_excel(content, filename, profile_id, well_id, auto_header=auto_header)
     source_id = parsed["source_id"]
 
     imported: list[dict] = []

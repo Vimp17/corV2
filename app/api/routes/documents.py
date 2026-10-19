@@ -132,7 +132,7 @@ def get_document(document_id: str, include_text: bool = Query(default=False)) ->
         types = {}
     spec = types.get(row.get("doc_type") or "")
     row["field_labels"] = ({name: field.get("label", name) for name, field in spec["fields"].items()}
-                           if spec else {})
+                           if spec else dict((row.get("extraction") or {}).get("field_labels") or {}))
     return pipeline.decorate(row, {key: value.get("title") or key for key, value in types.items()})
 
 

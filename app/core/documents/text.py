@@ -163,8 +163,9 @@ def workbook_text(content: bytes) -> TextResult:
 def detect_profile(content: bytes, filename: str) -> str | None:
     """The source profile (ДАРС / ХИМИК / ЭРА) whose table layout the workbook has, if any.
 
-    A profile matches when its parser accepts at least half of the rows and recognises at least
-    three columns. Among matches wins the one recognising the most columns and ignoring the
+    The header row is looked for in the first 30 rows (a table may sit under a title). A profile
+    matches when its parser accepts at least half of the rows and recognises at least three
+    columns. Among matches wins the one recognising the most columns and ignoring the
     fewest; then the one recognising columns no other match knows (дебит, статус → ДАРС;
     тоннаж, НОО → ХИМИК); a remaining tie — a table of chemistry only (CO₂, хлориды, pH…) —
     goes to the laboratory profile, so it counts as a sample."""
@@ -176,7 +177,7 @@ def detect_profile(content: bytes, filename: str) -> str | None:
         if profile.get("kind") not in {"telemetry", "history"}:
             continue
         try:
-            parsed = parse_excel(content, name, profile_id)
+            parsed = parse_excel(content, name, profile_id, auto_header=True)
         except (ExcelImportError, ValueError):
             continue
         accepted, read = parsed.get("rows_accepted") or 0, parsed.get("rows_read") or 0
