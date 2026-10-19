@@ -1,0 +1,80 @@
+{
+  "_comment": "Document types the pipeline recognises in PDF, scans, photos and Excel forms. keywords: words of the title or body that identify the type (no LLM needed when they match). fields: what the extraction model looks for; required fields must be found (with a quote from the document) or the document is 'not recognised' and its data counts as missing. informative_fields: at least one of them must be found too. target: work_event (an ERA-like event: demount or base-inspection act), telemetry (laboratory sample rows), passport (well attributes). A new type needs only a new entry here.",
+  "document_types": {
+    "demount_act": {
+      "title": "Акт демонтажа",
+      "description": "Акт демонтажа (подъёма) скважинного оборудования: дата, оборудование, состояние, следы коррозии.",
+      "source_id": "DOC_DEMOUNT",
+      "keywords": ["акт демонтажа", "акт на демонтаж", "акт подъема", "акт подъёма", "демонтаж оборудования", "демонтаж уэцн", "демонтаж гну"],
+      "target": "work_event",
+      "work_type": "Акт демонтажа",
+      "multi": false,
+      "fields": {
+        "well_id": {"label": "Номер скважины", "type": "string", "required": true, "hint": "Номер скважины как в документе, например 1234 или 1234Б; без слова «скважина»."},
+        "act_date": {"label": "Дата демонтажа (акта)", "type": "date", "required": true},
+        "field": {"label": "Месторождение", "type": "string"},
+        "equipment": {"label": "Демонтированное оборудование", "type": "string", "hint": "Насос, НКТ, их исполнение (с покрытием, коррозионностойкое и т. п.)."},
+        "cause": {"label": "Причина демонтажа", "type": "string"},
+        "corrosion_detected": {"label": "Обнаружена коррозия", "type": "boolean", "hint": "true — в акте указаны коррозия, коррозионный износ, язвы, свищи от коррозии; false — прямо указано, что коррозии нет; null — не сказано."},
+        "corrosion_description": {"label": "Описание коррозии и дефектов", "type": "string"}
+      },
+      "informative_fields": ["corrosion_detected", "corrosion_description", "equipment"]
+    },
+    "base_inspection_act": {
+      "title": "Акт разбора на базе",
+      "description": "Акт разбора (дефектовки) оборудования на базе после демонтажа: найденные дефекты и коррозия.",
+      "source_id": "DOC_BASE",
+      "keywords": ["акт разбора", "акт дефектовки", "дефектовочная ведомость", "разбор на базе", "результаты разбора", "акт осмотра оборудования на базе"],
+      "target": "work_event",
+      "work_type": "Акт разбора на базе",
+      "multi": false,
+      "fields": {
+        "well_id": {"label": "Номер скважины", "type": "string", "required": true, "hint": "Номер скважины, с которой поднято оборудование."},
+        "act_date": {"label": "Дата разбора (акта)", "type": "date", "required": true},
+        "field": {"label": "Месторождение", "type": "string"},
+        "equipment": {"label": "Оборудование", "type": "string"},
+        "corrosion_detected": {"label": "Обнаружена коррозия", "type": "boolean", "hint": "true — найдены коррозия, коррозионный износ, язвы; false — прямо указано, что коррозии нет; null — не сказано."},
+        "corrosion_type": {"label": "Вид коррозии", "type": "string", "hint": "Например: язвенная, локальная, общая (равномерная), углекислотная, сероводородная."},
+        "corrosion_location": {"label": "Где обнаружена", "type": "string", "hint": "Узел или место: тело трубы, муфта, рабочие органы насоса и т. п."},
+        "cause": {"label": "Заключение о причине отказа", "type": "string"}
+      },
+      "informative_fields": ["corrosion_detected", "corrosion_type", "corrosion_location", "cause"]
+    },
+    "lab_protocol": {
+      "title": "Протокол хим. анализа",
+      "description": "Протокол лабораторного (химического) анализа пробы жидкости или воды по скважинам.",
+      "source_id": "DOC_LAB",
+      "lab_samples": true,
+      "keywords": ["протокол хим", "протокол химического анализа", "протокол анализа", "протокол испытаний", "химический анализ", "анализ попутно-добываемой воды", "результаты анализа пробы"],
+      "target": "telemetry",
+      "multi": true,
+      "fields": {
+        "well_id": {"label": "Номер скважины", "type": "string", "required": true},
+        "sample_date": {"label": "Дата отбора пробы", "type": "date", "required": true, "hint": "Если даты отбора нет — дата протокола."},
+        "water_cut_pct": {"label": "Обводнённость, %", "type": "number"},
+        "chlorides_mg_l": {"label": "Хлориды, мг/л", "type": "number", "hint": "Только если указано в мг/л."},
+        "co2_pct": {"label": "CO₂, %", "type": "number", "hint": "Только если указано в процентах."},
+        "corrosion_rate_mm_year": {"label": "Скорость коррозии, мм/год", "type": "number", "hint": "Только если указана в мм/год (образцы-свидетели, гравиметрия)."},
+        "inhibitor_efficiency": {"label": "Эффективность ингибитора, доля 0–1", "type": "number", "hint": "Если указана в процентах — разделите на 100."}
+      },
+      "informative_fields": ["water_cut_pct", "chlorides_mg_l", "co2_pct", "corrosion_rate_mm_year", "inhibitor_efficiency"]
+    },
+    "well_passport": {
+      "title": "Паспорт скважины",
+      "description": "Паспорт скважины: месторождение, конструкция, спущенное оборудование и дата спуска.",
+      "source_id": "DOC_PASSPORT",
+      "keywords": ["паспорт скважины", "паспорт добывающей скважины", "технический паспорт скважины", "эксплуатационный паспорт"],
+      "target": "passport",
+      "multi": false,
+      "fields": {
+        "well_id": {"label": "Номер скважины", "type": "string", "required": true},
+        "passport_date": {"label": "Дата паспорта или последнего изменения", "type": "date"},
+        "field": {"label": "Месторождение", "type": "string"},
+        "equipment": {"label": "Спущенное оборудование", "type": "string", "hint": "Тип насоса и НКТ, исполнение (с покрытием, коррозионностойкое), контейнер ингибитора."},
+        "install_date": {"label": "Дата спуска оборудования", "type": "date"},
+        "initial_wall_thickness_mm": {"label": "Толщина стенки НКТ, мм", "type": "number"}
+      },
+      "informative_fields": ["field", "equipment", "install_date"]
+    }
+  }
+}

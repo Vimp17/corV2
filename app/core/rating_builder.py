@@ -67,6 +67,12 @@ class _Sources:
             for key, words in (profile.get("rating_work_types") or {}).items():
                 work_types.setdefault(key, []).extend(_norm(word) for word in words)
             protection_words.extend(_norm(word) for word in profile.get("protection_keywords") or [])
+        # Data taken from documents (acts, lab protocols, passports) is stored under the
+        # document type's source_id; lab protocols count as laboratory samples.
+        from app.core.documents.types import lab_source_ids, source_titles
+
+        self.titles.update(source_titles())
+        self.lab_ids |= lab_source_ids()
         self.protection_words = protection_words or [_norm(word) for word in _DEFAULT_PROTECTION_WORDS]
         self.work_types = {key: work_types.get(key) or _DEFAULT_WORK_TYPES[key] for key in _DEFAULT_WORK_TYPES}
 
@@ -171,9 +177,29 @@ def _model_scores(result: PipelineResult | None, sources: _Sources,
 GAP_LABELS = rating.GAP_LABELS
 
 
+def well_passports(well_id: str) -> list[tuple[str, dict, datetime | None]]:
+    """Passport fields taken from documents: (source_id, fields, passport date)."""
+    from app.core.documents.types import passport_source_ids
+
+    ids = passport_source_ids()
+    result = []
+    for source_id, payload in db.load_source_payloads(well_id).items():
+        if source_id in ids and isinstance(payload.get("passport"), dict):
+            fields = payload["passport"]
+            when = None
+            if fields.get("passport_date"):
+                try:
+                    when = datetime.fromisoformat(fields["passport_date"]).replace(tzinfo=timezone.utc)
+                except ValueError:
+                    when = None
+            result.append((source_id, fields, when))
+    return result
+
+
 def build_values(well_id: str, records: list[TelemetryPoint], events: list[dict],
                  prepared: PreparedAnalysis | None, result: PipelineResult | None,
-                 now: datetime | None = None, skipped: SkippedAnalysis | None = None) -> tuple[dict, dict]:
+                 now: datetime | None = None, skipped: SkippedAnalysis | None = None,
+                 passports: list[tuple[str, dict, datetime | None]] | None = None) -> tuple[dict, dict]:
     """Rating field values and their provenance for one well."""
     now = now or datetime.now(timezone.utc)
     sources = _Sources()
@@ -187,6 +213,11 @@ def build_values(well_id: str, records: list[TelemetryPoint], events: list[dict]
         values[field] = value
         if point is not None:
             prov[field] = _prov(sources, _record_sources(point), point.timestamp)
+    # A field missing from telemetry is taken from the well passport document.
+    for source_id, fields, when in passports or []:
+        if values.get("field") is None and fields.get("field"):
+            values["field"] = str(fields["field"])[:256]
+            prov["field"] = _prov(sources, source_id, when, "Из паспорта скважины.")
 
     # Oil share from the latest water cut (by volume).
     water_cut, point = _latest(records, "water_cut_pct")
@@ -416,7 +447,8 @@ def update_from_analysis(well_id: str, records: list[TelemetryPoint],
             except Exception:  # evidence is optional for a skipped well
                 logger.info("Rating evidence could not be prepared for well_id=%s", well_id, exc_info=True)
         events = db.load_history_events(well_id)
-        values, provenance = build_values(well_id, records, events, prepared, result, skipped=skipped)
+        values, provenance = build_values(well_id, records, events, prepared, result, skipped=skipped,
+                                          passports=well_passports(well_id))
         measure = rating.measure_for(rating.priority_index(values["model_ntc"], values["model_math"]))
         return db.save_computed_rating(
             well_id, values, measure=measure, provenance=provenance,

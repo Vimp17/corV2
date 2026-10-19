@@ -145,8 +145,48 @@ class Settings:
     smtp_password: str = os.getenv("MAI_SMTP_PASSWORD", "")
     smtp_security: str = os.getenv("MAI_SMTP_SECURITY", "starttls").strip().lower()
     smtp_from: str = os.getenv("MAI_SMTP_FROM", "").strip()
+    # Documents (Excel, PDF, scans and photos): originals are kept under docs_storage_dir; files
+    # dropped into docs_inbox_dir (empty = no inbox) are picked up every docs_inbox_scan_seconds.
+    docs_storage_dir: Path = _project_path("MAI_DOCS_STORAGE_DIR", "./data/documents")
+    docs_inbox_dir: str = os.getenv("MAI_DOCS_INBOX_DIR", "").strip()
+    docs_inbox_scan_seconds: int = _int_env("MAI_DOCS_INBOX_SCAN_SECONDS", "300", 10, 86400)
+    # Background worker that processes queued documents and scans the inbox (off = only the
+    # POST /documents/process-queue call processes them, e.g. from n8n).
+    docs_worker_enabled: bool = os.getenv("MAI_DOCS_WORKER", "true").strip().lower() not in {"0", "false", "no", "off"}
+    # OCR / LLM unavailable: the document is retried this many times, this many minutes apart.
+    docs_max_attempts: int = _int_env("MAI_DOCS_MAX_ATTEMPTS", "3", 1, 20)
+    docs_retry_minutes: int = _int_env("MAI_DOCS_RETRY_MINUTES", "5", 1, 1440)
+    docs_types_path: Path = _project_path("MAI_DOCS_TYPES_PATH", "./config/document_types.json")
+    docs_max_bytes: int = _int_env("MAI_DOCS_MAX_BYTES", str(25 * 1024 * 1024), 1024, 200 * 1024 * 1024)
+    docs_max_pages: int = _int_env("MAI_DOCS_MAX_PAGES", "30", 1, 500)
+    # A PDF page with fewer characters in its text layer is treated as a scan and sent to OCR.
+    docs_min_page_chars: int = _int_env("MAI_DOCS_MIN_PAGE_CHARS", "40", 0, 10000)
+    # Characters of document text sent to the extraction model.
+    docs_max_text_chars: int = _int_env("MAI_DOCS_MAX_TEXT_CHARS", "60000", 1000, 1000000)
+    # Model that classifies documents and extracts fields (LiteLLM chat completions); empty =
+    # MAI_LLM_MODEL. The OCR model reads page images through the same LiteLLM (vision messages).
+    docs_llm_model: str = os.getenv("MAI_DOCS_LLM_MODEL", "").strip()
+    ocr_api_url: str = os.getenv("MAI_OCR_API_URL", "").strip()
+    ocr_api_key: str = os.getenv("MAI_OCR_API_KEY", "").strip()
+    ocr_model: str = os.getenv("MAI_OCR_MODEL", "").strip()
+    ocr_timeout_seconds: float = _positive_float("MAI_OCR_TIMEOUT_SECONDS", "120", 900)
+    ocr_max_side_px: int = _int_env("MAI_OCR_MAX_SIDE_PX", "2000", 500, 6000)
+    # Examples of response measures given to the AI agent when it drafts a well proposal.
+    response_examples_path: Path = _project_path("MAI_RESPONSE_EXAMPLES_PATH", "./config/response_examples.json")
     app_name: str = "MAI Corrosion Control API"
-    app_version: str = "0.7.1"
+    app_version: str = "0.8.0"
+
+    @property
+    def extraction_model(self) -> str:
+        return self.docs_llm_model or self.llm_model
+
+    @property
+    def ocr_url(self) -> str:
+        return self.ocr_api_url or self.llm_api_url
+
+    @property
+    def ocr_key(self) -> str:
+        return self.ocr_api_key if self.ocr_api_url else (self.ocr_api_key or self.llm_api_key)
 
 
 settings = Settings()

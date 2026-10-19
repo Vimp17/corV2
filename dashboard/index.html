@@ -229,6 +229,58 @@
     details.ai summary { cursor:pointer; color:var(--blue); font-size:13px; font-weight:600 }
 
     /* Data upload */
+    /* Documents: upload, list with status, extracted fields with quotes */
+    .docs { padding:16px; display:flex; flex-direction:column; gap:12px; min-width:0 }
+    .dropzone { border:2px dashed #9DB4CC; border-radius:var(--radius); background:#F8FBFE; padding:18px 20px; display:flex; flex-wrap:wrap; align-items:center; gap:10px 16px }
+    .dropzone.over { border-color:var(--blue); background:var(--sky) }
+    .dropzone strong { color:var(--navy); font-size:14px }
+    .dropzone .grow-1 { flex:1 1 240px; min-width:0 }
+    .docs-meta { display:flex; flex-wrap:wrap; gap:4px 18px; font-size:12px; color:var(--muted) }
+    .docs-meta .ok { color:var(--none); font-weight:600 } .docs-meta .warn { color:var(--ud); font-weight:600 }
+    .docs-counts { display:flex; flex-wrap:wrap; gap:6px }
+    .dstatus { display:inline-flex; align-items:center; padding:2px 8px; border-radius:10px; font-size:12px; font-weight:600; white-space:nowrap; line-height:1.4 }
+    .dstatus.loaded { background:var(--none-bg); color:var(--none) }
+    .dstatus.not_recognized { background:var(--ud-bg); color:var(--ud) }
+    .dstatus.failed { background:var(--repair-bg); color:var(--repair) }
+    .dstatus.queued, .dstatus.processing { background:var(--sky); color:var(--blue-d) }
+    .docs-table-box { overflow-x:auto; border:1px solid var(--line-2); border-radius:var(--radius) }
+    .doc-table { width:100%; border-collapse:collapse; font-size:13px; min-width:720px }
+    .doc-table th { text-align:left; font-size:12px; color:var(--muted); font-weight:600; padding:8px 10px; border-bottom:1px solid var(--line); background:#FAFBFC; white-space:nowrap }
+    .doc-table td { padding:8px 10px; border-bottom:1px solid var(--line-2); vertical-align:top; overflow-wrap:anywhere }
+    .doc-table tr.drow { cursor:pointer } .doc-table tr.drow:hover { background:#F7F9FB } .doc-table tr.drow.open { background:var(--sky) }
+    .doc-table .msg { display:block; font-size:12px; color:var(--muted); margin-top:3px }
+    .doc-detail > td { background:#FAFCFE; padding:12px 14px }
+    .doc-detail .inner { display:flex; flex-direction:column; gap:10px }
+    .fields { display:grid; grid-template-columns:minmax(130px, 220px) minmax(0, 1fr); gap:6px 14px; font-size:13px }
+    .fields dt { color:var(--muted) } .fields dd { margin:0; min-width:0 }
+    .fields .q { display:block; font-size:12px; color:var(--muted); font-style:italic }
+    .fields .rej { color:var(--ud); font-size:12px; display:block }
+    .rec-title { font-size:13px; font-weight:650; color:var(--navy) }
+    .rec-title.bad { color:var(--ud) }
+    pre.doc-text { margin:0; max-height:280px; overflow:auto; background:#fff; border:1px solid var(--line-2); border-radius:4px; padding:10px; font-size:12px; white-space:pre-wrap }
+    /* AI agent proposal in the well card */
+    .aibox { border:1px solid #B7CBE3; background:#F5F9FE; border-radius:var(--radius); padding:12px 14px; display:flex; flex-direction:column; gap:8px }
+    .aibox h3 { margin:0; font-size:14px; color:var(--navy) }
+    .aibox ul { margin:0; padding-left:18px; font-size:13px }
+    .aibox .lbl { font-size:12px; color:var(--muted) }
+    .aibox .missing { border:1.5px solid #E08A1E; background:#FFF8EC; color:#8A4B00; border-radius:6px; padding:6px 10px; font-size:12px }
+    .aibox .missing ul { font-size:12px }
+    .welldocs { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px }
+    .welldocs li { font-size:13px; display:flex; flex-wrap:wrap; gap:4px 8px; align-items:center; border-top:1px solid var(--line-2); padding-top:6px }
+    .welldocs .msg { flex-basis:100%; font-size:12px; color:var(--muted) }
+    @media (max-width: 640px) {
+      .docs { padding:12px }
+      .doc-table { min-width:0 }
+      .doc-table thead { display:none }
+      .doc-table tr.drow, .doc-table tr.doc-detail { display:block; border-bottom:1px solid var(--line) }
+      .doc-table tr.drow td { display:block; border:0; padding:2px 12px }
+      .doc-table tr.drow td:first-child { padding-top:10px; font-weight:600 }
+      .doc-table tr.drow td:last-child { padding-bottom:10px }
+      .doc-table tr.drow td[data-label]::before { content:attr(data-label) ": "; color:var(--muted); font-size:12px }
+      .doc-table tr.doc-detail > td { display:block }
+      .fields { grid-template-columns:minmax(0, 1fr) }
+      .fields dt { margin-top:6px }
+    }
     .uploads { display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:14px }
     .src { padding:16px; display:flex; flex-direction:column; gap:10px }
     .src h3 { margin:0; font-size:15px; color:var(--navy) }
@@ -269,6 +321,7 @@
         <a href="#sec-rating">Рейтинг скважин</a>
         <a href="#sec-ppr">График ППР (ДДО)</a>
         <div class="nav-sep" aria-hidden="true"></div>
+        <a href="#sec-docs">Документы</a>
         <a href="#sec-upload">Загрузка данных</a>
         <a href="#sec-crew">Расписание бригад</a>
         <a href="#sec-future">Другие источники</a>
@@ -342,6 +395,29 @@
         </section>
 
       </div>
+
+      <section class="panel docs anchor" id="sec-docs" aria-labelledby="docsTitle">
+        <div>
+          <h2 class="section" id="docsTitle">Документы</h2>
+          <div class="sub">Акты демонтажа и разбора, протоколы хим. анализа, паспорта скважин — PDF, сканы, фото и Excel. Система распознаёт текст (сканы — OCR-моделью), определяет тип и извлекает данные с цитатой из документа. Подтверждённые данные попадают в рейтинг; нераспознанный документ не учитывается — данных по нему нет.</div>
+        </div>
+        <div class="dropzone" id="dropzone">
+          <div class="grow-1">
+            <strong>Перетащите файлы сюда</strong>
+            <div class="hint" id="dropHint">PDF, Excel (.xlsx), JPG, PNG, TIFF. Можно несколько файлов сразу.</div>
+          </div>
+          <input id="docFiles" type="file" multiple accept=".pdf,.xlsx,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp" class="visually-hidden">
+          <button class="btn" id="docPick" type="button">Выбрать файлы</button>
+        </div>
+        <div class="docs-meta" id="docsMeta"></div>
+        <div class="docs-counts" id="docsCounts" role="group" aria-label="Документы по статусу"></div>
+        <div class="docs-table-box">
+          <table class="doc-table">
+            <thead><tr><th>Файл</th><th>Тип документа</th><th>Скважина</th><th>Дата документа</th><th>Статус</th><th>Получен</th></tr></thead>
+            <tbody id="docRows"><tr><td colspan="6" class="empty">Загружаем документы…</td></tr></tbody>
+          </table>
+        </div>
+      </section>
 
       <section class="anchor" id="sec-upload" aria-labelledby="uploadTitle" style="display:flex; flex-direction:column; gap:12px">
         <div>
@@ -812,6 +888,8 @@
       if (w.skip_reason && !w.measure) prop.append(el('div', { style: 'font-size:12px', text: w.skip_reason }));
       if (w.protection_adjusted) prop.append(el('div', { style: 'font-size:13px', text: `С учётом подтверждённой защиты индекс снижен с ${w.index_raw} до ${w.index}.` }));
       body.push(prop);
+      const [aiBox, docsBox] = aiBoxes(w);
+      body.push(aiBox);
       body.push(dlGroup('Скважина', [
         ['Месторождение', w.field || '—', '', 'field'],
         ['Спущенное оборудование', w.equipment || '—', '', 'equipment'],
@@ -839,6 +917,7 @@
         ['Признак коррозии', yesNo(w.demount_corrosion, 'Есть коррозия', 'Коррозии нет'), w.demount_corrosion ? 'bad' : (w.demount_corrosion === false ? 'ok' : ''), 'demount_corrosion'],
         ['Акт разбора на базе', yesNo(w.base_act, 'Есть', 'Нет'), '', 'base_act'],
         ['Результат разбора', yesNo(w.base_corrosion, 'Есть коррозия', 'Коррозии нет'), w.base_corrosion ? 'bad' : (w.base_corrosion === false ? 'ok' : ''), 'base_corrosion']], w));
+      body.push(docsBox);
       body.push(dlGroup('Оценка', [
         ['Категория скважины', w.category_label || '—', w.category === 'corrosive' ? 'bad' : '', 'category'],
         ['Мероприятие назначено', w.measure_since ? fmtIso(w.measure_since) : '—'],
@@ -1122,6 +1201,243 @@
       return el('div', { class: 'panel src', id: 'sec-crew', style: 'scroll-margin-top:72px' }, el('h3', { text: source.title }), source.description ? el('div', { class: 'sub', text: source.description }) : null, form, result);
     }
 
+    // ---------------------------------------------------------------- documents
+    const DOC_POLL_MS = 3000;
+    const MEASURE_CLASS = { 'ППР': 'repair', 'РИ': 'engineer', 'УДР': 'ud', '—': 'none' };
+    const FIELD_STATUS_NOTE = { missing: 'нет в документе', invalid: 'не распознано', no_quote: 'нет цитаты', quote_not_found: 'цитата не найдена', mismatch: 'не совпадает с цитатой', implausible: 'неправдоподобно' };
+    const docBusy = (doc) => doc.status === 'queued' || doc.status === 'processing';
+    const dstatus = (doc) => el('span', { class: `dstatus ${doc.status}`, text: doc.status_label || doc.status });
+    const fmtBool = (v) => (v === true ? 'да' : v === false ? 'нет' : v);
+    const fmtValue = (v) => (typeof v === 'boolean' ? fmtBool(v) : (/^\d{4}-\d{2}-\d{2}$/.test(String(v)) ? fmtIso(v) : String(v)));
+
+    async function loadDocuments() {
+      clearTimeout(state.docTimer);
+      state.docTimer = null;
+      try {
+        const data = await api('/api/v1/documents?limit=200');
+        const wasBusy = new Set((state.docs?.documents || []).filter(docBusy).map(d => d.document_id));
+        state.docs = data;
+        renderDocuments();
+        // A document finished processing: its data may have changed the rating.
+        if ([...wasBusy].some(id => { const doc = data.documents.find(d => d.document_id === id); return doc && !docBusy(doc); })) refresh({ keepNotice: true });
+        if (data.documents.some(docBusy)) state.docTimer = setTimeout(loadDocuments, DOC_POLL_MS);
+      } catch (error) {
+        $('docRows').replaceChildren(el('tr', {}, el('td', { colspan: '6', class: 'empty', text: `${error.message} Если защита API включена, введите ключ и нажмите «Обновить».` })));
+      }
+    }
+
+    function renderDocuments() {
+      const { documents, counts, settings, status_labels: labels } = state.docs;
+      const mb = Math.round(settings.max_bytes / 1048576);
+      $('dropHint').textContent = `PDF, Excel (.xlsx), JPG, PNG, TIFF — до ${mb} МБ и ${settings.max_pages} стр. Можно несколько файлов сразу.`;
+      const meta = [
+        el('span', {}, 'OCR-модель: ', el('span', { class: settings.ocr_configured ? 'ok' : 'warn', text: settings.ocr_configured ? 'подключена' : 'не настроена — сканы не распознаются' })),
+        el('span', {}, 'Извлечение данных (LLM): ', el('span', { class: settings.llm_configured ? 'ok' : 'warn', text: settings.llm_configured ? 'подключено' : 'не настроено' })),
+        settings.inbox
+          ? el('span', {}, `Папка-приёмник: ${settings.inbox} (проверка каждые ${settings.inbox_scan_seconds < 120 ? settings.inbox_scan_seconds + ' с' : Math.round(settings.inbox_scan_seconds / 60) + ' мин'}) `,
+              el('button', { class: 'btn secondary small', type: 'button', text: 'Проверить сейчас', onClick: (event) => scanInbox(event.currentTarget) }))
+          : el('span', { text: 'Папка-приёмник не настроена (MAI_DOCS_INBOX_DIR).' }),
+      ];
+      $('docsMeta').replaceChildren(...meta);
+      $('docsCounts').replaceChildren(...Object.entries(labels).filter(([key]) => counts[key]).map(([key, label]) =>
+        el('span', { class: `dstatus ${key}`, text: `${label}: ${counts[key]}` })));
+      if (!documents.length) {
+        $('docRows').replaceChildren(el('tr', {}, el('td', { colspan: '6', class: 'empty', text: 'Документов пока нет. Загрузите файлы или положите их в папку-приёмник.' })));
+        return;
+      }
+      const rows = [];
+      for (const doc of documents) {
+        const open = state.docOpen === doc.document_id;
+        const wells = (doc.well_ids || []);
+        rows.push(el('tr', { class: `drow${open ? ' open' : ''}`, tabindex: '0', 'aria-expanded': String(open), onClick: () => toggleDoc(doc.document_id), onKeydown: (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleDoc(doc.document_id); } } },
+          el('td', {}, doc.filename, doc.duplicate ? el('span', { class: 'msg', text: 'повторная загрузка' }) : null),
+          el('td', { 'data-label': 'Тип', text: doc.type_title || (docBusy(doc) ? '…' : '—') }),
+          el('td', { 'data-label': 'Скважина' }, wells.length ? wells.map((id, i) => [i ? ', ' : '', el('a', { href: `#well=${encodeURIComponent(id)}`, 'data-well': id, onClick: (event) => { event.stopPropagation(); event.preventDefault(); openWell(id, event.currentTarget); }, text: id })]) : '—'),
+          el('td', { 'data-label': 'Дата документа', text: doc.doc_date ? fmtIso(doc.doc_date) : '—' }),
+          el('td', {}, dstatus(doc), doc.status_message ? el('span', { class: 'msg', text: doc.status_message }) : null),
+          el('td', { 'data-label': 'Получен', text: fmtTime(doc.created_at) })));
+        if (open) rows.push(el('tr', { class: 'doc-detail' }, el('td', { colspan: '6' }, el('div', { class: 'inner', id: `docDetail-${doc.document_id}` }, el('div', { class: 'sub', text: 'Загружаем…' })))));
+      }
+      $('docRows').replaceChildren(...rows);
+      if (state.docOpen) loadDocDetail(state.docOpen);
+    }
+
+    function toggleDoc(id) {
+      state.docOpen = state.docOpen === id ? null : id;
+      renderDocuments();
+    }
+
+    async function loadDocDetail(id) {
+      const box = $(`docDetail-${id}`);
+      if (!box) return;
+      try {
+        const doc = await api(`/api/v1/documents/${encodeURIComponent(id)}?include_text=true`);
+        if (!$(`docDetail-${id}`)) return;
+        box.replaceChildren(...docDetail(doc));
+      } catch (error) { box.replaceChildren(el('div', { class: 'sub', text: error.message })); }
+    }
+
+    function docDetail(doc) {
+      const parts = [];
+      const extraction = doc.extraction || {};
+      const labels = doc.field_labels || {};
+      if (doc.loaded?.import_profile) {
+        parts.push(el('div', { class: 'hint', text: `Таблица в формате выгрузки ${String(doc.loaded.source_id || '').toUpperCase()} — загружена обычным импортом источника: ${doc.loaded.records} записей, скважин ${doc.loaded.wells.length}.` }));
+      }
+      (extraction.records || []).forEach((record, index) => {
+        const title = `${(extraction.records.length > 1 ? `Запись ${index + 1}` : 'Извлечённые данные')}${record.well_id ? ` — скважина ${record.well_id}` : ''}: ${record.accepted ? 'принята' : 'не принята'}`;
+        parts.push(el('div', { class: `rec-title${record.accepted ? '' : ' bad'}`, text: title }));
+        if (record.issues?.length) parts.push(el('div', { class: 'hint warn', text: record.issues.join(' ') }));
+        parts.push(el('dl', { class: 'fields' }, Object.entries(record.fields).map(([name, field]) => [
+          el('dt', { text: labels[name] || name }),
+          el('dd', {}, field.status === 'ok' ? fmtValue(field.value) : el('span', { class: 'na', text: '—' }),
+            field.status !== 'ok' && field.status !== 'missing' ? el('span', { class: 'rej', text: field.note || FIELD_STATUS_NOTE[field.status] }) : null,
+            field.quote ? el('span', { class: 'q', text: `«${field.quote}»` }) : null)])));
+      });
+      const meta = [doc.text_method ? `Текст: ${{ text_layer: 'текстовый слой PDF', ocr: 'OCR', mixed: 'текстовый слой и OCR', image_ocr: 'OCR изображения', excel_table: 'ячейки Excel', excel_profile: 'импорт выгрузки' }[doc.text_method] || doc.text_method}` : null,
+        doc.pages ? `страниц: ${doc.pages}` : null, extraction.type_method ? `тип определён ${extraction.type_method === 'keywords' ? 'по ключевым словам' : 'языковой моделью'}` : null,
+        doc.attempts ? `попыток: ${doc.attempts}` : null].filter(Boolean).join(' · ');
+      if (meta) parts.push(el('div', { class: 'hint', text: meta }));
+      if (doc.text) {
+        const details = el('details', {}, el('summary', { class: 'hint', style: 'cursor:pointer', text: 'Распознанный текст' }), el('pre', { class: 'doc-text', text: doc.text }));
+        parts.push(details);
+      }
+      parts.push(el('div', { style: 'display:flex; flex-wrap:wrap; gap:8px' },
+        el('button', { class: 'btn secondary small', type: 'button', text: 'Скачать оригинал', onClick: (event) => downloadOriginal(doc, event.currentTarget) }),
+        el('button', { class: 'btn secondary small', type: 'button', text: 'Обработать снова', disabled: docBusy(doc), onClick: (event) => reprocessDoc(doc, event.currentTarget) }),
+        el('button', { class: 'btn secondary small', type: 'button', text: 'Удалить документ', onClick: (event) => deleteDoc(doc, event.currentTarget) })));
+      return parts;
+    }
+
+    async function uploadDocuments(files) {
+      const list = [...files];
+      if (!list.length) return;
+      const form = new FormData();
+      list.forEach(file => form.append('files', file, file.name));
+      $('docPick').disabled = true;
+      notice(`Загружаем файлов: ${list.length}…`);
+      try {
+        const result = await api('/api/v1/documents', { method: 'POST', body: form });
+        const errors = result.documents.filter(d => d.error).map(d => `${d.filename}: ${d.error}`);
+        const text = [`Принято файлов: ${result.accepted}`, result.duplicates ? `уже были загружены: ${result.duplicates}` : null, result.rejected ? `отклонено: ${result.rejected}` : null].filter(Boolean).join(', ');
+        notice(`${text}.${errors.length ? ' ' + errors.join('; ') : ' Обработка идёт в фоне — статус обновится в таблице.'}`, errors.length ? 'warning' : '');
+        state.docOpen = null;
+        await loadDocuments();
+      } catch (error) { notice(error.message, 'error'); }
+      finally { $('docPick').disabled = false; $('docFiles').value = ''; }
+    }
+
+    async function scanInbox(button) {
+      button.disabled = true;
+      try {
+        const result = await api('/api/v1/documents/inbox/scan', { method: 'POST' });
+        notice(`Папка-приёмник: новых файлов ${result.accepted}, повторов ${result.duplicates}, отклонено ${result.rejected}.`);
+        await loadDocuments();
+      } catch (error) { notice(error.message, 'error'); }
+      finally { button.disabled = false; }
+    }
+
+    async function reprocessDoc(doc, button) {
+      button.disabled = true;
+      try { await api(`/api/v1/documents/${encodeURIComponent(doc.document_id)}/reprocess`, { method: 'POST' }); notice(`«${doc.filename}» отправлен на повторную обработку.`); await loadDocuments(); }
+      catch (error) { notice(error.message, 'error'); button.disabled = false; }
+    }
+
+    async function deleteDoc(doc, button) {
+      if (!confirm(`Удалить «${doc.filename}» и данные, загруженные из него? Рейтинг скважин будет пересчитан.`)) return;
+      button.disabled = true;
+      try {
+        await api(`/api/v1/documents/${encodeURIComponent(doc.document_id)}`, { method: 'DELETE' });
+        notice(`Документ «${doc.filename}» удалён.`);
+        state.docOpen = null;
+        await loadDocuments();
+        await refresh({ keepNotice: true });
+      } catch (error) { notice(error.message, 'error'); button.disabled = false; }
+    }
+
+    async function downloadOriginal(doc, button) {
+      button.disabled = true;
+      try {
+        const response = await fetch(`/api/v1/documents/${encodeURIComponent(doc.document_id)}/file`, { headers: headers() });
+        if (!response.ok) throw new Error(`Файл не получен (HTTP ${response.status}).`);
+        const url = URL.createObjectURL(await response.blob());
+        const link = el('a', { href: url, download: doc.filename });
+        document.body.append(link); link.click(); link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+      } catch (error) { notice(error.message, 'error'); }
+      finally { button.disabled = false; }
+    }
+
+    // ---------------------------------------------------------------- well card: AI proposal and documents
+    function aiBoxes(w) {
+      const ai = el('div', { class: 'aibox', id: 'aiBox' }, el('h3', { text: 'Предложение ИИ-агента' }), el('div', { class: 'sub', text: 'Загружаем…' }));
+      const docs = el('div', { class: 'box', id: 'wellDocs' }, el('h3', { text: 'Документы скважины' }), el('div', { class: 'sub', text: 'Загружаем…' }));
+      loadWellExtras(w.well_id);
+      return [ai, docs];
+    }
+
+    async function loadWellExtras(wellId) {
+      try {
+        const detail = await api(`/api/v1/rating/wells/${encodeURIComponent(wellId)}`);
+        if (state.selected !== wellId) return;
+        renderAiBox(detail);
+        renderWellDocs(detail);
+      } catch (error) {
+        const box = $('aiBox'); if (box) box.replaceChildren(el('h3', { text: 'Предложение ИИ-агента' }), el('div', { class: 'sub', text: error.message }));
+      }
+    }
+
+    function renderAiBox(detail) {
+      const box = $('aiBox');
+      if (!box) return;
+      const p = detail.ai_proposal;
+      const button = el('button', { class: p ? 'btn secondary small' : 'btn small', type: 'button', disabled: !detail.ai_agent_configured,
+        text: p ? 'Сформировать заново' : 'Сформировать предложение', onClick: (event) => generateProposal(detail.well_id, event.currentTarget) });
+      const parts = [el('div', { style: 'display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:space-between' }, el('h3', { text: 'Предложение ИИ-агента' }), button)];
+      if (!detail.ai_agent_configured) parts.push(el('div', { class: 'hint warn', text: 'ИИ-агент не настроен: задайте MAI_LLM_API_URL и MAI_LLM_MODEL.' }));
+      if (!p) {
+        parts.push(el('div', { class: 'hint', text: 'Агент учтёт рейтинг и прогнозы моделей, акты, химию, защиту, документы, расписание бригад и примеры мер реагирования. Чего нет в данных — укажет отдельно.' }));
+        box.replaceChildren(...parts);
+        return;
+      }
+      parts.push(el('div', { style: 'display:flex; flex-wrap:wrap; gap:8px; align-items:center' },
+        el('span', { class: `chip ${MEASURE_CLASS[p.measure] || 'unscored'}`, text: p.measure }),
+        el('span', { style: 'font-size:13px; font-weight:600', text: p.summary || '' })));
+      if (p.differs_from_rating) parts.push(el('div', { class: 'hint warn', text: `Отличается от мероприятия рейтинга (${p.rating_measure}) — см. обоснование.` }));
+      if (p.actions?.length) parts.push(el('div', {}, el('div', { class: 'lbl', text: 'Действия' }), el('ul', {}, p.actions.map(a => el('li', { text: a })))));
+      parts.push(el('dl', { class: 'dl' },
+        el('dt', { text: 'Срок' }), el('dd', { text: p.deadline ? fmtIso(p.deadline) : '—' }),
+        el('dt', { text: 'Бригада' }), el('dd', { class: p.crew ? '' : 'na', text: p.crew ? `${p.crew.crew_id}${p.crew.date ? ' · ' + fmtIso(p.crew.date) : ''}` : 'Не назначена' })));
+      if (p.reasoning) parts.push(el('div', {}, el('div', { class: 'lbl', text: 'Обоснование' }), el('div', { style: 'font-size:13px', text: p.reasoning })));
+      if (p.missing_data?.length) parts.push(el('div', { class: 'missing' }, el('b', { text: 'Нет данных' }), el('ul', {}, p.missing_data.map(m => el('li', { text: m })))));
+      if (p.checks?.length) parts.push(el('div', { class: 'hint warn', text: p.checks.join(' ') }));
+      if (p.based_on?.length) parts.push(el('div', { class: 'hint', text: `На основании: ${p.based_on.join('; ')}` }));
+      parts.push(el('div', { class: 'hint', text: `Сформировано ${fmtTime(p.generated_at)}${p.model ? ' · ' + p.model : ''}. Предложение проверяет инженер.` }));
+      box.replaceChildren(...parts);
+    }
+
+    async function generateProposal(wellId, button) {
+      button.disabled = true;
+      const old = button.textContent;
+      button.textContent = 'Агент готовит предложение…';
+      try {
+        await api(`/api/v1/rating/wells/${encodeURIComponent(wellId)}/ai-proposal`, { method: 'POST' });
+        await loadWellExtras(wellId);
+      } catch (error) { notice(error.message, 'error'); button.disabled = false; button.textContent = old; }
+    }
+
+    function renderWellDocs(detail) {
+      const box = $('wellDocs');
+      if (!box) return;
+      const docs = detail.documents || [];
+      box.replaceChildren(el('h3', { text: 'Документы скважины' }), docs.length
+        ? el('ul', { class: 'welldocs' }, docs.map(doc => el('li', {},
+            dstatus(doc), el('span', { text: doc.type_title || doc.filename }), doc.doc_date ? el('span', { class: 'hint', text: fmtIso(doc.doc_date) }) : null,
+            el('a', { href: '#sec-docs', onClick: () => { state.docOpen = doc.document_id; closeWell(); renderDocuments(); }, text: doc.filename }),
+            doc.status !== 'loaded' && doc.status_message ? el('span', { class: 'msg', text: doc.status_message }) : null)))
+        : el('div', { class: 'hint', text: 'Документов по скважине нет. Загрузите акты, протоколы или паспорт в разделе «Документы».' }));
+    }
+
     // ---------------------------------------------------------------- navigation highlight
     function watchSections() {
       const links = [...document.querySelectorAll('.sidenav a')];
@@ -1131,15 +1447,15 @@
           links.forEach(link => link.setAttribute('aria-current', String(link.getAttribute('href') === '#' + entry.target.id)));
         }
       }, { rootMargin: '-80px 0px -60% 0px' });
-      ['sec-rating', 'sec-ppr', 'sec-upload'].forEach(id => { const node = $(id); if (node) observer.observe(node); });
+      ['sec-rating', 'sec-ppr', 'sec-docs', 'sec-upload'].forEach(id => { const node = $(id); if (node) observer.observe(node); });
     }
 
     // ---------------------------------------------------------------- start
     try { $('apiKey').value = sessionStorage.getItem('maiApiKey') || ''; } catch { /* storage may be unavailable */ }
-    $('apiKey').addEventListener('change', () => { try { sessionStorage.setItem('maiApiKey', $('apiKey').value.trim()); } catch { /* ignore */ } refresh(); loadSources(); });
+    $('apiKey').addEventListener('change', () => { try { sessionStorage.setItem('maiApiKey', $('apiKey').value.trim()); } catch { /* ignore */ } refresh(); loadSources(); loadDocuments(); });
     $('search').addEventListener('input', () => { if (state.rating) renderTable(); });
     $('fieldFilter').addEventListener('change', () => { if (state.rating) renderTable(); });
-    $('refresh').addEventListener('click', () => { state.cardLocked = false; refresh(); loadSources(); });
+    $('refresh').addEventListener('click', () => { state.cardLocked = false; refresh(); loadSources(); loadDocuments(); });
     $('run').addEventListener('click', runNow);
     $('cardClose').addEventListener('click', closeWell);
     $('cardPrev').addEventListener('click', () => stepWell(-1));
@@ -1169,9 +1485,20 @@
     document.addEventListener('pointerdown', (event) => { if (!$('gapMenu').hidden && !event.target.closest('.gapwrap')) closeGapMenu(); });
     $('gapMenu').addEventListener('keydown', (event) => { if (event.key === 'Escape') { event.stopPropagation(); closeGapMenu(); $('gapBtn').focus(); } });
     setInterval(() => { if (!document.hidden && !state.busy) refresh({ keepNotice: true, auto: true }); }, AUTO_REFRESH_SECONDS * 1000);
+    $('docPick').addEventListener('click', () => $('docFiles').click());
+    $('docFiles').addEventListener('change', () => uploadDocuments($('docFiles').files));
+    const zone = $('dropzone');
+    ['dragenter', 'dragover'].forEach(type => zone.addEventListener(type, (event) => { event.preventDefault(); zone.classList.add('over'); }));
+    ['dragleave', 'drop'].forEach(type => zone.addEventListener(type, (event) => { event.preventDefault(); zone.classList.remove('over'); }));
+    zone.addEventListener('drop', (event) => uploadDocuments(event.dataTransfer.files));
+    // Files dropped outside the zone must not open in the browser tab.
+    window.addEventListener('dragover', (event) => event.preventDefault());
+    window.addEventListener('drop', (event) => event.preventDefault());
+    setInterval(() => { if (!document.hidden && !state.docTimer) loadDocuments(); }, AUTO_REFRESH_SECONDS * 1000);
     watchSections();
     refresh();
     loadSources();
+    loadDocuments();
   </script>
 </body>
 </html>

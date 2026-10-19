@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from app import db
 from app.api.routes.analysis import router as analysis_router
+from app.api.routes.documents import router as documents_router
 from app.api.routes.ingestion import router as ingestion_router
 from app.api.routes.monitoring import router as monitoring_router
 from app.api.routes.rating import router as rating_router
@@ -31,7 +32,17 @@ async def lifespan(app: FastAPI):
     )
     if app.state.cox_model_error:
         logger.warning("Cox inference status: %s", app.state.cox_model_error)
-    yield
+    app.state.document_worker = None
+    if settings.docs_worker_enabled:
+        from app.core.documents.pipeline import DocumentWorker
+
+        app.state.document_worker = DocumentWorker(app.state)
+        app.state.document_worker.start()
+    try:
+        yield
+    finally:
+        if app.state.document_worker is not None:
+            app.state.document_worker.stop()
 
 
 def require_api_key(x_api_key: str | None = Header(default=None, alias="X-API-Key")) -> None:
@@ -87,6 +98,8 @@ def ready():
         "cox_model_detail": app.state.cox_model_error,
         "risk_models_registered": len(app.state.risk_model_registry.models),
         "llm_agent": "configured" if settings.llm_api_url and settings.llm_model else "not_configured",
+        "ocr_model": "configured" if settings.ocr_url and settings.ocr_model else "not_configured",
+        "documents_inbox": "configured" if settings.docs_inbox_dir else "not_configured",
     }
 
 
@@ -102,4 +115,5 @@ v1.include_router(ingestion_router)
 v1.include_router(analysis_router)
 v1.include_router(monitoring_router)
 v1.include_router(rating_router)
+v1.include_router(documents_router)
 app.include_router(v1)
