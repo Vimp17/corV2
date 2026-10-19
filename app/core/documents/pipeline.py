@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 MAX_STORED_TEXT = 200_000
 MIN_TEXT_CHARS = 30
+EXCEL_TITLES = {"excel:table": "Таблица показателей (Excel)", "excel:form": "Форма с показателями (Excel)"}
 STATUS_LABELS = {
     "queued": "В очереди",
     "processing": "Обрабатывается",
@@ -45,6 +46,8 @@ def decorate(row: dict, titles: dict[str, str] | None = None) -> dict:
     doc_type = row.get("doc_type")
     if doc_type and doc_type.startswith("source:"):
         type_title = f"Выгрузка {doc_type.split(':', 1)[1].upper()}"
+    elif doc_type in EXCEL_TITLES:
+        type_title = EXCEL_TITLES[doc_type]
     else:
         type_title = titles.get(doc_type or "", "")
     return {**row, "status_label": STATUS_LABELS.get(row.get("status"), row.get("status")), "type_title": type_title}
@@ -73,7 +76,7 @@ def _import_by_profile(document: dict, content: bytes, profile_id: str, app_stat
     from app.core.source_connectors import ingest_excel_bytes
 
     filename = document["filename"] if document["filename"].casefold().endswith(".xlsx") else "document.xlsx"
-    result = ingest_excel_bytes(content, filename, profile_id, origin="document")
+    result = ingest_excel_bytes(content, filename, profile_id, origin="document", auto_header=True)
     imported = result.get("imported_wells") or []
     wells = sorted({item["well_id"] for item in imported})
     loaded = {"import_profile": profile_id, "source_id": result.get("source_id"), "wells": wells,
@@ -97,6 +100,60 @@ def _import_by_profile(document: dict, content: bytes, profile_id: str, app_stat
         message += f" Отклонено строк: {rejected}."
     return _finish(document["document_id"], "loaded", message, doc_type=f"source:{profile_id}",
                    text_method="excel_profile", loaded=loaded, well_ids=wells)
+
+
+EXCEL_SPEC = {"title": "Таблица показателей (Excel)", "target": "telemetry", "source_id": "DOC_LAB"}
+
+
+def _read_excel(document: dict, content: bytes, app_state) -> dict:
+    """Any other Excel: tables and forms read by rules, never by AI (app.core.documents.excel_reader).
+
+    Accepted rows are stored as samples of the laboratory-protocol source (DOC_LAB)."""
+    from app.core.documents import excel_reader
+    from app.core.documents.types import load_document_types
+
+    document_id = document["document_id"]
+    try:
+        text_values = {"text_method": "excel_table", "pages": None}
+        try:
+            table_text = doc_text.workbook_text(content)
+            text_values.update(text=table_text.text[:MAX_STORED_TEXT], text_chars=len(table_text.text),
+                               pages=table_text.pages)
+        except ValueError:
+            pass
+        result = excel_reader.read_workbook(content, db.known_well_ids())
+    except Exception:
+        logger.exception("Excel reading failed document_id=%s", document_id)
+        return _finish(document_id, "failed", "Не удалось прочитать книгу Excel.")
+    db.delete_document_data(document_id)
+    spec = dict(EXCEL_SPEC)
+    try:
+        lab = next((item for item in load_document_types().values() if item.get("target") == "telemetry"), None)
+        if lab:
+            spec["source_id"] = lab["source_id"]
+    except DocumentTypesError:
+        pass
+    layout = result["layout"] or "table"
+    doc_type = f"excel:{layout}"
+    text_values["text_method"] = f"excel_{layout}"
+    extraction = {"type_method": "rules", "records": result["records"], "records_total": result["accepted"] + result["rejected"],
+                  "records_accepted": result["accepted"], "field_labels": result["field_labels"]}
+    mentioned = sorted({record["well_id"] for record in result["records"] if record["well_id"]})
+    if not result["accepted"]:
+        return _finish(document_id, "not_recognized", excel_reader.not_found_reason(result), doc_type=doc_type,
+                       well_ids=mentioned, extraction=extraction, loaded=None, doc_date=None, **text_values)
+    loaded = load.load_records(document, spec, result["records"])
+    _recompute(loaded["wells"], app_state)
+    dates = sorted(record["fields"]["sample_date"]["value"] for record in result["records"]
+                   if record["accepted"] and record["fields"]["sample_date"]["value"])
+    message = f"Excel: загружено проб — {loaded['records']}, скважин — {len(loaded['wells'])}."
+    if result["rejected"]:
+        reasons = list(dict.fromkeys(issue for record in result["records"] if not record["accepted"]
+                                     for issue in record["issues"]))
+        message += f" Не принято строк: {result['rejected']} ({' '.join(reasons[:3])})"
+    return _finish(document_id, "loaded", message[:2000], doc_type=doc_type, well_ids=sorted(set(loaded["wells"]) | set(mentioned)),
+                   extraction=extraction, loaded=loaded,
+                   doc_date=datetime.fromisoformat(dates[-1]).date() if dates else None, **text_values)
 
 
 def _retry_or_fail(document: dict, reason: str, configured: bool) -> dict:
@@ -125,6 +182,7 @@ def process_document(document_id: str, app_state=None) -> dict:
             profile_id = None
         if profile_id:
             return _import_by_profile(document, content, profile_id, app_state)
+        return _read_excel(document, content, app_state)
 
     try:
         result = doc_text.document_text(document, content)

@@ -17,8 +17,10 @@ from app import db
 from app.core.documents.extract import values_of
 from app.schemas import TelemetryPoint, WorkHistoryItem
 
+# Measurement fields a document may carry (lab protocols; any Excel table of indicators).
 LAB_FIELDS = ("water_cut_pct", "chlorides_mg_l", "co2_pct", "corrosion_rate_mm_year", "inhibitor_efficiency",
-              "wall_thickness_mm", "initial_wall_thickness_mm")
+              "wall_thickness_mm", "initial_wall_thickness_mm", "injection_deviation_pct", "metal_loss_mm",
+              "liquid_rate_m3_day", "tonnage_t", "noo_days", "field")
 INSTALL_WORK_TYPE = "Спуск оборудования (паспорт скважины)"
 
 

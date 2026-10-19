@@ -260,7 +260,8 @@
     .dropzone.over { border-color:var(--blue); background:var(--sky) }
     .dropzone strong { color:var(--navy); font-size:14px }
     .dropzone .grow-1 { flex:1 1 240px; min-width:0 }
-    .docs-meta { display:flex; flex-wrap:wrap; gap:4px 18px; font-size:12px; color:var(--muted) }
+    .docs-meta { display:flex; flex-wrap:wrap; align-items:center; gap:6px 18px; font-size:12px; color:var(--muted); min-height:32px }
+    .docs-meta > span { display:inline-flex; align-items:center; flex-wrap:wrap; gap:4px 8px; min-height:32px }
     .docs-meta .ok { color:var(--none); font-weight:600 } .docs-meta .warn { color:var(--ud); font-weight:600 }
     .docs-counts { display:flex; flex-wrap:wrap; gap:6px }
     .dstatus { display:inline-flex; align-items:center; padding:2px 8px; border-radius:10px; font-size:12px; font-weight:600; white-space:nowrap; line-height:1.4 }
@@ -1265,7 +1266,7 @@
         el('span', {}, 'OCR-модель: ', el('span', { class: settings.ocr_configured ? 'ok' : 'warn', text: settings.ocr_configured ? 'подключена' : 'не настроена — сканы не распознаются' })),
         el('span', {}, 'Извлечение данных (LLM): ', el('span', { class: settings.llm_configured ? 'ok' : 'warn', text: settings.llm_configured ? 'подключено' : 'не настроено' })),
         settings.inbox
-          ? el('span', {}, `Папка-приёмник: ${settings.inbox} (проверка каждые ${settings.inbox_scan_seconds < 120 ? settings.inbox_scan_seconds + ' с' : Math.round(settings.inbox_scan_seconds / 60) + ' мин'}) `,
+          ? el('span', { class: 'inbox' }, `Папка-приёмник: ${settings.inbox} (проверка каждые ${settings.inbox_scan_seconds < 120 ? settings.inbox_scan_seconds + ' с' : Math.round(settings.inbox_scan_seconds / 60) + ' мин'}) `,
               el('button', { class: 'btn secondary small', type: 'button', text: 'Проверить сейчас', onClick: (event) => scanInbox(event.currentTarget) }))
           : el('span', { text: 'Папка-приёмник не настроена (MAI_DOCS_INBOX_DIR).' }),
       ];
@@ -1338,8 +1339,9 @@
             field.quote ? el('span', { class: 'q', text: `«${field.quote}»` }) : null,
             Array.isArray(field.value) ? [...new Set(field.value.map(item => item.quote))].map(quote => el('span', { class: 'q', text: `«${quote}»` })) : null)])));
       });
-      const meta = [doc.text_method ? `Текст: ${{ text_layer: 'текстовый слой PDF', ocr: 'OCR', mixed: 'текстовый слой и OCR', image_ocr: 'OCR изображения', excel_table: 'ячейки Excel', excel_profile: 'импорт выгрузки' }[doc.text_method] || doc.text_method}` : null,
-        doc.pages ? `страниц: ${doc.pages}` : null, extraction.type_method ? `тип определён ${extraction.type_method === 'keywords' ? 'по ключевым словам' : 'языковой моделью'}` : null,
+      const meta = [doc.text_method ? `Текст: ${{ text_layer: 'текстовый слой PDF', ocr: 'OCR', mixed: 'текстовый слой и OCR', image_ocr: 'OCR изображения', excel_table: 'таблица Excel', excel_form: 'форма Excel', excel_profile: 'импорт выгрузки' }[doc.text_method] || doc.text_method}` : null,
+        doc.pages ? `${doc.file_kind === 'xlsx' ? 'листов' : 'страниц'}: ${doc.pages}` : null,
+        extraction.type_method === 'rules' ? 'разобран без ИИ — по названиям столбцов и строк' : extraction.type_method ? `тип определён ${extraction.type_method === 'keywords' ? 'по ключевым словам' : 'языковой моделью'}` : null,
         doc.attempts ? `попыток: ${doc.attempts}` : null].filter(Boolean).join(' · ');
       if (meta) parts.push(el('div', { class: 'hint', text: meta }));
       if (doc.text) {
