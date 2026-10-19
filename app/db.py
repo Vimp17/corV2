@@ -957,6 +957,21 @@ def delete_document_row(document_id: str) -> None:
         conn.execute(delete(documents).where(documents.c.document_id == document_id))
 
 
+def load_extra_measurements(well_id: str) -> list[dict]:
+    """Rows with additional indicators (pH, hardness…) of a well, oldest first."""
+    query = text("""
+        SELECT source_id, timestamp, CAST(payload_json AS jsonb) -> 'extra_measurements' AS extras
+        FROM telemetry
+        WHERE well_id = :well_id
+          AND jsonb_typeof(CAST(payload_json AS jsonb) -> 'extra_measurements') = 'object'
+        ORDER BY timestamp, id
+    """)
+    with engine().connect() as conn:
+        rows = conn.execute(query, {"well_id": well_id}).mappings().all()
+    return [{"source_id": None if row["source_id"] == _UNSPECIFIED_SOURCE else row["source_id"],
+             "timestamp": row["timestamp"], "extras": row["extras"]} for row in rows]
+
+
 def known_well_ids() -> list[str]:
     """Wells the system knows from any source, the rating or MAI_WELL_IDS."""
     query = text("""

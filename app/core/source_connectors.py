@@ -125,6 +125,7 @@ def ingest_excel_bytes(
         "rows_rejected": parsed["rows_rejected"],
         "source_columns": parsed["source_columns"],
         "ignored_columns": parsed["ignored_columns"],
+        "extra_columns": parsed.get("extra_columns", []),
         "errors": parsed["errors"],
         "imported_wells": imported,
         "source_statuses": source_statuses,

@@ -31,7 +31,7 @@ ALIASES = {
     "initial_wall_thickness_mm": ["толщина стенки нкт"],
 }
 TABLE_COLUMNS = {
-    "well_id": "скважина", "sample_date": "дата отбора", "water_cut_pct": "обводн", "chlorides_mg_l": "хлорид",
+    "well_id": "скважина", "sample_date": "дата", "water_cut_pct": "обводн", "chlorides_mg_l": "хлорид",
     "co2_pct": "co2", "corrosion_rate_mm_year": "скорость коррозии", "inhibitor_efficiency": "эффективность ингибитора",
 }
 
@@ -61,6 +61,8 @@ def _from_lines(text: str, fields: dict) -> dict:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     for name, spec in fields.items():
         record[name] = {"value": None, "quote": None}
+        if spec["type"] == "measurements":
+            continue
         for alias in ALIASES.get(name, []):
             found = False
             for line in lines:
@@ -84,14 +86,27 @@ def _from_table(text: str, fields: dict) -> list[dict]:
     header_index = next((index for index, line in enumerate(lines) if "скважина" in _low(line)), None)
     if header_index is None:
         return []
-    headers = [_low(cell.strip()) for cell in lines[header_index].split("|")]
+    titles = [cell.strip() for cell in lines[header_index].split("|")]
+    headers = [_low(title) for title in titles]
     columns = {name: next((index for index, header in enumerate(headers) if key in header), None)
                for name, key in TABLE_COLUMNS.items()}
+    mapped = {index for index in columns.values() if index is not None}
     records = []
     for line in lines[header_index + 1:]:
         cells = [cell.strip() for cell in line.split("|")]
         record = {}
         for name, spec in fields.items():
+            if spec["type"] == "measurements":
+                # Columns that are not fields of the type become "other indicators".
+                others = []
+                for index, title in enumerate(titles):
+                    if index in mapped or index >= len(cells) or not title:
+                        continue
+                    number = _convert(cells[index], "number")
+                    if number is not None:
+                        others.append({"name": title, "value": number, "quote": line[:200]})
+                record[name] = {"value": others or None}
+                continue
             index = columns.get(name)
             value = _convert(cells[index], spec["type"]) if index is not None and index < len(cells) else None
             record[name] = {"value": value, "quote": line[:200] if value is not None else None}

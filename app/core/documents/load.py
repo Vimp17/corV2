@@ -65,6 +65,9 @@ def load_records(document: dict, spec: dict, records: list[dict]) -> dict:
             points = []
             for values in items:
                 payload = {field: values[field] for field in LAB_FIELDS if values.get(field) is not None}
+                extras = {item["name"]: item["value"] for item in values.get("extra_measurements") or []}
+                if extras:
+                    payload["extra_measurements"] = extras
                 points.append(TelemetryPoint.model_validate({
                     "timestamp": _moment(values["sample_date"]), "source_id": source_id, **payload}))
             db.save_batch(well_id, batch_id(document["document_id"], well_id), points)

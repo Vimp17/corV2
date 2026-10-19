@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
+from zoneinfo import ZoneInfo
 
 from app import db
 from app.config import settings
@@ -40,6 +41,12 @@ _DEFAULT_WORK_TYPES = {
 
 def _utc(value: datetime) -> datetime:
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
+def _local(value: datetime) -> datetime:
+    """A moment in the source time zone (MAI_SOURCE_TIMEZONE): a date-only value such as a
+    sample taken on 16.10 is shown as 16.10, not as the evening of 15.10 in UTC."""
+    return _utc(value).astimezone(ZoneInfo(settings.source_timezone))
 
 
 def _norm(value: Any) -> str:
@@ -101,7 +108,7 @@ def _record_sources(point: TelemetryPoint) -> str:
 
 def _prov(sources: _Sources, source_id: str | None, when: datetime | None, note: str | None = None) -> dict:
     return {"source_id": source_id or None, "source": sources.title(source_id) if source_id else None,
-            "date": _utc(when).isoformat() if when else None, "note": note}
+            "date": _local(when).isoformat() if when else None, "note": note}
 
 
 def _latest(records: list[TelemetryPoint], field: str) -> tuple[Any, TelemetryPoint | None]:
@@ -175,6 +182,21 @@ def _model_scores(result: PipelineResult | None, sources: _Sources,
 
 
 GAP_LABELS = rating.GAP_LABELS
+
+
+def extra_measurements(well_id: str) -> list[dict]:
+    """Latest value of every additional indicator (pH, hardness…) with its source and date.
+
+    These indicators have no system field: they are shown in the well card and given to the AI
+    agent, but do not enter the risk models or the rating."""
+    sources = _Sources()
+    latest: dict[str, dict] = {}
+    for row in db.load_extra_measurements(well_id):
+        for name, value in (row["extras"] or {}).items():
+            if isinstance(value, (int, float)):
+                latest[name] = {"name": name, "value": value, "date": _local(row["timestamp"]).isoformat(),
+                                "source_id": row["source_id"], "source": sources.title(row["source_id"])}
+    return sorted(latest.values(), key=lambda item: item["name"].casefold())
 
 
 def well_passports(well_id: str) -> list[tuple[str, dict, datetime | None]]:

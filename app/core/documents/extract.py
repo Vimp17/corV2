@@ -24,6 +24,8 @@ EARLIEST_DATE = date(2000, 1, 1)
 MAX_QUOTE_CHARS = 300
 _WELL_PREFIX = re.compile(r"^(?:скв(?:ажина)?\.?|well)\s*", re.IGNORECASE)
 _NUMBER = re.compile(r"[-+]?\d+(?:[.,]\d+)?")
+# A space (also non-breaking or thin) between digit groups: «18 500».
+_THOUSANDS = re.compile("(?<=\\d)[ \u00a0\u202f](?=\\d{3}\\b)")
 
 
 class ExtractionUnavailable(RuntimeError):
@@ -72,13 +74,17 @@ def quote_found(quote: str, normalized_text: str) -> bool:
 
 
 def _numbers_in(text: str) -> list[float]:
-    compact = re.sub(r"(?<=\d)[\s ](?=\d{3}\b)", "", str(text))
-    values = []
-    for item in _NUMBER.findall(compact):
-        try:
-            values.append(float(item.replace(",", ".")))
-        except ValueError:
-            continue
+    """Numbers written in the text. Table cells («a | b»), semicolons and tabs separate values,
+    so «21000 | 125» is never read as 21000125; within a cell «18 500» may be one number
+    (thousands separator) or two, so both readings are returned."""
+    values: list[float] = []
+    for cell in re.split(r"[|;\t]", str(text)):
+        for variant in {cell, _THOUSANDS.sub("", cell)}:
+            for item in _NUMBER.findall(variant):
+                try:
+                    values.append(float(item.replace(",", ".")))
+                except ValueError:
+                    continue
     return values
 
 
@@ -121,7 +127,7 @@ def parse_value(raw: Any, field_type: str) -> Any:
             raise ValueError("not a number")
         if isinstance(raw, (int, float)):
             return float(raw)
-        numbers = _numbers_in(str(raw))
+        numbers = [float(item.replace(",", ".")) for item in _NUMBER.findall(_THOUSANDS.sub("", str(raw).strip()))]
         if len(numbers) != 1:
             raise ValueError("not a number")
         return numbers[0]
@@ -152,7 +158,8 @@ def value_agrees(value: Any, field_type: str, quote: str, field_name: str) -> bo
     """The quote supports the value (the number, date or well id is written in it)."""
     text = normalize(quote)
     if field_type == "number":
-        for number in _numbers_in(text):
+        # Numbers are read from the quote as written: normalize() turns table pipes into spaces.
+        for number in _numbers_in(str(quote)):
             if abs(number - value) < 1e-6 or abs(number - value * 100) < 1e-6 or abs(number / 100 - value) < 1e-9:
                 return True
         return False
@@ -244,7 +251,9 @@ def _field_catalogue(spec: dict) -> dict:
 def extract_records(text: str, spec: dict) -> list[dict]:
     """Raw records from the LLM: [{field: {"value": ..., "quote": ...}}]."""
     excerpt = text[:settings.docs_max_text_chars]
-    example = {name: {"value": None, "quote": None} for name in spec["fields"]}
+    example = {name: ({"value": [{"name": "название, единица", "value": None, "quote": None}]}
+                      if field["type"] == "measurements" else {"value": None, "quote": None})
+               for name, field in spec["fields"].items()}
     payload = {
         "document_type": spec.get("title"),
         "description": spec.get("description"),
@@ -278,6 +287,10 @@ def check_record(raw: dict, spec: dict, normalized_text: str, known_wells: list[
     issues: list[str] = []
     for name, field in spec["fields"].items():
         item = raw.get(name)
+        if field["type"] == "measurements":
+            fields[name] = _check_measurements(item, normalized_text, {
+                _stem(other.get("label", key)) for key, other in spec["fields"].items() if key != name})
+            continue
         if not isinstance(item, dict):
             item = {"value": item, "quote": None}
         raw_value, quote = item.get("value"), item.get("quote")
@@ -325,6 +338,39 @@ def check_record(raw: dict, spec: dict, normalized_text: str, known_wells: list[
         labels = ", ".join(spec["fields"][name].get("label", name) for name in informative)
         issues.append(f"В документе нет данных по существу ({labels}).")
     return {"well_id": well, "fields": fields, "accepted": not issues, "issues": issues}
+
+
+def _stem(label: str) -> str:
+    """First word of a label, for spotting an "other" indicator that is one of the fields."""
+    words = re.findall(r"\w+", normalize(label).replace("₂", "2"))
+    return words[0] if words else ""
+
+
+def _check_measurements(item: Any, normalized_text: str, field_stems: set[str]) -> dict:
+    """Other indicators: each needs a name, a number and a quote that holds that number.
+    Indicators that are fields of the document type (CO₂, хлориды…) are not repeated here."""
+    items = item.get("value") if isinstance(item, dict) else item
+    accepted, rejected, seen = [], 0, set()
+    for entry in items if isinstance(items, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        name = " ".join(str(entry.get("name") or "").split())[:100]
+        quote = str(entry.get("quote") or "").strip()[:MAX_QUOTE_CHARS]
+        try:
+            value = parse_value(entry.get("value"), "number")
+        except ValueError:
+            value = None
+        key = normalize(name)
+        if (not name or value is None or not quote or key in seen or _stem(name) in field_stems
+                or not quote_found(quote, normalized_text) or not value_agrees(value, "number", quote, name)):
+            rejected += 1
+            continue
+        seen.add(key)
+        accepted.append({"name": name, "value": value, "quote": quote})
+    result: dict[str, Any] = {"value": accepted or None, "quote": None, "status": "ok" if accepted else "missing"}
+    if rejected:
+        result["note"] = f"Не подтверждено показателей: {rejected}."
+    return result
 
 
 def values_of(record: dict) -> dict:

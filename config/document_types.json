@@ -1,5 +1,5 @@
 {
-  "_comment": "Document types the pipeline recognises in PDF, scans, photos and Excel forms. keywords: words of the title or body that identify the type (no LLM needed when they match). fields: what the extraction model looks for; required fields must be found (with a quote from the document) or the document is 'not recognised' and its data counts as missing. informative_fields: at least one of them must be found too. target: work_event (an ERA-like event: demount or base-inspection act), telemetry (laboratory sample rows), passport (well attributes). A new type needs only a new entry here.",
+  "_comment": "Document types the pipeline recognises in PDF, scans, photos and Excel forms. keywords: words of the title or body that identify the type (no LLM needed when they match). fields: what the extraction model looks for; required fields must be found (with a quote from the document) or the document is 'not recognised' and its data counts as missing. informative_fields: at least one of them must be found too. target: work_event (an ERA-like event: demount or base-inspection act), telemetry (laboratory sample rows), passport (well attributes). A new type needs only a new entry here. Field type measurements: other indicators of a sample (name, value and quote each), kept as additional indicators of the well — shown in the well card and given to the AI agent, not used by the rating.",
   "document_types": {
     "demount_act": {
       "title": "Акт демонтажа",
@@ -55,9 +55,10 @@
         "chlorides_mg_l": {"label": "Хлориды, мг/л", "type": "number", "hint": "Только если указано в мг/л."},
         "co2_pct": {"label": "CO₂, %", "type": "number", "hint": "Только если указано в процентах."},
         "corrosion_rate_mm_year": {"label": "Скорость коррозии, мм/год", "type": "number", "hint": "Только если указана в мм/год (образцы-свидетели, гравиметрия)."},
-        "inhibitor_efficiency": {"label": "Эффективность ингибитора, доля 0–1", "type": "number", "hint": "Если указана в процентах — разделите на 100."}
+        "inhibitor_efficiency": {"label": "Эффективность ингибитора, доля 0–1", "type": "number", "hint": "Если указана в процентах — разделите на 100."},
+        "extra_measurements": {"label": "Другие показатели", "type": "measurements", "hint": "Показатели пробы, которых нет среди полей выше (например pH, жёсткость, железо, сульфаты, плотность): название с единицей измерения, числовое значение и цитата для каждого."}
       },
-      "informative_fields": ["water_cut_pct", "chlorides_mg_l", "co2_pct", "corrosion_rate_mm_year", "inhibitor_efficiency"]
+      "informative_fields": ["water_cut_pct", "chlorides_mg_l", "co2_pct", "corrosion_rate_mm_year", "inhibitor_efficiency", "extra_measurements"]
     },
     "well_passport": {
       "title": "Паспорт скважины",
