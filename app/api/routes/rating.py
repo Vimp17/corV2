@@ -25,15 +25,30 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["rating"])
 
 
-def _rated_wells(with_ai_proposal: bool = False) -> list[dict]:
+def _rated_wells() -> list[dict]:
     wells = rating.build_rating(db.list_rating_rows())
     proposals = db.latest_era_proposals()
     for well in wells:
         well["last_proposal"] = proposals.get(well["well_id"])
-        if not with_ai_proposal:
-            # The full AI proposal is served with the well card only.
-            well.pop("ai_proposal", None)
+        # The full AI proposal is served with the well card only.
+        well.pop("ai_proposal", None)
     return wells
+
+
+def _rated_well(well_id: str) -> dict | None:
+    """One well as in the rating, without evaluating every row: the rank comes from the scores."""
+    row = db.get_rating_row(well_id)
+    if row is None:
+        return None
+    well = rating.evaluate(row)
+    index = well["index"]
+    if index is not None:
+        others = (rating.priority_index(ntc, math) for _, ntc, math in db.rating_scores())
+        well["rank"] = 1 + sum(1 for value in others if value is not None and value > index)
+    else:
+        well["rank"] = None
+    well["last_proposal"] = db.latest_era_proposal(well_id)
+    return well
 
 
 def _data_state(wells: list[dict]) -> dict:
@@ -101,7 +116,7 @@ def export_rating() -> Response:
 
 @router.get("/rating/wells/{well_id}")
 def get_rating_well(well_id: str) -> dict:
-    well = next((item for item in _rated_wells(with_ai_proposal=True) if item["well_id"] == well_id), None)
+    well = _rated_well(well_id)
     if well is None:
         raise HTTPException(status_code=404, detail="Скважины нет в рейтинге")
     titles = document_pipeline.type_titles()
@@ -147,7 +162,9 @@ def create_proposal(request: EraProposalRequest) -> dict:
     The proposal is kept whatever happens on delivery; its status says whether it was sent
     (sent), could not be sent (failed) or waits for the transport to be configured.
     """
-    well = next((item for item in _rated_wells() if item["well_id"] == request.well_id), None)
+    well = _rated_well(request.well_id)
+    if well is not None:
+        well.pop("ai_proposal", None)
     if well is None:
         raise HTTPException(status_code=404, detail="Скважины нет в рейтинге")
     return promine.create_and_send(well, request.change_type, request.reason,

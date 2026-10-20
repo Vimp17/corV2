@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from app.core.quality import AUXILIARY_RANGES, MEASUREMENTS, RANGE_LIMITS
+from app.core.source_kinds import is_snapshot, point_sources
 from app.schemas import NormalizationReport, TelemetryPoint
 
 
@@ -12,12 +13,24 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
-def normalize_records(records: list[TelemetryPoint], max_forward_fill_days: int) -> tuple[list[dict], NormalizationReport]:
+def normalize_records(records: list[TelemetryPoint], max_forward_fill_days: int,
+                      sample_fill_days: int | None = None, sample_sources: set[str] | None = None,
+                      snapshot_sources: set[str] | None = None) -> tuple[list[dict], NormalizationReport]:
+    """Sort, range-check and forward-fill the records.
+
+    A value is carried forward max_forward_fill_days; a value that came from a laboratory sample
+    or a snapshot (sample_sources) is carried sample_fill_days, the window in which the sample
+    counts. Rows from snapshot_sources only (a registry without its own measurement time) are
+    marked "snapshot": they give values but are not observations (app.core.source_kinds)."""
     indexed = list(enumerate(records))
     ordered = sorted(indexed, key=lambda pair: (_as_utc(pair[1].timestamp), pair[0]))
     output: list[dict] = []
-    last_valid: dict[str, tuple[datetime, float]] = {}
+    # field -> (time, value, carried for how many days)
+    last_valid: dict[str, tuple[datetime, float, int]] = {}
     imputed = 0
+    sample_sources = sample_sources or set()
+    snapshot_sources = snapshot_sources or set()
+    long_fill = max(sample_fill_days or 0, max_forward_fill_days)
 
     for original_index, point in ordered:
         raw = point.model_dump(mode="json", exclude_none=False)
@@ -29,34 +42,22 @@ def normalize_records(records: list[TelemetryPoint], max_forward_fill_days: int)
             "calculated": {},
             "imputed_fields": [],
             "invalid_fields": [],
+            "snapshot": is_snapshot(point, snapshot_sources),
         }
-        for field in MEASUREMENTS:
-            value = getattr(point, field)
-            valid = value is not None and RANGE_LIMITS[field][0] <= value <= RANGE_LIMITS[field][1]
-            if valid:
-                normalized["calculated"][field] = float(value)
-                last_valid[field] = (timestamp, float(value))
-            else:
-                normalized["calculated"][field] = None
-                if value is not None:
-                    normalized["invalid_fields"].append(field)
-                previous = last_valid.get(field)
-                if previous and (timestamp - previous[0]).total_seconds() <= max_forward_fill_days * 86400:
-                    normalized["calculated"][field] = previous[1]
-                    normalized["imputed_fields"].append(field)
-                    imputed += 1
-        for field, (low, high) in AUXILIARY_RANGES.items():
+        fill_days = long_fill if point_sources(point) & sample_sources else max_forward_fill_days
+        ranges = [(field, RANGE_LIMITS[field]) for field in MEASUREMENTS] + list(AUXILIARY_RANGES.items())
+        for field, (low, high) in ranges:
             value = getattr(point, field)
             valid = value is not None and low <= value <= high
             if valid:
                 normalized["calculated"][field] = float(value)
-                last_valid[field] = (timestamp, float(value))
+                last_valid[field] = (timestamp, float(value), fill_days)
             else:
                 normalized["calculated"][field] = None
                 if value is not None:
                     normalized["invalid_fields"].append(field)
                 previous = last_valid.get(field)
-                if previous and (timestamp - previous[0]).total_seconds() <= max_forward_fill_days * 86400:
+                if previous and (timestamp - previous[0]).total_seconds() <= previous[2] * 86400:
                     normalized["calculated"][field] = previous[1]
                     normalized["imputed_fields"].append(field)
                     imputed += 1
@@ -108,6 +109,7 @@ def normalize_records(records: list[TelemetryPoint], max_forward_fill_days: int)
         calculated_values_added=True,
         imputed_values=imputed,
         forward_fill_limit_days=max_forward_fill_days,
+        sample_fill_limit_days=long_fill if sample_sources else None,
         note=("Raw значения сохранены отдельно. Значения вне DQ-диапазона не используются; "
               "короткие пропуски ограниченно заполняются. Расчёт corrosion_load использует "
               "демонстрационную формулу notebook и помечен в provenance."),

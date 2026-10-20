@@ -662,7 +662,16 @@ def test_registry_through_documents(client, tmp_path, monkeypatch):
     assert len(point) == 1 and point[0].chlorides_mg_l == 31000 and point[0].water_cut_pct == 93
     assert point[0].co2_pct == 1.9 and point[0].liquid_rate_m3_day == 85
     assert "Реестр коррозии НКТ (документ)" in well["provenance"]["corrosive_environment"]["source"]
-    assert _well(client, "NEW-77")["field"] == "Южное"                          # a new well gets a rating row
+    new_well = _well(client, "NEW-77")
+    assert new_well["field"] == "Южное"                                         # a new well gets a rating row
+    # A registry row is not a measurement: no «in operation», and no ДАРС telemetry.
+    assert new_well["in_operation"] is None and new_well["index"] is None
+    assert "Нет телеметрии ДАРС." in [gap["note"] for gap in new_well["data_gaps"]]
+    assert well["provenance"]["in_operation"]["source_id"] != "DOC_NKT"
+    # The light card endpoint ranks the well exactly as the full rating does.
+    ranks = {item["well_id"]: item["rank"] for item in client.get("/api/v1/rating").json()["wells"]}
+    for well_id in ("DEMO-001", "DEMO-012", "NEW-77"):
+        assert _well(client, well_id)["rank"] == ranks[well_id]
 
     assert client.delete(f"/api/v1/documents/{document['document_id']}").status_code == 200
     assert _well(client, "DEMO-012")["nkt_registry"] is None

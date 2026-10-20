@@ -47,13 +47,24 @@ def _slope(rows: list[dict], field: str, window_days: int | None = None,
 
 
 def build_features(well_id: str, normalized: list[dict]) -> FeatureSnapshot:
+    """Current values, trends and coverage of a well.
+
+    Rows marked "snapshot" (a registry without its own measurement time) are not observations:
+    the latest time, trends and coverage come from the other rows. A snapshot newer than the
+    latest observation still updates the current values it carries."""
     if not normalized:
         raise ValueError("at least one normalized record is required")
-    rows = sorted(normalized, key=lambda row: _parse_timestamp(row["timestamp"]))
+    every = sorted(normalized, key=lambda row: _parse_timestamp(row["timestamp"]))
+    rows = [row for row in every if not row.get("snapshot")] or every
     timestamps = [_parse_timestamp(row["timestamp"]) for row in rows]
     latest = timestamps[-1]
     first = timestamps[0]
     current = dict(rows[-1]["calculated"])
+    for row in every:
+        if row.get("snapshot") and _parse_timestamp(row["timestamp"]) > latest:
+            for field, value in row["calculated"].items():
+                if value is not None and field not in row.get("imputed_fields", ()):
+                    current[field] = value
     trends: dict[str, float | None] = {}
     counts: dict[str, int] = {}
     for field in TREND_FIELDS:

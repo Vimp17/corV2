@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from app.config import settings
 
@@ -120,12 +121,21 @@ def plan_status_for(measure: str | None, plan: date | None, deadline: date | Non
     return "late" if deadline is not None and plan > deadline else "on_time"
 
 
+def local_today() -> date:
+    """Today in the source time zone (MAI_SOURCE_TIMEZONE), not on the server clock."""
+    return datetime.now(ZoneInfo(settings.source_timezone)).date()
+
+
 def _as_date(value: Any) -> date | None:
+    """A moment as a day in the source time zone: a measure assigned at 01:00 Moscow time
+    counts from that day, not from the previous UTC day."""
     if value is None:
         return None
+    if isinstance(value, str) and len(value) > 10:
+        value = datetime.fromisoformat(value)
     if isinstance(value, datetime):
         value = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc).date()
+        return value.astimezone(ZoneInfo(settings.source_timezone)).date()
     if isinstance(value, date):
         return value
     return date.fromisoformat(str(value)[:10])
@@ -165,7 +175,7 @@ def evaluate(row: dict[str, Any]) -> dict[str, Any]:
         "category_label": CATEGORY_LABELS.get(row.get("category") or "", ""),
         "promine_status_label": PROMINE_STATUS_LABELS.get(row.get("promine_status") or "", ""),
         "category_short": CATEGORY_SHORT.get(row.get("category") or "", ""),
-        "run_days": (date.today() - installed).days if installed else None,
+        "run_days": (local_today() - installed).days if installed else None,
         # Oil per day in litres: liquid rate × oil share.
         "oil_l_day": (round(row["liquid_rate_m3_day"] * row["oil_pct"] * 10)
                       if row.get("liquid_rate_m3_day") is not None and row.get("oil_pct") is not None else None),

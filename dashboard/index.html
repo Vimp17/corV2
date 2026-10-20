@@ -102,6 +102,9 @@
     /* Rating table */
     .toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:10px 16px; padding:12px 16px; border-bottom:1px solid var(--line-2) }
     .toolbar label { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--muted) }
+    .toolbar label.check { gap:6px; cursor:pointer }
+    .toolbar label.check input { min-height:0; width:16px; height:16px; margin:0 }
+    .table-more { display:flex; flex-wrap:wrap; align-items:center; justify-content:center; gap:8px 12px; padding:14px 16px; font-size:13px; color:var(--muted); border-top:1px solid var(--line-2) }
     .toolbar input, .toolbar select { padding:7px 9px; border:1px solid #C9D2DC; border-radius:4px; min-height:36px; background:#fff; color:var(--ink) }
     /* The table fits the window: no inner scroll, compact type, columns share the width.
        All 13 columns from 960 px of table width (a 1024 px window); narrower (tablet, phone) — a card per well. */
@@ -398,6 +401,7 @@
         <div class="toolbar">
           <label>Поиск скважины <input id="search" type="search" placeholder="номер" autocomplete="off"></label>
           <label>Месторождение <select id="fieldFilter"><option value="">Все</option></select></label>
+          <label class="check" title="Скважины, по которым модели не рассчитаны (мало данных). В фильтрах «Нет данных» они видны всегда."><input id="showUnscored" type="checkbox"> Показывать без оценки <b id="unscoredCount"></b></label>
           <span class="sub" id="updated">Загрузка…</span>
           <span class="spacer-x"></span>
           <button class="btn secondary small" id="export" type="button">Скачать рейтинг (Excel)</button>
@@ -515,13 +519,14 @@
     const $ = (id) => document.getElementById(id);
     const DAY = 86400000;
     const AUTO_REFRESH_SECONDS = 60;
+    const TABLE_PAGE = 100;
     const CHANGE_LABELS_FALLBACK = { include: 'Включить скважину в ЭРА ремонта', exclude: 'Исключить скважину из ЭРА ремонта', reschedule: 'Перенести сроки ремонта', scope: 'Изменить состав работ', other: 'Другое изменение ЭРА ремонта' };
     const PROPOSAL_STATUS = { sent: 'отправлено', failed: 'ошибка отправки', not_configured: 'сохранено, отправка не настроена', queued: 'в очереди' };
     const DOC_NEXT = { not_created: 'created', created: 'sent' };
     const DOC_ACTION = { not_created: 'Отметить: документ сформирован', created: 'Отметить: направлен в ЭРА' };
     const RISK_RU = { CRITICAL: 'критический', HIGH: 'высокий', MEDIUM: 'средний', LOW: 'низкий', UNKNOWN: 'нет оценки', DATA_ISSUE: 'не хватает данных', NOT_ANALYZED: 'не рассчитано' };
 
-    const state = { rating: null, telemetry: {}, filter: 'all', selected: null, busy: false, cardLocked: false, sources: null, cardTab: 'overview', drawerOpen: false, opener: null };
+    const state = { rating: null, telemetry: {}, filter: 'all', selected: null, busy: false, cardLocked: false, sources: null, cardTab: 'overview', drawerOpen: false, opener: null, tableLimit: 100, showUnscored: false };
 
     // ---------------------------------------------------------------- helpers
     function el(tag, props = {}, ...children) {
@@ -569,9 +574,10 @@
       if (state.busy && options.auto) return;
       $('refresh').disabled = true;
       try {
+        // The analysis runs feed only the «Телеметрия и ИИ» tab: not requested while it is hidden.
         const [rating, telemetry] = await Promise.all([
           api('/api/v1/rating'),
-          api('/api/v1/dashboard/risk-ranking').catch(() => null),
+          CARD_TABS.includes('telemetry') ? api('/api/v1/dashboard/risk-ranking').catch(() => null) : null,
         ]);
         state.rating = rating;
         state.telemetry = {};
@@ -615,7 +621,7 @@
 
     const GAP_FALLBACK = { telemetry: 'Телеметрия ДАРС', samples: 'Пробы ХИМИК', base_act: 'Акты разбора', equipment: 'Оборудование (ЭРА)', models: 'Оценка моделей' };
     const gapLabels = () => state.rating?.settings?.gap_labels || GAP_FALLBACK;
-    function setFilter(filter) { state.filter = filter; closeGapMenu(); render(); }
+    function setFilter(filter) { state.filter = filter; state.tableLimit = TABLE_PAGE; closeGapMenu(); render(); }
     function filterLabel(filter) {
       if (filter === 'waiting') return 'ожидают решения';
       if (filter.startsWith('gap:')) return `нет данных: ${(gapLabels()[filter.slice(4)] || '').toLowerCase()}`;
@@ -653,7 +659,8 @@
       const notes = [];
       if (counts.protection_adjusted) notes.push(`Индекс снижен с учётом защиты: ${counts.protection_adjusted}`);
       if (counts.protection_insufficient) notes.push(`Защита недостаточна: ${counts.protection_insufficient}`);
-      if (counts.engineer) notes.push(`Решение инженера (индекс 61–79): ${counts.engineer}`);
+      const engineer = measures.find(m => m.key === 'engineer');
+      if (counts.engineer) notes.push(`Решение инженера${engineer ? ` (индекс ${engineer.index_from}–${engineer.index_to})` : ''}: ${counts.engineer}`);
       notes.forEach(text => items.push(el('div', { class: 'note', text })));
       $('navSummary').replaceChildren(...items);
     }
@@ -685,8 +692,23 @@
       const f = state.filter;
       const keep = (w) => f === 'all' || (f === 'waiting' ? w.awaiting_decision
         : f.startsWith('gap:') ? (w.data_gaps || []).some(g => g.key === f.slice(4)) : w.measure === f);
-      return state.rating.wells.filter(w => keep(w)
+      return state.rating.wells.filter(w => keep(w) && (f !== 'all' || state.showUnscored || w.index !== null)
         && (!field || w.field === field) && (!query || String(w.well_id).toLowerCase().includes(query)));
+    }
+    // Wells without a model score hidden from «Все» by the «Показывать без оценки» switch.
+    function hiddenUnscored() {
+      if (state.filter !== 'all' || state.showUnscored) return 0;
+      const query = $('search').value.trim().toLowerCase();
+      const field = $('fieldFilter').value;
+      return state.rating.wells.filter(w => w.index === null && (!field || w.field === field)
+        && (!query || String(w.well_id).toLowerCase().includes(query))).length;
+    }
+    function setShowUnscored(show) {
+      state.showUnscored = show;
+      $('showUnscored').checked = show;
+      try { localStorage.setItem('maiShowUnscored', show ? '1' : '0'); } catch { /* storage may be unavailable */ }
+      state.tableLimit = TABLE_PAGE;
+      if (state.rating) renderTable();
     }
 
     function evidence(value, badWhen, labels) {
@@ -700,10 +722,14 @@
       : corrosion === true ? ['Есть коррозия', 'bad'] : corrosion === false ? ['Коррозии нет', 'ok'] : ['Признак не указан', 'warn'];
     // «Среднекоррозионная» wraps as «Средне-/коррозионная» in a narrow column; nothing is abbreviated.
     const soft = (text) => String(text || '').replace(/(средне|не)(?=корроз)/gi, '$1\u00AD').replace(/(корро)(зи)(он)(ная)/gi, '$1\u00AD$2$3\u00AD$4').replace(/(корро)(зи[ия])(?![а-я])/gi, '$1\u00AD$2');
+    // The environment as assessed (ДАРС, пробы, реестр); a missing recent sample is a note under it.
     function envCell(w) {
-      if (w.sampling !== true) return el('span', { class: 'ev warn', text: 'Нет пробы' });
-      if (w.corrosive_environment === null || w.corrosive_environment === undefined) return el('span', { class: 'ev na', text: 'Нет данных' });
-      return el('span', { class: `ev ${w.corrosive_environment ? 'bad' : 'ok'}`, text: soft(w.corrosive_environment ? 'Коррозионная' : 'Некоррозионная') });
+      const env = w.corrosive_environment;
+      const noSample = w.sampling !== true;
+      if (env === null || env === undefined) return el('span', { class: `ev ${noSample ? 'warn' : 'na'}`, text: noSample ? 'Нет пробы' : 'Нет данных' });
+      const value = el('span', { class: `ev ${env ? 'bad' : 'ok'}`, text: soft(env ? 'Коррозионная' : 'Некоррозионная') });
+      return noSample ? el('div', { style: 'display:flex; flex-direction:column; align-items:flex-start; gap:2px' }, value,
+        el('span', { class: 'sub', style: 'font-size:10px', title: 'Лабораторной пробы за окно отбора нет: среда оценена по телеметрии или реестру.', text: 'без пробы' })) : value;
     }
     function actCell(act, corrosion, missing) {
       const [text, cls] = ACT_WORDS(act, corrosion, missing);
@@ -727,9 +753,21 @@
 
     function renderTable() {
       const rows = visibleWells();
+      const hidden = hiddenUnscored();
+      const unscored = state.rating.wells.filter(w => w.index === null).length;
+      $('unscoredCount').textContent = unscored ? `(${unscored})` : '';
       if (!state.rating.wells.length) { $('rows').replaceChildren(emptyRating(state.rating.data || {})); return; }
-      if (!rows.length) { $('rows').replaceChildren(el('div', { class: 'empty', text: 'Нет скважин с выбранными условиями.' })); return; }
-      $('rows').replaceChildren(...rows.map(w => {
+      const showHidden = hidden ? el('button', { class: 'btn secondary small', type: 'button', text: `Показать без оценки (${hidden})`, onClick: () => setShowUnscored(true) }) : null;
+      if (!rows.length) { $('rows').replaceChildren(el('div', { class: 'empty' }, el('div', { text: hidden ? `Рассчитанных скважин нет; без оценки моделей — ${hidden}.` : 'Нет скважин с выбранными условиями.' }), showHidden ? el('div', { class: 'row', style: 'justify-content:center; margin-top:8px' }, showHidden) : null)); return; }
+      // Long ratings are shown in pages: the table is redrawn on every automatic refresh.
+      const shown = rows.slice(0, state.tableLimit);
+      const more = rows.length - shown.length;
+      const footer = more || hidden ? el('div', { class: 'table-more' },
+        more ? el('span', { text: `Показаны ${shown.length} из ${rows.length}.` }) : null,
+        more ? el('button', { class: 'btn secondary small', type: 'button', text: `Показать ещё ${Math.min(TABLE_PAGE, more)}`, onClick: () => { state.tableLimit += TABLE_PAGE; renderTable(); } }) : null,
+        more > TABLE_PAGE ? el('button', { class: 'btn secondary small', type: 'button', text: 'Показать все', onClick: () => { state.tableLimit = Infinity; renderTable(); } }) : null,
+        hidden ? el('span', { text: `Скрыто без оценки моделей: ${hidden}.` }) : null, showHidden) : null;
+      $('rows').replaceChildren(...shown.map(w => {
         const key = measureKey(w);
         return el('div', { class: `grid-row trow${state.selected === w.well_id && state.drawerOpen ? ' sel' : ''}${key === 'none' ? ' muted' : ''}`, role: 'row', 'data-well': w.well_id, style: 'cursor:pointer', onClick: (event) => openWell(w.well_id, event.target.closest('button') || event.currentTarget) },
           el('div', { style: 'font-weight:700; font-variant-numeric:tabular-nums; color:var(--navy-2)', text: w.rank ?? '—' }),
@@ -753,7 +791,7 @@
             el('span', { text: `${fmtNum(w.liquid_rate_m3_day, 1)} м³` }),
             el('span', { class: 'sub', style: 'font-size:11px', text: w.oil_l_day === null || w.oil_l_day === undefined ? 'нефть —' : `${fmtNum(w.oil_l_day)} л нефти (${fmtNum(w.oil_pct)} %)` }))),
           el('div', { 'data-label': 'Полнота данных' }, gapsCell(w)));
-      }));
+      }), ...(footer ? [footer] : []));
     }
 
     function emptyRating(data) {
@@ -1551,6 +1589,10 @@
       parts.push(el('div', { style: 'display:flex; flex-wrap:wrap; gap:8px; align-items:center' },
         el('span', { class: `chip ${MEASURE_CLASS[p.measure] || 'unscored'}`, text: p.measure }),
         el('span', { style: 'font-size:13px; font-weight:600', text: p.summary || '' })));
+      // The proposal was drafted on an earlier rating: say so when the index or the measure moved since.
+      const nowCode = detail.measure_code || null;
+      const stale = (p.index !== undefined && p.index !== null && detail.index !== p.index) || ((p.rating_measure || null) !== nowCode);
+      if (stale) parts.push(el('div', { class: 'missing', text: `Рейтинг изменился после подготовки предложения: было — индекс ${p.index ?? '—'}${p.rating_measure ? ', ' + p.rating_measure : ''}; сейчас — индекс ${detail.index ?? '—'}${nowCode ? ', ' + nowCode : ''}. Сформируйте предложение заново.` }));
       if (p.differs_from_rating) parts.push(el('div', { class: 'hint warn', text: `Отличается от мероприятия рейтинга (${p.rating_measure}) — см. обоснование.` }));
       if (p.actions?.length) parts.push(el('div', {}, el('div', { class: 'lbl', text: 'Действия' }), el('ul', {}, p.actions.map(a => el('li', { text: a })))));
       parts.push(el('dl', { class: 'dl' },
@@ -1630,8 +1672,11 @@
     // ---------------------------------------------------------------- start
     try { $('apiKey').value = sessionStorage.getItem('maiApiKey') || ''; } catch { /* storage may be unavailable */ }
     $('apiKey').addEventListener('change', () => { try { sessionStorage.setItem('maiApiKey', $('apiKey').value.trim()); } catch { /* ignore */ } refresh(); loadSources(); loadDocuments(); });
-    $('search').addEventListener('input', () => { if (state.rating) renderTable(); });
-    $('fieldFilter').addEventListener('change', () => { if (state.rating) renderTable(); });
+    $('search').addEventListener('input', () => { state.tableLimit = TABLE_PAGE; if (state.rating) renderTable(); });
+    $('fieldFilter').addEventListener('change', () => { state.tableLimit = TABLE_PAGE; if (state.rating) renderTable(); });
+    try { state.showUnscored = localStorage.getItem('maiShowUnscored') === '1'; } catch { /* storage may be unavailable */ }
+    $('showUnscored').checked = state.showUnscored;
+    $('showUnscored').addEventListener('change', () => setShowUnscored($('showUnscored').checked));
     $('refresh').addEventListener('click', () => { state.cardLocked = false; refresh(); loadSources(); loadDocuments(); });
     $('run').addEventListener('click', runNow);
     $('cardClose').addEventListener('click', closeWell);

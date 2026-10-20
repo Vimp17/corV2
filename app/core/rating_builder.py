@@ -248,13 +248,20 @@ def build_values(well_id: str, records: list[TelemetryPoint], events: list[dict]
         prov["oil_pct"] = _prov(sources, _record_sources(point), point.timestamp,
                                 f"100 % − обводнённость {water_cut:g} %.")
 
-    # Operating status: the latest DARS status, else fresh telemetry implies the well runs.
+    # Operating status: the latest DARS status, else a fresh measurement implies the well runs.
+    # A registry row (snapshot) is not a measurement and says nothing about the status.
+    from app.core.source_kinds import is_lab_only, is_snapshot, snapshot_source_ids
+
+    snapshot_ids = snapshot_source_ids()
+    measured = [point for point in records if not is_snapshot(point, snapshot_ids)]
+    # «Телеметрия (ДАРС)» in the data gaps: telemetry series only, not laboratory samples.
+    series = [point for point in measured if not is_lab_only(point, sources.lab_ids)]
     value, point = _latest(records, "in_operation")
     if point is not None:
         values["in_operation"] = bool(value)
         prov["in_operation"] = _prov(sources, _record_sources(point), point.timestamp)
-    elif records:
-        last = records[-1]
+    elif measured:
+        last = measured[-1]
         age_hours = (now - _utc(last.timestamp)).total_seconds() / 3600
         fresh = age_hours <= settings.max_telemetry_age_hours
         values["in_operation"] = True if fresh else None
@@ -383,14 +390,15 @@ def build_values(well_id: str, records: list[TelemetryPoint], events: list[dict]
 
     # What is missing, by section, so the dashboard can say what to request.
     gaps: list[dict] = []
-    if not records:
+    if not series:
         gaps.append({"key": "telemetry", "note": "Нет телеметрии ДАРС."})
     elif skipped is not None:
         gaps.append({"key": "telemetry", "note": "Мало замеров для расчёта моделей."})
-    elif (now - _utc(records[-1].timestamp)).total_seconds() / 3600 > settings.max_telemetry_age_hours:
+    elif (now - _utc(series[-1].timestamp)).total_seconds() / 3600 > settings.max_telemetry_age_hours:
         gaps.append({"key": "telemetry", "note": "Телеметрия устарела."})
     if values.get("sampling") is not True:
-        gaps.append({"key": "samples", "note": f"Нет пробы ХИМИК за {settings.rating_sampling_days} сут."})
+        gaps.append({"key": "samples", "note": f"Нет лабораторной пробы (ХИМИК или протокол) за "
+                                               f"{settings.rating_sampling_days} сут."})
     demounts = [event for event in by_kind["demount"] if _utc(event["event_date"]) >= window_start]
     if demounts:
         last_demount = _utc(demounts[-1]["event_date"])

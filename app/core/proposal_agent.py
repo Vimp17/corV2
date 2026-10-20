@@ -109,7 +109,7 @@ def build_context(well_id: str) -> dict | None:
               "base_act", "base_corrosion", "model_ntc", "model_math", "sampling")}
     context: dict[str, Any] = {
         "well_id": well_id,
-        "today": date.today().isoformat(),
+        "today": rating.local_today().isoformat(),
         "rating": {
             "index": row.get("index"), "index_before_protection": row.get("index_raw"),
             "measure_code": row.get("measure_code"), "measure": row.get("measure_label"),
