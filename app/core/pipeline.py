@@ -46,8 +46,13 @@ class PreparedAnalysis:
 def prepare_well_analysis(well_id: str, records: list[TelemetryPoint]) -> PreparedAnalysis:
     if not records:
         raise ValueError("no telemetry records were supplied")
+    from app.core.source_kinds import lab_source_ids, snapshot_source_ids
+
     dq = validate_records(records)
-    normalized, normalization_report = normalize_records(records, settings.max_forward_fill_days)
+    snapshots = snapshot_source_ids()
+    normalized, normalization_report = normalize_records(
+        records, settings.max_forward_fill_days, sample_fill_days=settings.rating_sampling_days,
+        sample_sources=lab_source_ids() | snapshots, snapshot_sources=snapshots)
     features = build_features(well_id, normalized)
     latest_timestamp = features.latest_timestamp
     latest_utc = (latest_timestamp.replace(tzinfo=timezone.utc) if latest_timestamp.tzinfo is None

@@ -73,11 +73,14 @@ def load_document_types() -> dict:
 
 def source_titles() -> dict[str, str]:
     """source_id -> title, for the rating provenance ("Акт разбора на базе (документ)")."""
+    from app.core.documents import nkt_registry
+
+    titles = {nkt_registry.SOURCE_ID: f"{nkt_registry.TITLE} (документ)"}
     try:
-        return {spec["source_id"]: f"{spec.get('title') or spec['source_id']} (документ)"
-                for spec in load_document_types().values()}
+        return titles | {spec["source_id"]: f"{spec.get('title') or spec['source_id']} (документ)"
+                         for spec in load_document_types().values()}
     except DocumentTypesError:
-        return {}
+        return titles
 
 
 def lab_source_ids() -> set[str]:

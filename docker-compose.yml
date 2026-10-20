@@ -18,9 +18,18 @@ services:
       start_period: 10s
 
   mai-api:
-    build: .
+    build:
+      context: .
+      args:
+        UID: ${MAI_UID:-1000}
+        GID: ${MAI_GID:-1000}
     container_name: mai-corrosion-api
     restart: unless-stopped
+    # Every variable of .env reaches the API (documents, OCR, MAI_SOURCE_<ID>_URL of a new source
+    # profile…); the explicit list below sets container paths and defaults and takes precedence.
+    env_file:
+      - path: .env
+        required: false
     ports:
       - "127.0.0.1:8000:8000"
     environment:

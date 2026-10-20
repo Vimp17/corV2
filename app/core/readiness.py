@@ -34,7 +34,11 @@ def assess_readiness(well_id: str, records: list[TelemetryPoint], source_rows: l
 
     Blocking: too few unique measurements, too few recent observations for a trend, too few
     current signals, or timestamps beyond the allowed future skew. Staleness is not blocking.
+    Snapshots (a registry without its own measurement time) are not measurements and are left out.
     """
+    from app.core.source_kinds import observations
+
+    records = observations(records)
     timestamps = {
         (point.timestamp.replace(tzinfo=timezone.utc) if point.timestamp.tzinfo is None
          else point.timestamp.astimezone(timezone.utc)).isoformat()

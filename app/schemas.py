@@ -220,6 +220,8 @@ class NormalizationReport(APIModel):
     calculated_values_added: bool
     imputed_values: int
     forward_fill_limit_days: int
+    # Laboratory samples and snapshots are carried this many days (MAI_RATING_SAMPLING_DAYS).
+    sample_fill_limit_days: int | None = None
     note: str
 
 

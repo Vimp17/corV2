@@ -792,6 +792,13 @@ def get_rating_row(well_id: str) -> dict | None:
     return _rating_row(row) if row else None
 
 
+def rating_scores() -> list[tuple[str, float | None, float | None]]:
+    """(well_id, model_ntc, model_math) of every well: enough to rank one well without loading all rows."""
+    with engine().connect() as conn:
+        return [tuple(row) for row in conn.execute(
+            select(well_rating.c.well_id, well_rating.c.model_ntc, well_rating.c.model_math)).all()]
+
+
 def update_rating_row(well_id: str, values: dict) -> bool:
     """Change operator fields only (plan, Промайн document status, comment)."""
     values = {key: value for key, value in values.items() if key in OPERATOR_RATING_FIELDS}
@@ -838,6 +845,16 @@ def list_era_proposals(well_id: str | None = None, limit: int = 100) -> list[dic
         return [_proposal_row(row) for row in conn.execute(query).mappings().all()]
 
 
+def latest_era_proposal(well_id: str) -> dict | None:
+    """The well's most recent proposal, with the same fields as latest_era_proposals()."""
+    query = (select(era_proposals.c.well_id, era_proposals.c.proposal_id, era_proposals.c.status,
+                    era_proposals.c.change_type, era_proposals.c.created_at)
+             .where(era_proposals.c.well_id == well_id).order_by(era_proposals.c.created_at.desc()).limit(1))
+    with engine().connect() as conn:
+        row = conn.execute(query).mappings().first()
+    return _proposal_row(row) if row else None
+
+
 def latest_era_proposals() -> dict[str, dict]:
     """Most recent proposal per well, for the rating table."""
     query = (select(era_proposals.c.well_id, era_proposals.c.proposal_id, era_proposals.c.status,
@@ -850,6 +867,8 @@ def latest_era_proposals() -> dict[str, dict]:
 
 # --------------------------------------------------------------------------- documents
 DOCUMENT_LIST_COLUMNS = [column for column in documents.c if column.name != "text"]
+# The list leaves out the extracted records too: a registry of many wells makes them large.
+DOCUMENT_SUMMARY_COLUMNS = [column for column in DOCUMENT_LIST_COLUMNS if column.name != "extraction"]
 
 
 def _document_row(row, with_text: bool = False) -> dict:
@@ -884,7 +903,7 @@ def get_document(document_id: str, with_text: bool = False) -> dict | None:
 
 
 def list_documents(*, well_id: str | None = None, status: str | None = None, limit: int = 200) -> list[dict]:
-    query = select(*DOCUMENT_LIST_COLUMNS).order_by(documents.c.created_at.desc()).limit(limit)
+    query = select(*DOCUMENT_SUMMARY_COLUMNS).order_by(documents.c.created_at.desc()).limit(limit)
     if status:
         query = query.where(documents.c.status == status)
     if well_id:

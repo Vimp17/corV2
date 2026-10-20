@@ -102,6 +102,9 @@
     /* Rating table */
     .toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:10px 16px; padding:12px 16px; border-bottom:1px solid var(--line-2) }
     .toolbar label { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--muted) }
+    .toolbar label.check { gap:6px; cursor:pointer }
+    .toolbar label.check input { min-height:0; width:16px; height:16px; margin:0 }
+    .table-more { display:flex; flex-wrap:wrap; align-items:center; justify-content:center; gap:8px 12px; padding:14px 16px; font-size:13px; color:var(--muted); border-top:1px solid var(--line-2) }
     .toolbar input, .toolbar select { padding:7px 9px; border:1px solid #C9D2DC; border-radius:4px; min-height:36px; background:#fff; color:var(--ink) }
     /* The table fits the window: no inner scroll, compact type, columns share the width.
        All 13 columns from 960 px of table width (a 1024 px window); narrower (tablet, phone) — a card per well. */
@@ -266,6 +269,18 @@
     .docs-counts { display:flex; flex-wrap:wrap; gap:6px }
     .docs-bar { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px 16px }
     .clearwrap { position:relative }
+    .hist-line { display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px; min-width:0 }
+    .hist-toggle { display:inline-flex; align-items:center; gap:6px }
+    .hist-toggle b { font-variant-numeric:tabular-nums }
+    .hist-toggle .caret { display:inline-block; transition:transform .15s }
+    .hist-toggle[aria-expanded="true"] .caret { transform:rotate(180deg) }
+    .hist-last { font-size:12px; color:var(--muted); display:inline-flex; flex-wrap:wrap; align-items:center; gap:4px 6px; min-width:0; overflow-wrap:anywhere }
+    .doc-history { display:flex; flex-direction:column; gap:10px; border:1px solid var(--line); border-radius:var(--radius); padding:10px; background:#fff; box-shadow:0 6px 18px rgba(14,42,71,.08) }
+    .doc-history[hidden] { display:none }
+    .doc-history .docs-table-box { max-height:min(70vh, 640px); overflow:auto }
+    .doc-history .doc-table thead th { position:sticky; top:0; z-index:1 }
+    details.rec > summary { cursor:pointer; list-style-position:inside }
+    details.rec > .fields { margin-top:6px }
     .clearwrap .gapmenu { left:auto; right:0; width:380px }
     .gapmenu .menu-note { font-size:11px; color:var(--muted); padding:2px 10px 6px }
     .dstatus { display:inline-flex; align-items:center; padding:2px 8px; border-radius:10px; font-size:12px; font-weight:600; white-space:nowrap; line-height:1.4 }
@@ -386,6 +401,7 @@
         <div class="toolbar">
           <label>Поиск скважины <input id="search" type="search" placeholder="номер" autocomplete="off"></label>
           <label>Месторождение <select id="fieldFilter"><option value="">Все</option></select></label>
+          <label class="check" title="Скважины, по которым модели не рассчитаны (мало данных). В фильтрах «Нет данных» они видны всегда."><input id="showUnscored" type="checkbox"> Показывать без оценки <b id="unscoredCount"></b></label>
           <span class="sub" id="updated">Загрузка…</span>
           <span class="spacer-x"></span>
           <button class="btn secondary small" id="export" type="button">Скачать рейтинг (Excel)</button>
@@ -429,7 +445,7 @@
       <section class="panel docs anchor" id="sec-docs" aria-labelledby="docsTitle">
         <div>
           <h2 class="section" id="docsTitle">Документы</h2>
-          <div class="sub">Акты демонтажа и разбора, протоколы хим. анализа, паспорта скважин — PDF, сканы, фото и Excel. Система распознаёт текст (сканы — OCR-моделью), определяет тип и извлекает данные с цитатой из документа. Подтверждённые данные попадают в рейтинг; нераспознанный документ не учитывается — данных по нему нет.</div>
+          <div class="sub">Акты демонтажа и разбора, протоколы хим. анализа, паспорта скважин, реестр коррозии НКТ — PDF, сканы, фото и Excel. Система распознаёт текст (сканы — OCR-моделью), определяет тип и извлекает данные с цитатой из документа. Подтверждённые данные попадают в рейтинг; нераспознанный документ не учитывается — данных по нему нет.</div>
         </div>
         <div class="dropzone" id="dropzone">
           <div class="grow-1">
@@ -441,17 +457,26 @@
         </div>
         <div class="docs-meta" id="docsMeta"></div>
         <div class="docs-bar">
-          <div class="docs-counts" id="docsCounts" role="group" aria-label="Документы по статусу"></div>
-          <div class="clearwrap">
-            <button class="btn secondary small" id="docClear" type="button" aria-expanded="false" aria-controls="docClearMenu" hidden>Очистить список ▾</button>
-            <div class="gapmenu" id="docClearMenu" role="menu" hidden></div>
+          <div class="hist-line">
+            <button class="btn secondary small hist-toggle" id="docHistToggle" type="button" aria-expanded="false" aria-controls="docHistory">История загрузок <b id="docHistCount">…</b><span class="caret" aria-hidden="true">▾</span></button>
+            <span class="hist-last" id="docLast"></span>
           </div>
+          <div class="docs-counts" id="docsCounts" role="group" aria-label="Документы по статусу"></div>
         </div>
-        <div class="docs-table-box">
-          <table class="doc-table">
-            <thead><tr><th>Файл</th><th>Тип документа</th><th>Скважина</th><th>Дата документа</th><th>Статус</th><th>Получен</th></tr></thead>
-            <tbody id="docRows"><tr><td colspan="6" class="empty">Загружаем документы…</td></tr></tbody>
-          </table>
+        <div class="doc-history" id="docHistory" hidden>
+          <div class="docs-bar">
+            <div class="hint">Все полученные файлы, новые сверху. Нажмите на строку — откроются извлечённые данные.</div>
+            <div class="clearwrap">
+              <button class="btn secondary small" id="docClear" type="button" aria-expanded="false" aria-controls="docClearMenu" hidden>Очистить список ▾</button>
+              <div class="gapmenu" id="docClearMenu" role="menu" hidden></div>
+            </div>
+          </div>
+          <div class="docs-table-box">
+            <table class="doc-table">
+              <thead><tr><th>Файл</th><th>Тип документа</th><th>Скважина</th><th>Дата документа</th><th>Статус</th><th>Получен</th></tr></thead>
+              <tbody id="docRows"><tr><td colspan="6" class="empty">Загружаем документы…</td></tr></tbody>
+            </table>
+          </div>
         </div>
       </section>
 
@@ -494,13 +519,14 @@
     const $ = (id) => document.getElementById(id);
     const DAY = 86400000;
     const AUTO_REFRESH_SECONDS = 60;
+    const TABLE_PAGE = 100;
     const CHANGE_LABELS_FALLBACK = { include: 'Включить скважину в ЭРА ремонта', exclude: 'Исключить скважину из ЭРА ремонта', reschedule: 'Перенести сроки ремонта', scope: 'Изменить состав работ', other: 'Другое изменение ЭРА ремонта' };
     const PROPOSAL_STATUS = { sent: 'отправлено', failed: 'ошибка отправки', not_configured: 'сохранено, отправка не настроена', queued: 'в очереди' };
     const DOC_NEXT = { not_created: 'created', created: 'sent' };
     const DOC_ACTION = { not_created: 'Отметить: документ сформирован', created: 'Отметить: направлен в ЭРА' };
     const RISK_RU = { CRITICAL: 'критический', HIGH: 'высокий', MEDIUM: 'средний', LOW: 'низкий', UNKNOWN: 'нет оценки', DATA_ISSUE: 'не хватает данных', NOT_ANALYZED: 'не рассчитано' };
 
-    const state = { rating: null, telemetry: {}, filter: 'all', selected: null, busy: false, cardLocked: false, sources: null, cardTab: 'overview', drawerOpen: false, opener: null };
+    const state = { rating: null, telemetry: {}, filter: 'all', selected: null, busy: false, cardLocked: false, sources: null, cardTab: 'overview', drawerOpen: false, opener: null, tableLimit: 100, showUnscored: false };
 
     // ---------------------------------------------------------------- helpers
     function el(tag, props = {}, ...children) {
@@ -548,9 +574,10 @@
       if (state.busy && options.auto) return;
       $('refresh').disabled = true;
       try {
+        // The analysis runs feed only the «Телеметрия и ИИ» tab: not requested while it is hidden.
         const [rating, telemetry] = await Promise.all([
           api('/api/v1/rating'),
-          api('/api/v1/dashboard/risk-ranking').catch(() => null),
+          CARD_TABS.includes('telemetry') ? api('/api/v1/dashboard/risk-ranking').catch(() => null) : null,
         ]);
         state.rating = rating;
         state.telemetry = {};
@@ -594,7 +621,7 @@
 
     const GAP_FALLBACK = { telemetry: 'Телеметрия ДАРС', samples: 'Пробы ХИМИК', base_act: 'Акты разбора', equipment: 'Оборудование (ЭРА)', models: 'Оценка моделей' };
     const gapLabels = () => state.rating?.settings?.gap_labels || GAP_FALLBACK;
-    function setFilter(filter) { state.filter = filter; closeGapMenu(); render(); }
+    function setFilter(filter) { state.filter = filter; state.tableLimit = TABLE_PAGE; closeGapMenu(); render(); }
     function filterLabel(filter) {
       if (filter === 'waiting') return 'ожидают решения';
       if (filter.startsWith('gap:')) return `нет данных: ${(gapLabels()[filter.slice(4)] || '').toLowerCase()}`;
@@ -632,7 +659,8 @@
       const notes = [];
       if (counts.protection_adjusted) notes.push(`Индекс снижен с учётом защиты: ${counts.protection_adjusted}`);
       if (counts.protection_insufficient) notes.push(`Защита недостаточна: ${counts.protection_insufficient}`);
-      if (counts.engineer) notes.push(`Решение инженера (индекс 61–79): ${counts.engineer}`);
+      const engineer = measures.find(m => m.key === 'engineer');
+      if (counts.engineer) notes.push(`Решение инженера${engineer ? ` (индекс ${engineer.index_from}–${engineer.index_to})` : ''}: ${counts.engineer}`);
       notes.forEach(text => items.push(el('div', { class: 'note', text })));
       $('navSummary').replaceChildren(...items);
     }
@@ -664,8 +692,23 @@
       const f = state.filter;
       const keep = (w) => f === 'all' || (f === 'waiting' ? w.awaiting_decision
         : f.startsWith('gap:') ? (w.data_gaps || []).some(g => g.key === f.slice(4)) : w.measure === f);
-      return state.rating.wells.filter(w => keep(w)
+      return state.rating.wells.filter(w => keep(w) && (f !== 'all' || state.showUnscored || w.index !== null)
         && (!field || w.field === field) && (!query || String(w.well_id).toLowerCase().includes(query)));
+    }
+    // Wells without a model score hidden from «Все» by the «Показывать без оценки» switch.
+    function hiddenUnscored() {
+      if (state.filter !== 'all' || state.showUnscored) return 0;
+      const query = $('search').value.trim().toLowerCase();
+      const field = $('fieldFilter').value;
+      return state.rating.wells.filter(w => w.index === null && (!field || w.field === field)
+        && (!query || String(w.well_id).toLowerCase().includes(query))).length;
+    }
+    function setShowUnscored(show) {
+      state.showUnscored = show;
+      $('showUnscored').checked = show;
+      try { localStorage.setItem('maiShowUnscored', show ? '1' : '0'); } catch { /* storage may be unavailable */ }
+      state.tableLimit = TABLE_PAGE;
+      if (state.rating) renderTable();
     }
 
     function evidence(value, badWhen, labels) {
@@ -679,10 +722,14 @@
       : corrosion === true ? ['Есть коррозия', 'bad'] : corrosion === false ? ['Коррозии нет', 'ok'] : ['Признак не указан', 'warn'];
     // «Среднекоррозионная» wraps as «Средне-/коррозионная» in a narrow column; nothing is abbreviated.
     const soft = (text) => String(text || '').replace(/(средне|не)(?=корроз)/gi, '$1\u00AD').replace(/(корро)(зи)(он)(ная)/gi, '$1\u00AD$2$3\u00AD$4').replace(/(корро)(зи[ия])(?![а-я])/gi, '$1\u00AD$2');
+    // The environment as assessed (ДАРС, пробы, реестр); a missing recent sample is a note under it.
     function envCell(w) {
-      if (w.sampling !== true) return el('span', { class: 'ev warn', text: 'Нет пробы' });
-      if (w.corrosive_environment === null || w.corrosive_environment === undefined) return el('span', { class: 'ev na', text: 'Нет данных' });
-      return el('span', { class: `ev ${w.corrosive_environment ? 'bad' : 'ok'}`, text: soft(w.corrosive_environment ? 'Коррозионная' : 'Некоррозионная') });
+      const env = w.corrosive_environment;
+      const noSample = w.sampling !== true;
+      if (env === null || env === undefined) return el('span', { class: `ev ${noSample ? 'warn' : 'na'}`, text: noSample ? 'Нет пробы' : 'Нет данных' });
+      const value = el('span', { class: `ev ${env ? 'bad' : 'ok'}`, text: soft(env ? 'Коррозионная' : 'Некоррозионная') });
+      return noSample ? el('div', { style: 'display:flex; flex-direction:column; align-items:flex-start; gap:2px' }, value,
+        el('span', { class: 'sub', style: 'font-size:10px', title: 'Лабораторной пробы за окно отбора нет: среда оценена по телеметрии или реестру.', text: 'без пробы' })) : value;
     }
     function actCell(act, corrosion, missing) {
       const [text, cls] = ACT_WORDS(act, corrosion, missing);
@@ -706,9 +753,21 @@
 
     function renderTable() {
       const rows = visibleWells();
+      const hidden = hiddenUnscored();
+      const unscored = state.rating.wells.filter(w => w.index === null).length;
+      $('unscoredCount').textContent = unscored ? `(${unscored})` : '';
       if (!state.rating.wells.length) { $('rows').replaceChildren(emptyRating(state.rating.data || {})); return; }
-      if (!rows.length) { $('rows').replaceChildren(el('div', { class: 'empty', text: 'Нет скважин с выбранными условиями.' })); return; }
-      $('rows').replaceChildren(...rows.map(w => {
+      const showHidden = hidden ? el('button', { class: 'btn secondary small', type: 'button', text: `Показать без оценки (${hidden})`, onClick: () => setShowUnscored(true) }) : null;
+      if (!rows.length) { $('rows').replaceChildren(el('div', { class: 'empty' }, el('div', { text: hidden ? `Рассчитанных скважин нет; без оценки моделей — ${hidden}.` : 'Нет скважин с выбранными условиями.' }), showHidden ? el('div', { class: 'row', style: 'justify-content:center; margin-top:8px' }, showHidden) : null)); return; }
+      // Long ratings are shown in pages: the table is redrawn on every automatic refresh.
+      const shown = rows.slice(0, state.tableLimit);
+      const more = rows.length - shown.length;
+      const footer = more || hidden ? el('div', { class: 'table-more' },
+        more ? el('span', { text: `Показаны ${shown.length} из ${rows.length}.` }) : null,
+        more ? el('button', { class: 'btn secondary small', type: 'button', text: `Показать ещё ${Math.min(TABLE_PAGE, more)}`, onClick: () => { state.tableLimit += TABLE_PAGE; renderTable(); } }) : null,
+        more > TABLE_PAGE ? el('button', { class: 'btn secondary small', type: 'button', text: 'Показать все', onClick: () => { state.tableLimit = Infinity; renderTable(); } }) : null,
+        hidden ? el('span', { text: `Скрыто без оценки моделей: ${hidden}.` }) : null, showHidden) : null;
+      $('rows').replaceChildren(...shown.map(w => {
         const key = measureKey(w);
         return el('div', { class: `grid-row trow${state.selected === w.well_id && state.drawerOpen ? ' sel' : ''}${key === 'none' ? ' muted' : ''}`, role: 'row', 'data-well': w.well_id, style: 'cursor:pointer', onClick: (event) => openWell(w.well_id, event.target.closest('button') || event.currentTarget) },
           el('div', { style: 'font-weight:700; font-variant-numeric:tabular-nums; color:var(--navy-2)', text: w.rank ?? '—' }),
@@ -732,7 +791,7 @@
             el('span', { text: `${fmtNum(w.liquid_rate_m3_day, 1)} м³` }),
             el('span', { class: 'sub', style: 'font-size:11px', text: w.oil_l_day === null || w.oil_l_day === undefined ? 'нефть —' : `${fmtNum(w.oil_l_day)} л нефти (${fmtNum(w.oil_pct)} %)` }))),
           el('div', { 'data-label': 'Полнота данных' }, gapsCell(w)));
-      }));
+      }), ...(footer ? [footer] : []));
     }
 
     function emptyRating(data) {
@@ -1244,6 +1303,7 @@
 
     // ---------------------------------------------------------------- documents
     const DOC_POLL_MS = 3000;
+    const DOC_WELLS_SHOWN = 6;
     const MEASURE_CLASS = { 'ППР': 'repair', 'РИ': 'engineer', 'УДР': 'ud', '—': 'none' };
     const FIELD_STATUS_NOTE = { missing: 'нет в документе', invalid: 'не распознано', no_quote: 'нет цитаты', quote_not_found: 'цитата не найдена', mismatch: 'не совпадает с цитатой', implausible: 'неправдоподобно' };
     const docBusy = (doc) => doc.status === 'queued' || doc.status === 'processing';
@@ -1284,6 +1344,11 @@
       $('docsCounts').replaceChildren(...Object.entries(labels).filter(([key]) => counts[key]).map(([key, label]) =>
         el('span', { class: `dstatus ${key}`, text: `${label}: ${counts[key]}` })));
       $('docClear').hidden = !documents.length;
+      const total = Object.values(counts).reduce((sum, n) => sum + n, 0);
+      $('docHistCount').textContent = String(total);
+      const last = documents[0];
+      $('docLast').replaceChildren(...(last ? ['Последний: ', el('span', { text: `«${last.filename}»` }), dstatus(last)] : []));
+      if (state.docOpen && !state.docHistory) setDocHistory(true, { render: false });
       if (!documents.length) closeClearMenu();
       if (!documents.length) {
         $('docRows').replaceChildren(el('tr', {}, el('td', { colspan: '6', class: 'empty', text: 'Документов пока нет. Загрузите файлы или положите их в папку-приёмник.' })));
@@ -1293,10 +1358,11 @@
       for (const doc of documents) {
         const open = state.docOpen === doc.document_id;
         const wells = (doc.well_ids || []);
+        const shownWells = wells.slice(0, DOC_WELLS_SHOWN);
         rows.push(el('tr', { class: `drow${open ? ' open' : ''}`, tabindex: '0', 'aria-expanded': String(open), onClick: () => toggleDoc(doc.document_id), onKeydown: (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleDoc(doc.document_id); } } },
           el('td', {}, doc.filename, doc.duplicate ? el('span', { class: 'msg', text: 'повторная загрузка' }) : null),
           el('td', { 'data-label': 'Тип', text: doc.type_title || (docBusy(doc) ? '…' : '—') }),
-          el('td', { 'data-label': 'Скважина' }, wells.length ? wells.map((id, i) => [i ? ', ' : '', el('a', { href: `#well=${encodeURIComponent(id)}`, 'data-well': id, onClick: (event) => { event.stopPropagation(); event.preventDefault(); openWell(id, event.currentTarget); }, text: id })]) : '—'),
+          el('td', { 'data-label': 'Скважина' }, wells.length ? shownWells.map((id, i) => [i ? ', ' : '', el('a', { href: `#well=${encodeURIComponent(id)}`, 'data-well': id, onClick: (event) => { event.stopPropagation(); event.preventDefault(); openWell(id, event.currentTarget); }, text: id })]).concat(wells.length > shownWells.length ? [el('span', { class: 'msg', text: `и ещё ${wells.length - shownWells.length}` })] : []) : '—'),
           el('td', { 'data-label': 'Дата документа', text: doc.doc_date ? fmtIso(doc.doc_date) : '—' }),
           el('td', {}, dstatus(doc), doc.status_message ? el('span', { class: 'msg', text: doc.status_message }) : null),
           el('td', { 'data-label': 'Получен', text: fmtTime(doc.created_at) })));
@@ -1304,6 +1370,16 @@
       }
       $('docRows').replaceChildren(...rows);
       if (state.docOpen) loadDocDetail(state.docOpen);
+    }
+
+    // Upload history: folded by default so it does not take the page; opened from the toggle.
+    function setDocHistory(open, { render = true } = {}) {
+      state.docHistory = open;
+      $('docHistory').hidden = !open;
+      $('docHistToggle').setAttribute('aria-expanded', String(open));
+      try { localStorage.setItem('maiDocHistory', open ? '1' : '0'); } catch { /* storage may be unavailable */ }
+      if (!open) closeClearMenu();
+      if (open && render && state.docs) renderDocuments();
     }
 
     function toggleDoc(id) {
@@ -1340,18 +1416,30 @@
         parts.push(el('div', { class: 'hint', text: `Таблица в формате выгрузки ${String(loaded.source_id || '').toUpperCase()} — загружена обычным импортом источника: ${loaded.records} записей, скважин ${loaded.wells.length}.` }));
         parts.push(columnsList(loaded.source_columns, loaded.extra_columns, loaded.unused_columns));
       }
-      (extraction.records || []).forEach((record, index) => {
-        const title = `${(extraction.records.length > 1 ? `Запись ${index + 1}` : 'Извлечённые данные')}${record.well_id ? ` — скважина ${record.well_id}` : ''}: ${record.accepted ? 'принята' : 'не принята'}`;
-        parts.push(el('div', { class: `rec-title${record.accepted ? '' : ' bad'}`, text: title }));
-        if (record.issues?.length) parts.push(el('div', { class: 'hint warn', text: record.issues.join(' ') }));
-        parts.push(el('dl', { class: 'fields' }, Object.entries(record.fields).map(([name, field]) => [
+      if (doc.doc_type === 'excel:nkt_registry' && doc.loaded) {
+        const loaded = doc.loaded;
+        parts.push(el('div', { class: 'hint', text: `Реестр коррозии НКТ: ${loaded.records} строк по ${loaded.wells.length} скв.${loaded.new_wells?.length ? `, из них новых в системе — ${loaded.new_wells.length}` : ''}. Обводнённость, хлориды (Cl⁻), CO₂ % мол. и дебит учитываются в рейтинге; остальные столбцы видны в карточке скважины и ИИ-агенту.` }));
+        parts.push(columnsList(loaded.source_columns, loaded.extra_columns, loaded.unused_columns));
+      }
+      if (extraction.date_note) parts.push(el('div', { class: 'hint warn', text: extraction.date_note }));
+      const records = extraction.records || [];
+      const fold = records.length > 3;
+      if (fold && extraction.records_total > records.length) parts.push(el('div', { class: 'hint', text: `Показаны первые ${records.length} строк из ${extraction.records_total}; все принятые строки загружены.` }));
+      records.forEach((record, index) => {
+        const title = `${(records.length > 1 ? `Запись ${index + 1}` : 'Извлечённые данные')}${record.well_id ? ` — скважина ${record.well_id}` : ''}${record.new_well ? ' (новая)' : ''}: ${record.accepted ? 'принята' : 'не принята'}`;
+        const box = fold ? el('details', { class: 'rec' }) : null;
+        const add = (node) => (box ? box.append(node) : parts.push(node));
+        if (box) { box.append(el('summary', { class: `rec-title${record.accepted ? '' : ' bad'}`, text: title })); parts.push(box); }
+        else parts.push(el('div', { class: `rec-title${record.accepted ? '' : ' bad'}`, text: title }));
+        if (record.issues?.length) add(el('div', { class: 'hint warn', text: record.issues.join(' ') }));
+        add(el('dl', { class: 'fields' }, Object.entries(record.fields).map(([name, field]) => [
           el('dt', { text: labels[name] || name }),
           el('dd', {}, field.status === 'ok' ? fmtValue(field.value) : el('span', { class: 'na', text: '—' }),
             field.status !== 'ok' && field.status !== 'missing' ? el('span', { class: 'rej', text: field.note || FIELD_STATUS_NOTE[field.status] }) : null,
             field.quote ? el('span', { class: 'q', text: `«${field.quote}»` }) : null,
             Array.isArray(field.value) ? [...new Set(field.value.map(item => item.quote))].map(quote => el('span', { class: 'q', text: `«${quote}»` })) : null)])));
       });
-      const meta = [doc.text_method ? `Текст: ${{ text_layer: 'текстовый слой PDF', ocr: 'OCR', mixed: 'текстовый слой и OCR', image_ocr: 'OCR изображения', excel_table: 'таблица Excel', excel_form: 'форма Excel', excel_profile: 'импорт выгрузки' }[doc.text_method] || doc.text_method}` : null,
+      const meta = [doc.text_method ? `Текст: ${{ text_layer: 'текстовый слой PDF', ocr: 'OCR', mixed: 'текстовый слой и OCR', image_ocr: 'OCR изображения', excel_table: 'таблица Excel', excel_form: 'форма Excel', excel_profile: 'импорт выгрузки', excel_registry: 'реестр Excel' }[doc.text_method] || doc.text_method}` : null,
         doc.pages ? `${doc.file_kind === 'xlsx' ? 'листов' : 'страниц'}: ${doc.pages}` : null,
         extraction.type_method === 'rules' ? 'разобран без ИИ — по названиям столбцов и строк' : extraction.type_method ? `тип определён ${extraction.type_method === 'keywords' ? 'по ключевым словам' : 'языковой моделью'}` : null,
         doc.attempts ? `попыток: ${doc.attempts}` : null].filter(Boolean).join(' · ');
@@ -1467,8 +1555,9 @@
       const ai = el('div', { class: 'aibox', id: 'aiBox' }, el('h3', { text: 'Предложение ИИ-агента' }), el('div', { class: 'sub', text: 'Загружаем…' }));
       const docs = el('div', { class: 'box', id: 'wellDocs' }, el('h3', { text: 'Документы скважины' }), el('div', { class: 'sub', text: 'Загружаем…' }));
       const extras = el('div', { id: 'wellExtras', hidden: true });
+      const registry = el('div', { id: 'wellRegistry', hidden: true });
       loadWellExtras(w.well_id);
-      return [ai, docs, extras];
+      return [ai, docs, registry, extras];
     }
 
     async function loadWellExtras(wellId) {
@@ -1478,6 +1567,7 @@
         renderAiBox(detail);
         renderWellDocs(detail);
         renderExtraMeasurements(detail);
+        renderRegistry(detail);
       } catch (error) {
         const box = $('aiBox'); if (box) box.replaceChildren(el('h3', { text: 'Предложение ИИ-агента' }), el('div', { class: 'sub', text: error.message }));
       }
@@ -1499,6 +1589,10 @@
       parts.push(el('div', { style: 'display:flex; flex-wrap:wrap; gap:8px; align-items:center' },
         el('span', { class: `chip ${MEASURE_CLASS[p.measure] || 'unscored'}`, text: p.measure }),
         el('span', { style: 'font-size:13px; font-weight:600', text: p.summary || '' })));
+      // The proposal was drafted on an earlier rating: say so when the index or the measure moved since.
+      const nowCode = detail.measure_code || null;
+      const stale = (p.index !== undefined && p.index !== null && detail.index !== p.index) || ((p.rating_measure || null) !== nowCode);
+      if (stale) parts.push(el('div', { class: 'missing', text: `Рейтинг изменился после подготовки предложения: было — индекс ${p.index ?? '—'}${p.rating_measure ? ', ' + p.rating_measure : ''}; сейчас — индекс ${detail.index ?? '—'}${nowCode ? ', ' + nowCode : ''}. Сформируйте предложение заново.` }));
       if (p.differs_from_rating) parts.push(el('div', { class: 'hint warn', text: `Отличается от мероприятия рейтинга (${p.rating_measure}) — см. обоснование.` }));
       if (p.actions?.length) parts.push(el('div', {}, el('div', { class: 'lbl', text: 'Действия' }), el('ul', {}, p.actions.map(a => el('li', { text: a })))));
       parts.push(el('dl', { class: 'dl' },
@@ -1536,6 +1630,21 @@
           el('dd', {}, Number(item.value).toLocaleString('ru-RU', { maximumFractionDigits: 3 }), el('span', { class: 'prov', text: [item.source, item.date ? fmtIso(item.date) : null].filter(Boolean).join(' · ') }))]))));
     }
 
+    // Реестр коррозии НКТ: the well's row(s) as in the file; the AI agent sees them too.
+    function renderRegistry(detail) {
+      const box = $('wellRegistry');
+      if (!box) return;
+      const reg = detail.nkt_registry;
+      box.hidden = !reg;
+      if (!reg) { box.replaceChildren(); return; }
+      const fmt = (v) => (typeof v === 'number' ? v.toLocaleString('ru-RU', { maximumFractionDigits: 3 }) : String(v));
+      box.replaceChildren(el('div', { style: 'display:flex; flex-direction:column; gap:4px' },
+        el('h3', { class: 'group-title', text: 'Реестр коррозии НКТ' }),
+        el('div', { class: 'hint', text: `«${reg.filename}»${reg.date ? ', ' + fmtIso(reg.date) : ''}. В рейтинге учтены обводнённость, хлориды, CO₂ и дебит; остальное — для инженера и ИИ-агента.` }),
+        reg.rows.map((row, index) => [reg.rows.length > 1 ? el('div', { class: 'rec-title', text: `Запись ${index + 1}` }) : null,
+          el('dl', { class: 'dl' }, row.map(([label, value]) => [el('dt', { text: label }), el('dd', { text: fmt(value) })]))])));
+    }
+
     function renderWellDocs(detail) {
       const box = $('wellDocs');
       if (!box) return;
@@ -1543,7 +1652,7 @@
       box.replaceChildren(el('h3', { text: 'Документы скважины' }), docs.length
         ? el('ul', { class: 'welldocs' }, docs.map(doc => el('li', {},
             dstatus(doc), el('span', { text: doc.type_title || doc.filename }), doc.doc_date ? el('span', { class: 'hint', text: fmtIso(doc.doc_date) }) : null,
-            el('a', { href: '#sec-docs', onClick: () => { state.docOpen = doc.document_id; closeWell(); renderDocuments(); }, text: doc.filename }),
+            el('a', { href: '#sec-docs', onClick: () => { state.docOpen = doc.document_id; closeWell(); setDocHistory(true); }, text: doc.filename }),
             doc.status !== 'loaded' && doc.status_message ? el('span', { class: 'msg', text: doc.status_message }) : null)))
         : el('div', { class: 'hint', text: 'Документов по скважине нет. Загрузите акты, протоколы или паспорт в разделе «Документы».' }));
     }
@@ -1563,8 +1672,11 @@
     // ---------------------------------------------------------------- start
     try { $('apiKey').value = sessionStorage.getItem('maiApiKey') || ''; } catch { /* storage may be unavailable */ }
     $('apiKey').addEventListener('change', () => { try { sessionStorage.setItem('maiApiKey', $('apiKey').value.trim()); } catch { /* ignore */ } refresh(); loadSources(); loadDocuments(); });
-    $('search').addEventListener('input', () => { if (state.rating) renderTable(); });
-    $('fieldFilter').addEventListener('change', () => { if (state.rating) renderTable(); });
+    $('search').addEventListener('input', () => { state.tableLimit = TABLE_PAGE; if (state.rating) renderTable(); });
+    $('fieldFilter').addEventListener('change', () => { state.tableLimit = TABLE_PAGE; if (state.rating) renderTable(); });
+    try { state.showUnscored = localStorage.getItem('maiShowUnscored') === '1'; } catch { /* storage may be unavailable */ }
+    $('showUnscored').checked = state.showUnscored;
+    $('showUnscored').addEventListener('change', () => setShowUnscored($('showUnscored').checked));
     $('refresh').addEventListener('click', () => { state.cardLocked = false; refresh(); loadSources(); loadDocuments(); });
     $('run').addEventListener('click', runNow);
     $('cardClose').addEventListener('click', closeWell);
@@ -1602,6 +1714,8 @@
     setInterval(() => { if (!document.hidden && !state.busy) refresh({ keepNotice: true, auto: true }); }, AUTO_REFRESH_SECONDS * 1000);
     $('docPick').addEventListener('click', () => $('docFiles').click());
     $('docClear').addEventListener('click', () => ($('docClearMenu').hidden ? openClearMenu() : closeClearMenu()));
+    $('docHistToggle').addEventListener('click', () => setDocHistory(!state.docHistory));
+    try { if (localStorage.getItem('maiDocHistory') === '1') setDocHistory(true, { render: false }); } catch { /* storage may be unavailable */ }
     document.addEventListener('pointerdown', (event) => { if (!$('docClearMenu').hidden && !event.target.closest('.clearwrap')) closeClearMenu(); });
     $('docClearMenu').addEventListener('keydown', (event) => { if (event.key === 'Escape') { event.stopPropagation(); closeClearMenu(); $('docClear').focus(); } });
     $('docFiles').addEventListener('change', () => uploadDocuments($('docFiles').files));
