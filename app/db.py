@@ -850,6 +850,8 @@ def latest_era_proposals() -> dict[str, dict]:
 
 # --------------------------------------------------------------------------- documents
 DOCUMENT_LIST_COLUMNS = [column for column in documents.c if column.name != "text"]
+# The list leaves out the extracted records too: a registry of many wells makes them large.
+DOCUMENT_SUMMARY_COLUMNS = [column for column in DOCUMENT_LIST_COLUMNS if column.name != "extraction"]
 
 
 def _document_row(row, with_text: bool = False) -> dict:
@@ -884,7 +886,7 @@ def get_document(document_id: str, with_text: bool = False) -> dict | None:
 
 
 def list_documents(*, well_id: str | None = None, status: str | None = None, limit: int = 200) -> list[dict]:
-    query = select(*DOCUMENT_LIST_COLUMNS).order_by(documents.c.created_at.desc()).limit(limit)
+    query = select(*DOCUMENT_SUMMARY_COLUMNS).order_by(documents.c.created_at.desc()).limit(limit)
     if status:
         query = query.where(documents.c.status == status)
     if well_id:

@@ -23,7 +23,8 @@ logger = logging.getLogger(__name__)
 
 MAX_STORED_TEXT = 200_000
 MIN_TEXT_CHARS = 30
-EXCEL_TITLES = {"excel:table": "Таблица показателей (Excel)", "excel:form": "Форма с показателями (Excel)"}
+EXCEL_TITLES = {"excel:table": "Таблица показателей (Excel)", "excel:form": "Форма с показателями (Excel)",
+                "excel:nkt_registry": "Реестр коррозии НКТ (Excel)"}
 STATUS_LABELS = {
     "queued": "В очереди",
     "processing": "Обрабатывается",
@@ -156,6 +157,53 @@ def _read_excel(document: dict, content: bytes, app_state) -> dict:
                    doc_date=datetime.fromisoformat(dates[-1]).date() if dates else None, **text_values)
 
 
+def _read_registry(document: dict, content: bytes, app_state) -> dict:
+    """Реестр коррозии НКТ: one row per well, read by its column names (app.core.documents.nkt_registry)."""
+    from zoneinfo import ZoneInfo
+
+    from app.core.documents import nkt_registry
+
+    document_id = document["document_id"]
+    received = document.get("created_at") or datetime.now(timezone.utc)
+    if isinstance(received, str):
+        received = datetime.fromisoformat(received)
+    text_values = {"text_method": "excel_registry", "pages": None}
+    try:
+        try:
+            table_text = doc_text.workbook_text(content)
+            text_values.update(text=table_text.text[:MAX_STORED_TEXT], text_chars=len(table_text.text),
+                               pages=table_text.pages)
+        except ValueError:
+            pass
+        result = nkt_registry.read_workbook(content, db.known_well_ids(),
+                                            received.astimezone(ZoneInfo(settings.source_timezone)).date())
+    except Exception:
+        logger.exception("Registry reading failed document_id=%s", document_id)
+        return _finish(document_id, "failed", "Не удалось прочитать реестр коррозии НКТ.")
+    db.delete_document_data(document_id)
+    extraction = nkt_registry.extraction(result)
+    # A rejected row names a well only when the system knows it (a rejected new well has no card).
+    mentioned = sorted({record["well_id"] for record in result["records"] + result["rejected"]
+                        if record["well_id"] and (record["accepted"] or not record.get("new_well"))})
+    if not result["records"]:
+        return _finish(document_id, "not_recognized", nkt_registry.not_loaded_reason(result),
+                       doc_type=nkt_registry.DOC_TYPE, well_ids=mentioned, extraction=extraction, loaded=None,
+                       doc_date=None, **text_values)
+    loaded = nkt_registry.load(document, result)
+    _recompute(loaded["wells"], app_state)
+    message = f"{nkt_registry.TITLE}: загружено строк — {loaded['records']}, скважин — {len(loaded['wells'])}."
+    if loaded["new_wells"]:
+        message += f" Новых скважин в системе: {len(loaded['new_wells'])}."
+    if result["rejected"]:
+        reasons = list(dict.fromkeys(issue for record in result["rejected"] for issue in record["issues"]))
+        message += f" Не принято строк: {len(result['rejected'])} ({' '.join(reasons[:3])})"
+    if result["date_note"]:
+        message += f" {result['date_note']}"
+    return _finish(document_id, "loaded", message[:2000], doc_type=nkt_registry.DOC_TYPE,
+                   well_ids=sorted(set(loaded["wells"]) | set(mentioned)), extraction=extraction, loaded=loaded,
+                   doc_date=result["date"], **text_values)
+
+
 def _retry_or_fail(document: dict, reason: str, configured: bool) -> dict:
     if configured and (document.get("attempts") or 0) < settings.docs_max_attempts:
         db.update_document(document["document_id"], status="queued",
@@ -175,6 +223,10 @@ def process_document(document_id: str, app_state=None) -> dict:
         return _finish(document_id, "failed", "Оригинал файла не найден в хранилище.")
 
     if document["file_kind"] == "xlsx":
+        from app.core.documents import nkt_registry
+
+        if nkt_registry.detect(content):
+            return _read_registry(document, content, app_state)
         try:
             profile_id = doc_text.detect_profile(content, document["filename"])
         except Exception:

@@ -15,7 +15,7 @@ from fastapi.responses import Response
 from app import db
 from app.config import settings
 from app.core import promine, proposal_agent, rating, rating_builder, rating_export
-from app.core.documents import pipeline as document_pipeline
+from app.core.documents import nkt_registry, pipeline as document_pipeline
 from app.core.excel_ingestion import ExcelImportError
 from app.core.source_connectors import source_modes
 from app.schemas import EraProposalRequest, RatingWellPatch
@@ -108,6 +108,7 @@ def get_rating_well(well_id: str) -> dict:
     return {**well, "proposals": db.list_era_proposals(well_id, limit=20),
             "documents": [document_pipeline.decorate(row, titles) for row in db.list_documents(well_id=well_id, limit=50)],
             "extra_measurements": rating_builder.extra_measurements(well_id),
+            "nkt_registry": nkt_registry.well_registry(well_id),
             "ai_agent_configured": proposal_agent.configured()}
 
 

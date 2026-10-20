@@ -46,6 +46,9 @@ SYSTEM_PROMPT = (
     "6. based_on — какие данные использованы (например «акт разбора 12.03.2026: язвенная коррозия»).\n"
     "7. other_measurements (pH, жёсткость и т. п.) не входят в расчёт рейтинга; используй их только как "
     "дополнительный контекст и прямо укажи, если опираешься на них.\n"
+    "8. nkt_registry — строки реестра коррозии НКТ по скважине (состав подвески, марка стали, факты "
+    "коррозии, число отказов, тип повреждения, химия воды) без дат событий; это контекст, рейтинг "
+    "учитывает из него только обводнённость, хлориды, CO₂ и дебит.\n"
     'Формат: {"measure": "...", "summary": "одно предложение", "actions": ["..."], "deadline": '
     '"ГГГГ-ММ-ДД" или null, "crew": {"crew_id": "...", "date": "ГГГГ-ММ-ДД"} или null, '
     '"reasoning": "...", "missing_data": ["..."], "based_on": ["..."]}'
@@ -157,6 +160,13 @@ def build_context(well_id: str) -> dict | None:
 
     context["other_measurements"] = [{"name": item["name"], "value": item["value"], "date": _iso(item["date"]),
                                       "source": item["source"]} for item in extra_measurements(well_id)]
+
+    # Реестр коррозии НКТ: the well's row(s) as in the file — suspension, steel, failures, damage.
+    from app.core.documents.nkt_registry import well_registry
+
+    registry = well_registry(well_id)
+    context["nkt_registry"] = ({"date": registry["date"], "rows": [dict(row) for row in registry["rows"][:5]]}
+                               if registry else None)
 
     titles = {}
     try:

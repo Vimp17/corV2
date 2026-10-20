@@ -558,3 +558,112 @@ def test_clear_document_list(client, generated):
     assert result["deleted"] == 1 and result["wells"] == ["DEMO-012", "DEMO-013"]
     assert client.get("/api/v1/documents").json()["documents"] == []
     assert "samples" in _gap_keys(_well(client, "DEMO-012"))        # its data went with it
+
+
+# --------------------------------------------------------------------------- Реестр коррозии НКТ
+REGISTRY_HEAD = ["№", "ДО", "Месторождение", "Куст", "Скважина", "Глубина спуска насоса, м", "Пласт",
+                 "Факты выявления коррозии НКТ на скважине", "ННО, сут", "Режим работы ЭЦН", "Признак новизны НКТ",
+                 "Диаметр НКТ", "Группа прочности поврежденной НКТ",
+                 "Состав подвески(состоит из 3 Материал НКТ группа прочности вверх, середина, низ)", None, None,
+                 "Температура на устье, оС", "Температура пластовая, оС", "Давление на устье, атм",
+                 "Средний дебит жидкости, м3", "Средняя обводненность, %", "Плотность воды, кг/м3", "Ca2+", "Mg2+",
+                 "Na+ K+", "Feобщ", "Cl-", "SO42-", "HCO3-", "CO32", "Общая минерализация, мг/л", "pH воды, ед",
+                 "Среднее значение КВЧ, мг/л", "CO2, мл/г", "H2S, мг/л", "CO2, % мол.", "H2S % мол.",
+                 "Газовый фактор м3/т", "марка стали", "Завод", "Отказы за весь период, кол-во", "Тип повреждения",
+                 "Глубина от устья, где произошел отказ, м", "Толщина стенки поврежденной НКТ, мм"]
+
+
+def _registry(path, rows, title=None):
+    from openpyxl import Workbook
+
+    book = Workbook()
+    sheet = book.active
+    sheet.title = "Реестр"
+    if title:
+        sheet.append([title])
+    sheet.append(REGISTRY_HEAD)
+    sub = [None] * len(REGISTRY_HEAD)
+    sub[13:16] = ["верх", "середина", "низ"]
+    sheet.append(sub)
+    sheet.append(list(range(1, len(REGISTRY_HEAD) + 1)))      # column numbers under the header
+    header_row = 2 if title else 1
+    sheet.merge_cells(start_row=header_row, start_column=14, end_row=header_row, end_column=16)
+    for row in rows:
+        sheet.append(row)
+    book.save(path)
+    return path
+
+
+def _registry_row(no, well, field="Южное", water_cut=92, chlorides=9800):
+    return [no, "ООО «Нефть-Юг»", field, "12", well, 2150, "ЮВ1", "да", 340, "постоянный", "новые", 73, "К",
+            "К", "Е", "Н80", 38, 92, 14.5, 85, water_cut, 1012, 420, 95, 6100, 12.4, chlorides, 45, 610, 0, 17500,
+            6.8, 120, 0.8, 2.1, 1.9, 0.01, 85, "Ст20", "ТМК", 3, "свищ", 1840, 5.5]
+
+
+def test_registry_columns_and_two_row_header(tmp_path):
+    from app.core.documents import nkt_registry
+
+    when = (TODAY - timedelta(days=3)).strftime("%d.%m.%Y")
+    path = _registry(tmp_path / "r.xlsx", [_registry_row(1, "DEMO-001"), _registry_row(2, "7781"),
+                                           _registry_row(3, "7781", field="Северное"),
+                                           [4, "ООО «Нефть-Юг»", "Южное", "14", "9001"]],
+                     title=f"Реестр фактов коррозии НКТ по состоянию на {when}")
+    content = path.read_bytes()
+    assert nkt_registry.detect(content)
+    assert not nkt_registry.detect(_custom_table(tmp_path / "t.xlsx").read_bytes())
+    result = nkt_registry.read_workbook(content, ["DEMO-001"], TODAY)
+    assert result["date"] == TODAY - timedelta(days=3) and result["date_note"] is None
+    [record] = result["records"]
+    values = {key: field["value"] for key, field in record["fields"].items()}
+    assert record["well_id"] == "DEMO-001" and not record["new_well"]
+    assert values["string_top"] == "К" and values["string_middle"] == "Е" and values["string_bottom"] == "Н80"
+    assert values["cl"] == 9800 and values["co2_mol_pct"] == 1.9 and values["co2_ml_g"] == 0.8
+    assert values["h2s_mg_l"] == 2.1 and values["h2s_mol_pct"] == 0.01 and values["co3"] == 0
+    assert values["nno_days"] == 340 and values["failures_count"] == 3 and values["failure_depth_m"] == 1840
+    assert values["corrosion_facts"] == "да" and values["damage_type"] == "свищ" and values["steel_grade"] == "Ст20"
+    assert "row_no" not in values
+    assert record["fields"]["cl"]["quote"].startswith("Лист «Реестр», AA")
+    assert result["columns"]["system"] == ["Месторождение", "Средний дебит жидкости, м3", "Средняя обводненность, %",
+                                           "Cl-", "CO2, % мол."]
+    issues = {issue for item in result["rejected"] for issue in item["issues"]}
+    assert any("разных месторождениях" in issue for issue in issues)            # 7781 on two fields
+    assert "В строке нет данных, кроме расположения скважины." in issues          # 9001: location only
+    no_date = nkt_registry.read_workbook(_registry(tmp_path / "n.xlsx", [_registry_row(1, "5")]).read_bytes(), [], TODAY)
+    assert no_date["date"] == TODAY and "дата" in no_date["date_note"].casefold()
+    assert no_date["records"][0]["new_well"] is False                          # no well list: taken as is
+
+
+@needs_db
+def test_registry_through_documents(client, tmp_path, monkeypatch):
+    from app import db
+    from app.config import settings
+    from app.core import llm
+
+    def no_llm(*args, **kwargs):
+        raise AssertionError("The registry must not call the LLM")
+
+    monkeypatch.setattr(llm, "chat", no_llm)
+    monkeypatch.setattr(type(settings), "extraction_model", property(lambda self: ""))
+    path = _registry(tmp_path / "reestr_nkt.xlsx", [_registry_row(1, "DEMO-012", water_cut=93, chlorides=31000),
+                                                    _registry_row(2, "NEW-77")])
+    document = _upload(client, path)
+    assert document["status"] == "loaded", document["status_message"]
+    assert document["doc_type"] == "excel:nkt_registry" and document["type_title"] == "Реестр коррозии НКТ (Excel)"
+    assert document["well_ids"] == ["DEMO-012", "NEW-77"] and document["doc_date"] == TODAY.isoformat()
+    assert "Новых скважин в системе: 1" in document["status_message"]
+    assert "extraction" not in client.get("/api/v1/documents").json()["documents"][0]   # the list stays light
+    detail = client.get(f"/api/v1/documents/{document['document_id']}").json()
+    assert detail["extraction"]["records_accepted"] == 2 and detail["field_labels"]["string_top"] == "Состав подвески: верх"
+
+    well = _well(client, "DEMO-012")
+    registry = dict(well["nkt_registry"]["rows"][0])
+    assert registry["Тип повреждения"] == "свищ" and registry["Состав подвески: низ"] == "Н80"
+    point = [item for item in db.load_telemetry("DEMO-012") if getattr(item, "source_id", None) == "DOC_NKT"]
+    assert len(point) == 1 and point[0].chlorides_mg_l == 31000 and point[0].water_cut_pct == 93
+    assert point[0].co2_pct == 1.9 and point[0].liquid_rate_m3_day == 85
+    assert "Реестр коррозии НКТ (документ)" in well["provenance"]["corrosive_environment"]["source"]
+    assert _well(client, "NEW-77")["field"] == "Южное"                          # a new well gets a rating row
+
+    assert client.delete(f"/api/v1/documents/{document['document_id']}").status_code == 200
+    assert _well(client, "DEMO-012")["nkt_registry"] is None
+    assert not [item for item in db.load_telemetry("DEMO-012") if getattr(item, "source_id", None) == "DOC_NKT"]
