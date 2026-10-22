@@ -381,7 +381,7 @@
       <div class="page-head">
         <div>
           <h1>Рейтинг скважин</h1>
-          <div class="sub" id="ratingSub">Индекс приоритета 0–100 — более высокая из оценок моделей НТЦ и математической. По индексу рейтинг предлагает мероприятие.</div>
+          <div class="sub" id="ratingSub">Индекс коррозии на НКТ 0–100 — более высокая из оценок моделей НТЦ и математической. По индексу рейтинг предлагает мероприятие.</div>
           <div class="datastate" id="dataState"></div>
         </div>
       </div>
@@ -410,7 +410,7 @@
         <div class="table-box"><div class="table-inner">
           <div class="thead-wrap">
             <div class="grid-row thead" role="row">
-              <div>Место</div><div>Скважина</div><div>Индекс</div><div>Прогноз НТЦ / Мат.</div><div>Мероприятие и предложение</div><div>Категория фонда</div>
+              <div>Место</div><div>Скважина</div><div>Индекс корро&shy;зии на НКТ</div><div>Прогноз НТЦ / Мат.</div><div>Мероприятие и предложение</div><div>Категория фонда</div>
               <div>Среда</div><div title="Последний акт из истории ремонтов (ЭРА ремонта, документы) — исторические данные, а не текущее состояние скважины">Демонтаж<span class="hsub">исторические данные</span></div><div title="Последний акт из истории ремонтов (ЭРА ремонта, документы) — исторические данные, а не текущее состояние скважины">Разбор на базе<span class="hsub">исторические данные</span></div><div>Оборудование и защита</div>
               <div>Нара&shy;ботка, сут</div><div>Жидкость, м³ / нефть, л (%)</div><div>Полнота данных</div>
             </div>
@@ -600,7 +600,7 @@
       const { counts, settings, wells } = state.rating;
       renderAlerts(counts, settings);
       const combine = settings.combine === 'mean' ? 'среднее оценок' : 'более высокая из оценок';
-      $('ratingSub').textContent = `Индекс приоритета 0–100 — ${combine} моделей НТЦ и математической. По индексу рейтинг предлагает мероприятие.`;
+      $('ratingSub').textContent = `Индекс коррозии на НКТ 0–100 — ${combine} моделей НТЦ и математической. По индексу рейтинг предлагает мероприятие.`;
       $('updated').textContent = `Обновлено ${fmtTime(state.rating.generated_at)}`;
       renderDataState(state.rating.data);
       renderTiles(settings.measures, counts);
@@ -965,7 +965,7 @@
       const key = measureKey(w);
       $('cardTitle').textContent = `Скважина ${w.well_id}`;
       $('cardSub').textContent = `${w.field ? w.field + ' · ' : ''}${w.rank ? 'место ' + w.rank + ' в рейтинге' : 'без места в рейтинге'}`;
-      $('cardIdx').replaceChildren(...[el('strong', { class: key, text: w.index ?? '—' }), el('div', { class: 'sub', text: 'индекс' }),
+      $('cardIdx').replaceChildren(...[el('strong', { class: key, text: w.index ?? '—' }), el('div', { class: 'sub', text: 'индекс коррозии на НКТ' }),
         w.protection_adjusted ? el('div', { class: 'raw-idx', text: `без защиты ${w.index_raw}` }) : null].filter(Boolean));
       const order = cardOrder();
       const position = order.findIndex(item => item.well_id === w.well_id);
@@ -996,10 +996,18 @@
         ['Наработка, сут', fmtNum(w.run_days), '', 'run_days'],
         ['Дебит жидкости, м³/сут', fmtNum(w.liquid_rate_m3_day, 1), '', 'liquid_rate_m3_day'],
         ['Доля нефти, %', fmtNum(w.oil_pct, 1), '', 'oil_pct']], w));
-      if ((w.data_gaps || []).length) {
+      // Sections of «Полнота данных», then the fields the classification has no value for: never
+      // received (named one by one) or too old to count (with the date of the last value).
+      const gaps = w.data_gaps || [], fields = w.missing_fields || [];
+      const absent = fields.filter(f => !f.last), stale = fields.filter(f => f.last);
+      const fieldList = (title, items, text) => items.length ? el('div', { style: 'font-size:13px' }, el('b', { text: title }),
+        el('ul', { style: 'margin:2px 0 0; padding-left:18px' }, items.map(f => el('li', { text: text(f) })))) : null;
+      if (gaps.length || fields.length) {
         body.splice(2, 0, el('div', { class: 'box', style: 'border-style:dashed; border-color:#C99A3A; background:#FFFBEF' },
           el('h3', { text: 'Не хватает данных' }),
-          el('ul', { style: 'margin:0; padding-left:18px; font-size:13px' }, w.data_gaps.map(g => el('li', { text: `${gapLabels()[g.key] || g.key}: ${g.note || ''}` })))));
+          gaps.length ? el('ul', { style: 'margin:0; padding-left:18px; font-size:13px' }, gaps.map(g => el('li', { text: `${gapLabels()[g.key] || g.key}: ${g.note || ''}` }))) : null,
+          fieldList('Нет значений для классификации в рейтинге:', absent, f => `${f.field} — ${f.for}`),
+          fieldList('Значения устарели и в расчёт не входят:', stale, f => `${f.field} — последнее ${f.last} (${f.for})`)));
       }
       body.push(dlGroup('Среда и обработка', [
         ['Отбор проб', yesNo(w.sampling, 'Да', 'Нет'), w.sampling ? 'ok' : (w.sampling === false ? 'na' : ''), 'sampling'],

@@ -334,6 +334,24 @@ def test_ai_proposal_uses_rating_crews_and_reports_gaps(client, generated, fake)
 
 
 
+
+def test_missing_fields_tell_absent_from_stale():
+    from datetime import datetime, timezone
+
+    from app.core.rating_builder import _missing_fields
+    from app.schemas import TelemetryPoint
+
+    old = TelemetryPoint(well_id="W-1", timestamp=datetime(2026, 9, 1, 9, tzinfo=timezone.utc), co2_pct=1.2)
+    items = _missing_fields({"equipment": "ЭЦН-80", "demount_act": True, "demount_corrosion": None},
+                            [old], {"water_cut_pct": 90, "chlorides_mg_l": 18000, "inhibitor_efficiency": 0.9})
+    by_name = {item["field"]: item for item in items}
+    assert by_name["CO₂"]["last"] == "01.09.2026"                       # received, but too old to count
+    assert by_name["скорость коррозии"]["last"] is None                  # never received
+    assert "отклонение закачки ингибитора" in by_name                    # asked for only with an inhibitor
+    assert "признак коррозии в акте демонтажа" in by_name
+    assert not {"обводнённость", "хлориды", "эффективность ингибитора"} & set(by_name)
+    assert not any(name.startswith("спущенное оборудование") for name in by_name)
+
 def _proposal_context(**rating):
     return {
         "well_id": "DEMO-002", "today": TODAY.isoformat(),
@@ -739,6 +757,11 @@ def test_registry_through_documents(client, tmp_path, monkeypatch):
     # A registry row is not a measurement: no «in operation», and no ДАРС telemetry.
     assert new_well["in_operation"] is None and new_well["index"] is None
     assert any(gap["note"].startswith("Нет замеров телеметрии: ") for gap in new_well["data_gaps"])
+    # The card names the fields the classification lacks; they are not a section of «Полнота данных».
+    absent = {item["field"]: item for item in new_well["missing_fields"]}
+    assert absent["скорость коррозии"]["last"] is None and "категория фонда" in absent["скорость коррозии"]["for"]
+    assert "CO₂" not in absent                                                   # the registry gave it
+    assert "fields" not in _gap_keys(new_well)
     assert well["provenance"]["in_operation"]["source_id"] != "DOC_NKT"
     # The light card endpoint ranks the well exactly as the full rating does.
     ranks = {item["well_id"]: item["rank"] for item in client.get("/api/v1/rating").json()["wells"]}

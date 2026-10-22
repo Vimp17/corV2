@@ -86,7 +86,7 @@ def compose(proposal_id: str, well: dict, change_type: str, reason: str,
         reason,
         "",
         "Данные рейтинга:",
-        f"- Индекс приоритета: {index if index is not None else 'нет оценок'}"
+        f"- Индекс коррозии на НКТ: {index if index is not None else 'нет оценок'}"
         + (f" (модель НТЦ {ntc:.2f}" if ntc is not None else " (модель НТЦ —")
         + (f", мат. модель {math:.2f})" if math is not None else ", мат. модель —)"),
         f"- Мероприятие по рейтингу: {well.get('measure_label') or '—'}",
