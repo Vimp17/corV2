@@ -2,10 +2,10 @@
 
 Windows: mai.cmd <команда>        Linux: python standalone/manage.py <команда>
 
-  setup     мастер настройки: PostgreSQL, языковая модель (LiteLLM), данные, доступ → файл .env
+  setup     мастер настройки: база данных (встроенная или сервер), LiteLLM, данные, доступ → .env
   check     проверка перед запуском: пакеты, база данных (и создание таблиц), модель, порт
-  start     запустить в фоне (журнал logs/api.log)
-  stop      остановить                       restart   перезапустить
+  start     запустить в фоне (встроенную базу и API; журналы в logs/)
+  stop      остановить (API и встроенную базу)   restart   перезапустить
   status    состояние и ссылки               run       запустить в этом окне (Ctrl+C — остановить)
   logs      последние строки журнала (-f — следить за журналом)
   link      ссылка на дашборд с ключом доступа
@@ -58,6 +58,13 @@ LOG_ROTATE_BYTES = 20 * 1024 * 1024
 START_TIMEOUT_SECONDS = 180
 SCHEMA_NAME = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 DEFAULTS = {"port": "8000", "timezone": "Europe/Moscow", "sslmode": "prefer", "db_port": "5432"}
+# The built-in PostgreSQL (pgsql/ of the build): data in pgdata/, listens on 127.0.0.1 only.
+PG_DATA = ROOT / "pgdata"
+PG_LOG = LOG_DIR / "postgres.log"
+PG_TOOLS_LOG = LOG_DIR / "postgres-tools.log"
+PG_DEFAULT_PORT = "55432"
+PG_USER = "mai"
+PG_DATABASE = "mai_demo"
 
 
 # --------------------------------------------------------------------------- output
@@ -244,21 +251,38 @@ def cmd_setup(args) -> int:
     db = parse_db_url(old.get("MAI_DATABASE_URL", ""))
     say("Настройка демо-сборки MAI Corrosion Control. Enter — оставить значение в [скобках].")
 
-    say("\n1/4  База данных PostgreSQL (адрес, база или схема и пользователь — от администраторов)")
-    host = _ask("Сервер (имя или IP)", db.get("host") or "localhost", interactive=interactive,
-                preset=args.db_host, check=_required)
-    port = _ask("Порт", db.get("port") or DEFAULTS["db_port"], interactive=interactive, preset=args.db_port,
-                check=_check_port)
-    name = _ask("База данных", db.get("name", ""), interactive=interactive, preset=args.db_name, check=_required)
-    schema = _ask("Схема (если выделили схему в общей базе; пусто — своя база, схема public)", db.get("schema", ""),
-                  interactive=interactive, preset=args.db_schema, check=_check_schema)
-    user = _ask("Пользователь", db.get("user", ""), interactive=interactive, preset=args.db_user, check=_required)
-    password = _ask("Пароль (не отображается)", db.get("password", ""), secret=True, interactive=interactive,
-                    preset=args.db_password, shown_default="оставить прежний" if db.get("password") else "")
-    sslmode = _ask("SSL: disable / prefer / require", db.get("sslmode") or DEFAULTS["sslmode"],
-                   interactive=interactive, preset=args.db_sslmode,
-                   check=lambda v: None if v in {"disable", "allow", "prefer", "require", "verify-ca", "verify-full"}
-                   else "disable, prefer или require")
+    say("\n1/4  База данных PostgreSQL")
+    was_local = (old.get("MAI_STANDALONE_DB") or ("server" if old.get("MAI_DATABASE_URL") else "local")) == "local"
+    preset_mode = {None: None, "local": "встроенная", "server": "сервер"}.get(args.db, args.db)
+    local = _ask("Где база: встроенная (на этом компьютере) / сервер", "встроенная" if was_local else "сервер",
+                 interactive=interactive, preset=preset_mode,
+                 check=lambda v: None if v in {"встроенная", "сервер"} else "встроенная или сервер") == "встроенная"
+    pg_port = old.get("MAI_STANDALONE_PG_PORT") or PG_DEFAULT_PORT
+    # The password of the built-in database is set once, when its data folder is created.
+    pg_password = old.get("MAI_STANDALONE_PG_PASSWORD") or secrets.token_urlsafe(18)
+    if local:
+        pg_port = _ask("Порт встроенной базы (только для этого компьютера)", pg_port, interactive=interactive,
+                       preset=args.pg_port, check=_check_port)
+        db_url = build_db_url("127.0.0.1", pg_port, PG_DATABASE, PG_USER, pg_password, "", "disable")
+    else:
+        if was_local:
+            db = {}
+        note("Адрес, база или схема и пользователь — от администраторов (README-DEMO.md, раздел 4).")
+        host = _ask("Сервер (имя или IP)", db.get("host") or "", interactive=interactive,
+                    preset=args.db_host, check=_required)
+        port = _ask("Порт", db.get("port") or DEFAULTS["db_port"], interactive=interactive, preset=args.db_port,
+                    check=_check_port)
+        name = _ask("База данных", db.get("name", ""), interactive=interactive, preset=args.db_name, check=_required)
+        schema = _ask("Схема (если выделили схему в общей базе; пусто — своя база, схема public)",
+                      db.get("schema", ""), interactive=interactive, preset=args.db_schema, check=_check_schema)
+        user = _ask("Пользователь", db.get("user", ""), interactive=interactive, preset=args.db_user, check=_required)
+        password = _ask("Пароль (не отображается)", db.get("password", ""), secret=True, interactive=interactive,
+                        preset=args.db_password, shown_default="оставить прежний" if db.get("password") else "")
+        sslmode = _ask("SSL: disable / prefer / require", db.get("sslmode") or DEFAULTS["sslmode"],
+                       interactive=interactive, preset=args.db_sslmode,
+                       check=lambda v: None if v in {"disable", "allow", "prefer", "require", "verify-ca",
+                                                     "verify-full"} else "disable, prefer или require")
+        db_url = build_db_url(host, port, name, user, password, schema, sslmode)
 
     say("\n2/4  Языковая модель через LiteLLM (справка ИИ, предложение агента, документы)")
     llm_url = _ask("Адрес LiteLLM, например http://litellm.corp:4000 (пусто — без ИИ)",
@@ -314,7 +338,8 @@ def cmd_setup(args) -> int:
 
     values = dict(old)
     values.update({
-        "MAI_DATABASE_URL": build_db_url(host, port, name, user, password, schema, sslmode),
+        "MAI_DATABASE_URL": db_url, "MAI_STANDALONE_DB": "local" if local else "server",
+        "MAI_STANDALONE_PG_PORT": pg_port, "MAI_STANDALONE_PG_PASSWORD": pg_password,
         "MAI_LLM_API_URL": llm_url, "MAI_LLM_API_KEY": llm_key, "MAI_LLM_MODEL": llm_model,
         "MAI_OCR_MODEL": ocr_model, "MAI_SOURCE_TIMEZONE": timezone_name, "MAI_STANDALONE_DATA_DATE": data_date,
         "MAI_STANDALONE_HOST": "0.0.0.0" if network else "127.0.0.1", "MAI_STANDALONE_PORT": api_port,
@@ -331,6 +356,12 @@ def cmd_setup(args) -> int:
         folder.mkdir(parents=True, exist_ok=True)
 
     say("\nГотово: настройки записаны в .env" + (" (прежние — в .env.bak)." if (ROOT / ".env.bak").is_file() else "."))
+    if local:
+        ensure_local_db(values)
+        ok(f"встроенная база работает: 127.0.0.1:{pg_port}, база {PG_DATABASE}")
+    elif pg_running(values):
+        pg_stop(values)
+        note("Встроенная база остановлена: теперь используется сервер PostgreSQL. Её данные остались в pgdata.")
     if not llm_url:
         warn("Языковая модель не задана: справка и предложение ИИ, распознавание PDF и сканов работать не будут.")
     if network:
@@ -349,6 +380,112 @@ def _server_name() -> str:
         if name and not name.startswith("localhost"):
             return name
     return "localhost"
+
+
+# --------------------------------------------------------------------------- built-in PostgreSQL
+def local_db(values: dict[str, str]) -> bool:
+    return values.get("MAI_STANDALONE_DB") == "local"
+
+
+def _pg_tool(values: dict[str, str], name: str) -> Path:
+    folder = values.get("MAI_STANDALONE_PG_BIN") or os.environ.get("MAI_STANDALONE_PG_BIN") or ROOT / "pgsql" / "bin"
+    return Path(folder) / (name + ".exe" if WINDOWS else name)
+
+
+def _pg_call(values: dict[str, str], tool: str, *args: str, timeout: int = 180) -> tuple[int, str]:
+    """Run a PostgreSQL tool; its output goes to logs/postgres-tools.log (a file, not a pipe: the
+    server started by pg_ctl inherits the handles) and is returned."""
+    executable = _pg_tool(values, tool)
+    if not executable.is_file():
+        raise Stop(f"Нет встроенного PostgreSQL: {executable}. Распакуйте архив целиком "
+                   "или выберите сервер PostgreSQL (mai.cmd setup).")
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    start = PG_TOOLS_LOG.stat().st_size if PG_TOOLS_LOG.exists() else 0
+    env = {**os.environ, "LANG": "C", "LC_ALL": "C", "LC_MESSAGES": "C"}
+    for name in ("PGDATA", "PGPORT", "PGHOST", "PGUSER", "PGDATABASE", "PGPASSWORD", "PGOPTIONS"):
+        env.pop(name, None)
+    # A hidden console of its own: closing the window of mai.cmd must not stop the database.
+    flags = 0x08000000 | 0x00000200 if WINDOWS else 0  # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
+    with PG_TOOLS_LOG.open("ab") as log:
+        log.write(f"\n== {datetime.now():%Y-%m-%d %H:%M:%S} {tool} {' '.join(args)}\n".encode())
+        log.flush()
+        try:
+            code = subprocess.run([str(executable), *args], stdin=subprocess.DEVNULL, stdout=log,
+                                  stderr=subprocess.STDOUT, env=env, timeout=timeout, creationflags=flags).returncode
+        except subprocess.TimeoutExpired:
+            code = -1
+    with PG_TOOLS_LOG.open("rb") as log:
+        log.seek(start)
+        return code, log.read().decode("utf-8", errors="replace")
+
+
+def pg_running(values: dict[str, str]) -> bool:
+    if not (PG_DATA / "PG_VERSION").is_file() or not _pg_tool(values, "pg_ctl").is_file():
+        return False
+    return _pg_call(values, "pg_ctl", "status", "-D", str(PG_DATA), timeout=30)[0] == 0
+
+
+def pg_stop(values: dict[str, str]) -> None:
+    code, output = _pg_call(values, "pg_ctl", "stop", "-D", str(PG_DATA), "-m", "fast", "-w", "-t", "60")
+    if code != 0 and pg_running(values):
+        raise Stop("Встроенная база не остановилась: " + output.strip()[-300:])
+
+
+def _pg_log_tail(lines: int = 15) -> str:
+    try:
+        return "\n".join(PG_LOG.read_bytes()[-20000:].decode("utf-8", errors="replace").splitlines()[-lines:])
+    except OSError:
+        return ""
+
+
+def ensure_local_db(values: dict[str, str]) -> None:
+    """Create the built-in database on first use, start it, and create the application database."""
+    password = values.get("MAI_STANDALONE_PG_PASSWORD", "")
+    port = values.get("MAI_STANDALONE_PG_PORT") or PG_DEFAULT_PORT
+    if not password:
+        raise Stop("В .env нет пароля встроенной базы (MAI_STANDALONE_PG_PASSWORD): выполните mai.cmd setup")
+    if not (PG_DATA / "PG_VERSION").is_file():
+        if PG_DATA.exists() and any(PG_DATA.iterdir()):
+            raise Stop(f"Папка {PG_DATA.name} не пустая, но базы в ней нет. Удалите её (данные встроенной базы "
+                       "пропадут) и повторите.")
+        say("Создаю встроенную базу данных (один раз, 10–60 с)…")
+        RUN_DIR.mkdir(parents=True, exist_ok=True)
+        password_file = RUN_DIR / f"pg-init-{uuid.uuid4().hex}.txt"
+        password_file.write_text(password, encoding="utf-8")
+        try:
+            code, output = _pg_call(values, "initdb", "-D", str(PG_DATA), "-U", PG_USER, "-A", "scram-sha-256",
+                                    f"--pwfile={password_file}", "-E", "UTF8", "--locale=C", timeout=600)
+        finally:
+            password_file.unlink(missing_ok=True)
+        if code != 0:
+            raise Stop("Встроенную базу создать не удалось:\n" + output.strip()[-800:])
+        with (PG_DATA / "postgresql.conf").open("a", encoding="utf-8") as conf:
+            conf.write("\n# MAI demo build (standalone/manage.py): this computer only, no Unix sockets.\n"
+                       "listen_addresses = '127.0.0.1'\nunix_socket_directories = ''\nmax_connections = 50\n")
+    if not pg_running(values):
+        if not _port_free("127.0.0.1", int(port)):
+            raise Stop(f"Порт встроенной базы {port} занят другой программой: выберите другой (mai.cmd setup).")
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        code, output = _pg_call(values, "pg_ctl", "start", "-D", str(PG_DATA), "-l", str(PG_LOG), "-w", "-t", "90",
+                                "-o", f"-p {port}", timeout=150)
+        if code != 0 or not pg_running(values):
+            raise Stop("Встроенная база не запустилась:\n" + (output.strip()[-400:] + "\n" + _pg_log_tail()).strip())
+    import psycopg
+
+    admin_url = f"postgresql://{PG_USER}:{quote(password, safe='')}@127.0.0.1:{port}/postgres?sslmode=disable"
+    for attempt in range(10):
+        try:
+            with psycopg.connect(admin_url, connect_timeout=10, autocommit=True) as conn:
+                if not conn.execute("SELECT 1 FROM pg_database WHERE datname = %s", (PG_DATABASE,)).fetchone():
+                    conn.execute(f'CREATE DATABASE "{PG_DATABASE}"')
+            return
+        except psycopg.OperationalError as exc:
+            if "password authentication failed" in str(exc):
+                raise Stop("Пароль встроенной базы в .env не подходит к папке pgdata (её создавали с другим .env). "
+                           "Верните прежний .env или удалите pgdata.") from exc
+            if attempt == 9:
+                raise Stop(f"Нет подключения к встроенной базе: {str(exc).strip()[:300]}") from exc
+            time.sleep(1)
 
 
 # --------------------------------------------------------------------------- process
@@ -516,6 +653,9 @@ def cmd_start(args) -> int:
         raise Stop(f"Порт {port_of(values)} занят другой программой. Выберите другой: mai.cmd setup (вопрос «Порт»).")
     for folder in DATA_DIRS:
         folder.mkdir(parents=True, exist_ok=True)
+    if local_db(values):
+        ensure_local_db(values)
+        say(f"Встроенная база работает (127.0.0.1:{values.get('MAI_STANDALONE_PG_PORT') or PG_DEFAULT_PORT}).")
     _rotate_log()
     with LOG_FILE.open("ab") as log:
         log.write(f"\n===== start {datetime.now():%Y-%m-%d %H:%M:%S} =====\n".encode())
@@ -565,11 +705,15 @@ def cmd_stop(args) -> int:
                            "Закройте python.exe в Диспетчере задач.")
     if pid is None:
         PID_FILE.unlink(missing_ok=True)
-        say("Не запущено.")
-        return 0
-    _terminate(pid)
-    PID_FILE.unlink(missing_ok=True)
-    say("Остановлено." if not _alive(pid) else "Не удалось остановить процесс — закройте python.exe в Диспетчере задач.")
+        say("API не запущен.")
+    else:
+        _terminate(pid)
+        PID_FILE.unlink(missing_ok=True)
+        say("API остановлен." if not _alive(pid) else
+            "Не удалось остановить API — закройте python.exe в Диспетчере задач.")
+    if pg_running(values):
+        pg_stop(values)
+        say("Встроенная база остановлена.")
     return 0
 
 
@@ -582,8 +726,11 @@ def cmd_restart(args) -> int:
 def cmd_status(args) -> int:
     values = require_env()
     pid, answering = _running(values)
+    if local_db(values):
+        (ok if pg_running(values) else warn)(
+            "встроенная база " + ("работает" if pg_running(values) else "не запущена"))
     if not pid and not answering:
-        say("Не запущено.  Запуск: mai.cmd start")
+        say("API не запущен.  Запуск: mai.cmd start")
         return 3
     status, body = _http_status(f"{local_url(values)}/health/ready", timeout=5)
     say("Работает" + (f" (процесс {pid})" if pid else " (процесс запущен не этой командой)") + ".")
@@ -612,6 +759,9 @@ def cmd_run(args) -> int:
         raise Stop("Уже запущено в фоне. Остановите: mai.cmd stop")
     for folder in DATA_DIRS:
         folder.mkdir(parents=True, exist_ok=True)
+    if local_db(values):
+        ensure_local_db(values)
+        note("Встроенная база работает; после Ctrl+C остановите её: mai.cmd stop")
     say(f"Запуск в этом окне. Дашборд: {local_url(values)}/dashboard   (Ctrl+C — остановить)")
     try:
         return subprocess.call(_api_command(values), cwd=str(ROOT), env=_child_env())
@@ -719,6 +869,14 @@ def cmd_check(args) -> int:
     ok("все пакеты загружаются")
 
     say("\nБаза данных")
+    if local_db(values):
+        try:
+            ensure_local_db(values)
+            ok(f"встроенная база работает (127.0.0.1:{values.get('MAI_STANDALONE_PG_PORT') or PG_DEFAULT_PORT}, "
+               f"данные в папке {PG_DATA.name})")
+        except Stop as exc:
+            fail(str(exc))
+            return 1
     db = parse_db_url(values["MAI_DATABASE_URL"])
     target = f"{db.get('host')}:{db.get('port')}/{db.get('name')}" + (f", схема {db['schema']}" if db.get("schema") else "")
     try:
@@ -748,7 +906,8 @@ def cmd_check(args) -> int:
             ok(f"есть право создавать таблицы в схеме {schema}")
     except Exception as exc:  # noqa: BLE001
         fail(f"нет подключения к {target}: {str(exc).strip()[:300]}")
-        note("Проверьте адрес, порт, имя базы, пользователя и пароль (mai.cmd setup) и доступ с этого сервера к порту БД.")
+        if not local_db(values):
+            note("Проверьте адрес, порт, имя базы, пользователя и пароль (mai.cmd setup) и доступ с этого сервера к порту БД.")
         return 1
 
     prepared = _prepare_app_environment()
@@ -913,37 +1072,50 @@ def cmd_n8n(args) -> int:
 # --------------------------------------------------------------------------- cleanup
 def cmd_cleanup(args) -> int:
     values = require_env()
-    say("Будут удалены: все таблицы демо-сборки в базе данных (только таблицы этого приложения),")
+    local = local_db(values)
+    if local:
+        say("Будет удалена встроенная база целиком (папка pgdata — при следующем запуске создастся пустая),")
+    else:
+        say("Будут удалены все таблицы демо-сборки в базе данных (только таблицы этого приложения),")
     say("загруженные документы (data/documents), содержимое inbox и журналы. Настройки (.env) останутся.")
     if not args.yes:
         answer = input("Чтобы продолжить, напишите УДАЛИТЬ: ").strip()
         if answer != "УДАЛИТЬ":
             say("Отменено.")
             return 1
-    pid, answering = _running(values)
-    if pid or answering:
+    if local:
         cmd_stop(args)
-    _prepare_app_environment()
-    from sqlalchemy import text
+        shutil.rmtree(PG_DATA, ignore_errors=True)
+        if PG_DATA.exists() and any(PG_DATA.iterdir()):
+            bad(f"папку {PG_DATA.name} удалить не удалось (занята?): закройте программы и повторите")
+            return 1
+        PG_DATA.mkdir(exist_ok=True)
+        ok("встроенная база удалена")
+    else:
+        pid, answering = _running(values)
+        if pid or answering:
+            cmd_stop(args)
+        _prepare_app_environment()
+        from sqlalchemy import text
 
-    from app import db as app_db
+        from app import db as app_db
 
-    try:
-        app_db.metadata.drop_all(app_db.engine())
-        with app_db.engine().begin() as conn:
-            conn.execute(text("DROP TABLE IF EXISTS alembic_version"))
-        ok("таблицы удалены")
-    except Exception as exc:  # noqa: BLE001
-        bad(f"таблицы удалить не удалось: {str(exc).strip()[:300]}")
-        return 1
-    schema = parse_db_url(values["MAI_DATABASE_URL"]).get("schema")
-    if schema and args.drop_schema:
         try:
+            app_db.metadata.drop_all(app_db.engine())
             with app_db.engine().begin() as conn:
-                conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}"'))
-            ok(f"схема {schema} удалена")
+                conn.execute(text("DROP TABLE IF EXISTS alembic_version"))
+            ok("таблицы удалены")
         except Exception as exc:  # noqa: BLE001
-            warn(f"схему {schema} удалить не удалось (в ней есть чужие объекты?): {str(exc).strip()[:200]}")
+            bad(f"таблицы удалить не удалось: {str(exc).strip()[:300]}")
+            return 1
+        schema = parse_db_url(values["MAI_DATABASE_URL"]).get("schema")
+        if schema and args.drop_schema:
+            try:
+                with app_db.engine().begin() as conn:
+                    conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}"'))
+                ok(f"схема {schema} удалена")
+            except Exception as exc:  # noqa: BLE001
+                warn(f"схему {schema} удалить не удалось (в ней есть чужие объекты?): {str(exc).strip()[:200]}")
     for folder in (ROOT / "data" / "documents", ROOT / "inbox", LOG_DIR, N8N_OUT):
         if not folder.exists():
             continue
@@ -952,7 +1124,7 @@ def cmd_cleanup(args) -> int:
                 continue
             shutil.rmtree(item, ignore_errors=True) if item.is_dir() else item.unlink(missing_ok=True)
     ok("файлы удалены")
-    say("\nГотово. Чтобы удалить сборку полностью — удалите папку целиком.")
+    say("\nГотово. Чтобы удалить сборку полностью — остановите её (mai.cmd stop) и удалите папку целиком.")
     return 0
 
 
@@ -975,7 +1147,8 @@ def parser() -> argparse.ArgumentParser:
     commands = main.add_subparsers(dest="command")
     setup = commands.add_parser("setup", help="мастер настройки → .env")
     setup.add_argument("--non-interactive", action="store_true", help="не задавать вопросов: значения из параметров и .env")
-    for option in ("db-host", "db-port", "db-name", "db-schema", "db-user", "db-password", "db-sslmode", "llm-url",
+    setup.add_argument("--db", choices=["local", "server"], help="база: local — встроенная, server — сервер PostgreSQL")
+    for option in ("pg-port", "db-host", "db-port", "db-name", "db-schema", "db-user", "db-password", "db-sslmode", "llm-url",
                    "llm-key", "llm-model", "ocr-model", "timezone", "data-date", "port", "public-host"):
         setup.add_argument(f"--{option}")
     setup.add_argument("--network", dest="network", action="store_true", default=None, help="доступ по сети")
