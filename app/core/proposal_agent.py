@@ -16,7 +16,7 @@ from typing import Any
 
 from app import db
 from app.config import settings
-from app.core import llm, rating
+from app.core import llm, proposal_language, rating
 
 logger = logging.getLogger(__name__)
 
@@ -31,27 +31,32 @@ FIELD_LABELS = {
 
 SYSTEM_PROMPT = (
     "Ты — инженер-технолог по защите скважинного оборудования от коррозии. По данным одной скважины "
-    "подготовь предложение по мерам реагирования. Отвечай только JSON без пояснений.\n"
+    "подготовь предложение по мерам реагирования. Ответ — только JSON без пояснений.\n"
     "Правила:\n"
-    "1. Опирайся только на переданные данные. Если каких-то данных нет (акта, проб, расписания бригад "
-    "и т. п.) — прямо перечисли это в missing_data и не додумывай значения.\n"
-    "2. measure — один код: ППР (плановый комплекс по ремонту, включение в ЭРА ремонта), РИ (решение "
-    "инженера), УДР (ударная дозировка реагента), — (мероприятия не требуются). По умолчанию бери "
-    "мероприятие рейтинга (rating.measure_code); другое предлагай, только если данные это прямо "
-    "обосновывают, и объясни почему в reasoning.\n"
-    "3. Бригаду предлагай только из crews (статус available, свободна до срока); иначе crew: null и "
-    "в missing_data укажи, что свободной бригады в расписании нет или расписания нет.\n"
-    "4. deadline — дата ГГГГ-ММ-ДД не позже rating.deadline, если он задан.\n"
-    "5. Формулировки действий бери по образцу response_examples для похожих ситуаций.\n"
-    "6. based_on — какие данные использованы (например «акт разбора 12.03.2026: язвенная коррозия»).\n"
-    "7. other_measurements (pH, жёсткость и т. п.) не входят в расчёт рейтинга; используй их только как "
+    "1. Пиши только на русском языке, грамотным техническим языком, как в служебной записке инженера. "
+    "Не используй английские слова и названия полей или ключей из входных данных. Латиница допустима "
+    "только в химических формулах и обозначениях (CO₂, H₂S, pH) и в номерах скважин, бригад, документов.\n"
+    "2. Опирайся только на переданные данные и не додумывай значения.\n"
+    "3. measure — один код: ППР (плановый комплекс по ремонту, включение в ЭРА ремонта), РИ (решение "
+    "инженера), УДР (ударная дозировка реагента), — (мероприятия не требуются). По умолчанию бери код "
+    "мероприятия рейтинга; другой предлагай, только если данные это прямо обосновывают, и объясни "
+    "почему в reasoning.\n"
+    "4. Бригаду предлагай только из списка «бригады» со статусом «свободна» и свободную до крайнего "
+    "срока; иначе crew: null.\n"
+    "5. deadline — дата ГГГГ-ММ-ДД не позже крайнего срока рейтинга, если он задан.\n"
+    "6. Действия формулируй по образцу «примеры решений инженеров» для похожих ситуаций.\n"
+    "7. based_on — какие данные использованы, с датами (например «акт разбора от 12.03.2026: язвенная "
+    "коррозия»).\n"
+    "8. Акты демонтажа и разбора — исторические данные: события из истории ремонтов, а не текущее "
+    "состояние скважины. Так и пиши: «по акту разбора от …».\n"
+    "9. «Другие показатели» и «реестр коррозии НКТ» в рейтинге не учитываются; используй их как "
     "дополнительный контекст и прямо укажи, если опираешься на них.\n"
-    "8. nkt_registry — строки реестра коррозии НКТ по скважине (состав подвески, марка стали, факты "
-    "коррозии, число отказов, тип повреждения, химия воды) без дат событий; это контекст, рейтинг "
-    "учитывает из него только обводнённость, хлориды, CO₂ и дебит.\n"
-    'Формат: {"measure": "...", "summary": "одно предложение", "actions": ["..."], "deadline": '
-    '"ГГГГ-ММ-ДД" или null, "crew": {"crew_id": "...", "date": "ГГГГ-ММ-ДД"} или null, '
-    '"reasoning": "...", "missing_data": ["..."], "based_on": ["..."]}'
+    "10. missing_data — только пробелы, которых нет в списке «уже известные пробелы в данных» (он будет "
+    "добавлен к ответу сам): конкретные поля или значения, которых не хватает для решения, а не "
+    "названия систем-источников. Если новых пробелов нет — пустой список.\n"
+    'Формат (ключи — как здесь, все значения — по-русски): {"measure": "...", "summary": "одно предложение", '
+    '"actions": ["..."], "deadline": "ГГГГ-ММ-ДД" или null, "crew": {"crew_id": "...", "date": "ГГГГ-ММ-ДД"} '
+    'или null, "reasoning": "...", "missing_data": ["..."], "based_on": ["..."]}'
 )
 
 
@@ -193,18 +198,9 @@ def build_context(well_id: str) -> dict | None:
 
 
 def missing_from_context(context: dict) -> list[str]:
-    """What is missing, decided without the LLM, so it is reported even if the model omits it."""
-    missing = list(context["rating"].get("data_gaps") or [])
-    if not context["acts"]:
-        missing.append("Нет актов демонтажа и разбора.")
-    if not context["lab_samples"]:
-        missing.append("Нет проб химического анализа.")
-    if not context["crews"]:
-        missing.append("Нет расписания бригад — бригада не назначена.")
-    for document in context["documents"]:
-        if document["status"] in {"Не распознан", "Ошибка"}:
-            missing.append(f"Документ «{document['file']}» не распознан — его данные не учтены.")
-    return missing
+    """What is missing, decided without the LLM, so it is reported even if the model omits it: concrete
+    fields and values (app.core.proposal_language.field_gaps)."""
+    return proposal_language.field_gaps(context, settings.rating_act_days)
 
 
 def _check(answer: dict, context: dict) -> dict:
@@ -241,18 +237,21 @@ def _check(answer: dict, context: dict) -> dict:
         items = value if isinstance(value, list) else ([value] if value else [])
         return [str(item).strip()[:size] for item in items if str(item or "").strip()][:limit]
 
-    missing = list(dict.fromkeys(strings(answer.get("missing_data"), 15) + missing_from_context(context)))
+    # Known gaps first; the model's items only when they are not a rephrasing of one of them.
+    missing = proposal_language.merge_gaps(missing_from_context(context),
+                                           [proposal_language.clean(item) for item in strings(answer.get("missing_data"), 15)])
+    clean = proposal_language.clean
     return {
         "measure": measure,
         "rating_measure": rating_code,
         "differs_from_rating": bool(rating_code) and measure != rating_code,
-        "summary": str(answer.get("summary") or "").strip()[:600],
-        "actions": strings(answer.get("actions"), 10),
+        "summary": clean(str(answer.get("summary") or "").strip())[:600],
+        "actions": [clean(item) for item in strings(answer.get("actions"), 10)],
         "deadline": deadline,
         "crew": crew,
-        "reasoning": str(answer.get("reasoning") or "").strip()[:3000],
+        "reasoning": clean(str(answer.get("reasoning") or "").strip())[:3000],
         "missing_data": missing,
-        "based_on": strings(answer.get("based_on"), 15, 300),
+        "based_on": [clean(item) for item in strings(answer.get("based_on"), 15, 300)],
         "checks": notes,
         "index": context["rating"].get("index"),
     }
@@ -272,7 +271,9 @@ def generate(well_id: str) -> dict:
     context = build_context(well_id)
     if context is None:
         raise LookupError(well_id)
-    payload = {**context, "response_examples": response_examples()}
+    # The model reads the well in Russian (names and values) and answers in the same language.
+    payload = proposal_language.for_model(context, missing_from_context(context), response_examples(),
+                                          settings.rating_act_days)
     messages = [{"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False, default=str)}]
     try:

@@ -140,20 +140,21 @@ class FakeLiteLLM:
             records = _from_table(text, fields) if payload["multiple_records"] else [_from_lines(text, fields)]
             return "```json\n" + json.dumps({"records": records}, ensure_ascii=False) + "\n```"
         if "инженер-технолог" in system:
-            self.calls.append({"kind": "proposal", "well_id": payload["well_id"]})
-            rating = payload["rating"]
-            crew = next((item for item in payload["crews"] if item.get("status") == "available"), None)
-            example = next((item for item in payload["response_examples"]
-                            if item.get("measure") == rating.get("measure_code")), None)
+            self.calls.append({"kind": "proposal", "well_id": payload["скважина"]})
+            rating = payload["рейтинг"]
+            code = rating.get("код мероприятия")
+            crew = next((item for item in payload["бригады"] if item.get("статус") == "свободна"), None)
+            example = next((item for item in payload["примеры решений инженеров"]
+                            if item.get("мероприятие") == code), None)
             return json.dumps({
-                "measure": rating.get("measure_code") or "—",
-                "summary": f"Скважина {payload['well_id']}: {rating.get('measure')}.",
-                "actions": (example or {}).get("actions") or ["Мониторинг в обычном режиме"],
-                "deadline": rating.get("deadline"),
-                "crew": {"crew_id": crew["crew_id"], "date": rating.get("deadline")} if crew else None,
-                "reasoning": f"Индекс {rating.get('index')}; категория {rating.get('category')}.",
+                "measure": code if code and code != "нет оценки" else "—",
+                "summary": f"Скважина {payload['скважина']}: {rating.get('мероприятие')}.",
+                "actions": (example or {}).get("действия") or ["Мониторинг в обычном режиме"],
+                "deadline": rating.get("крайний срок"),
+                "crew": {"crew_id": crew["бригада"], "date": rating.get("крайний срок")} if crew else None,
+                "reasoning": f"Индекс {rating.get('индекс приоритета (0–100)')}; категория {rating.get('категория фонда')}.",
                 "missing_data": [],
-                "based_on": [f"{act['type']} {act['date']}" for act in payload["acts"]][:5],
+                "based_on": [f"{act['вид']} {act['дата']}" for act in payload["акты из истории ремонтов"]][:5],
             }, ensure_ascii=False)
         return "{}"
 

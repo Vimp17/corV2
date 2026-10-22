@@ -156,6 +156,7 @@
     .thead-wrap { position:sticky; z-index:2 }
     .thead { background:var(--navy); color:#fff; font-size:11px; font-weight:600; line-height:1.25; min-height:40px }
     .thead > div { padding:6px 0 }
+    .thead .hsub { display:block; font-size:10px; font-weight:500; color:#B9C6D6 }
     .thead.group { min-height:24px; background:var(--navy-2); color:#B9C6D6; font-size:11px }
     .trow { min-height:52px; border-bottom:1px solid var(--line-2); font-size:12px; line-height:1.35 }
     .trow:hover { background:#F7F9FB }
@@ -410,7 +411,7 @@
           <div class="thead-wrap">
             <div class="grid-row thead" role="row">
               <div>Место</div><div>Скважина</div><div>Индекс</div><div>Прогноз НТЦ / Мат.</div><div>Мероприятие и предложение</div><div>Категория фонда</div>
-              <div>Среда</div><div>Демонтаж</div><div>Разбор на базе</div><div>Оборудование и защита</div>
+              <div>Среда</div><div title="Последний акт из истории ремонтов (ЭРА ремонта, документы) — исторические данные, а не текущее состояние скважины">Демонтаж<span class="hsub">исторические данные</span></div><div title="Последний акт из истории ремонтов (ЭРА ремонта, документы) — исторические данные, а не текущее состояние скважины">Разбор на базе<span class="hsub">исторические данные</span></div><div>Оборудование и защита</div>
               <div>Нара&shy;ботка, сут</div><div>Жидкость, м³ / нефть, л (%)</div><div>Полнота данных</div>
             </div>
           </div>
@@ -783,8 +784,8 @@
             el('span', { style: 'font-size:11px', text: w.action || '' }))),
           el('div', { 'data-label': 'Категория фонда' }, el('span', { class: `cat ${w.category || 'unknown'}`, text: soft(w.category_label || 'Нет данных') })),
           el('div', { 'data-label': 'Среда' }, envCell(w)),
-          el('div', { 'data-label': 'Демонтаж' }, actCell(w.demount_act, w.demount_corrosion, false)),
-          el('div', { 'data-label': 'Разбор на базе' }, actCell(w.base_act, w.base_corrosion, (w.data_gaps || []).some(g => g.key === 'base_act'))),
+          el('div', { 'data-label': 'Демонтаж (исторические данные)' }, actCell(w.demount_act, w.demount_corrosion, false)),
+          el('div', { 'data-label': 'Разбор на базе (исторические данные)' }, actCell(w.base_act, w.base_corrosion, (w.data_gaps || []).some(g => g.key === 'base_act'))),
           el('div', { 'data-label': 'Оборудование и защита' }, equipCell(w)),
           el('div', { class: 'num-cell', 'data-label': 'Наработка, сут', text: fmtNum(w.run_days) }),
           el('div', { class: 'num-cell', 'data-label': 'Жидкость / нефть' }, el('div', { style: 'display:flex; flex-direction:column' },
@@ -935,9 +936,10 @@
       const text = [p.source, p.date ? fmtIso(p.date) : null, p.note].filter(Boolean).join(' · ');
       return text ? el('span', { class: 'prov', text }) : null;
     }
-    function dlGroup(title, items, w = null) {
+    function dlGroup(title, items, w = null, hint = null) {
       return el('div', { style: 'display:flex; flex-direction:column; gap:4px' },
         el('h3', { class: 'group-title', text: title }),
+        hint ? el('div', { class: 'hint', text: hint }) : null,
         el('dl', { class: 'dl' }, items.map(([k, v, cls, key]) => [el('dt', { text: k }),
           el('dd', { class: cls || (v === '—' ? 'na' : '') }, v, w && key ? provLine(w, key) : null)])));
     }
@@ -1010,11 +1012,12 @@
         ['Средства защиты', (w.protection_means || []).length ? `Есть: ${w.protection_means.join(', ')}` : 'Нет защиты от коррозии', (w.protection_means || []).length ? 'ok' : 'na'],
         ['Эффективность защиты', w.protection_label || 'Нет данных', protCls, 'protection'],
         ['Индекс без учёта защиты', w.protection_adjusted ? String(w.index_raw) : (w.index_raw ?? '—') === '—' ? '—' : `${w.index_raw} (не менялся)`]], w));
-      body.push(dlGroup('Демонтаж и разбор на базе', [
+      body.push(dlGroup('Демонтаж и разбор на базе — исторические данные', [
         ['Акт демонтажа', yesNo(w.demount_act, 'Есть', 'Нет'), '', 'demount_act'],
         ['Признак коррозии', yesNo(w.demount_corrosion, 'Есть коррозия', 'Коррозии нет'), w.demount_corrosion ? 'bad' : (w.demount_corrosion === false ? 'ok' : ''), 'demount_corrosion'],
         ['Акт разбора на базе', yesNo(w.base_act, 'Есть', 'Нет'), '', 'base_act'],
-        ['Результат разбора', yesNo(w.base_corrosion, 'Есть коррозия', 'Коррозии нет'), w.base_corrosion ? 'bad' : (w.base_corrosion === false ? 'ok' : ''), 'base_corrosion']], w));
+        ['Результат разбора', yesNo(w.base_corrosion, 'Есть коррозия', 'Коррозии нет'), w.base_corrosion ? 'bad' : (w.base_corrosion === false ? 'ok' : ''), 'base_corrosion']], w,
+        'Последние акты из истории ремонтов (ЭРА ремонта, документы), а не текущее состояние скважины.'));
       body.push(docsBox);
       body.push(dlGroup('Оценка', [
         ['Категория скважины', w.category_label || '—', w.category === 'corrosive' ? 'bad' : '', 'category'],

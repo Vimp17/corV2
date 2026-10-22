@@ -333,6 +333,60 @@ def test_ai_proposal_uses_rating_crews_and_reports_gaps(client, generated, fake)
     assert any("КРС-99" in note for note in body["checks"])
 
 
+
+def _proposal_context(**rating):
+    return {
+        "well_id": "DEMO-002", "today": TODAY.isoformat(),
+        "rating": {"index": 72, "measure_code": "РИ", "measure": "Решение инженера", "deadline": None,
+                   "category": "Среднекоррозионная", "corrosive_environment": True, "protection": None,
+                   "field": "Южное", "equipment": "ЭЦН-80", "run_days": 210, "liquid_m3_day": 85.0,
+                   "in_operation": True, "demount_act_recent": True, "demount_corrosion": None,
+                   "base_act_recent": False, "base_corrosion": None,
+                   "data_gaps": ["Демонтаж 02.09.2026 был, акта разбора на базе после него нет."],
+                   "notes": {"base_act": "Нет акта"}, **rating},
+        "acts": [{"date": "2026-09-02", "type": "Демонтаж", "corrosion_detected": None}],
+        "failures": [], "lab_samples": [], "other_measurements": [], "nkt_registry": None, "documents": [],
+        "latest_measurements": {"обводнённость, %": 91, "хлориды, мг/л": 21000},
+        "crews": [{"crew_id": "КРС-7", "status": "available", "specialties": ["КРС"]}],
+    }
+
+
+def test_ai_proposal_payload_is_russian():
+    import json
+    import re
+
+    from app.core import proposal_language
+
+    context = _proposal_context()
+    payload = proposal_language.for_model(context, proposal_language.field_gaps(context, 365), [], 365)
+    text = json.dumps(payload, ensure_ascii=False)
+    # Keys and service values are Russian: Latin is left only in identifiers and formulas.
+    latin = set(re.findall(r"[A-Za-z_]{3,}", text)) - {"DEMO", "null", "true", "false"}   # JSON syntax
+    assert not latin, latin
+    assert payload["бригады"][0]["статус"] == "свободна"
+    assert payload["рейтинг"]["код мероприятия"] == "РИ"
+    assert payload["исторические акты демонтажа и разбора (последние за 365 сут.)"]["акт демонтажа"] == "есть"
+    assert proposal_language.clean("measure_code РИ, crew available, water cut 91 %, CO₂ 1,9 %") == \
+        "код мероприятия РИ, бригада свободна, обводнённость 91 %, CO₂ 1,9 %"
+
+
+def test_ai_proposal_gaps_name_fields_and_are_not_repeated():
+    from app.core import proposal_language
+
+    context = _proposal_context(run_days=None, equipment=None)
+    gaps = proposal_language.field_gaps(context, 365)
+    assert "Нет значений показателей среды: CO₂." in gaps
+    assert any(gap.startswith("Нет значений для оценки коррозии и защиты: скорость коррозии") for gap in gaps)
+    assert "Нет даты спуска оборудования — наработка не рассчитана." in gaps
+    assert not any("ХИМИК" in gap or "ДАРС" in gap for gap in gaps)
+    # The model's rephrasings of known gaps are dropped; a new gap is kept, once.
+    merged = proposal_language.merge_gaps(gaps, [
+        "Нет акта разбора на базе после демонтажа 02.09.2026.",
+        "Нет данных о дате спуска оборудования, наработка не рассчитана",
+        "Нет значения pH попутной воды.", "Нет значения pH попутной воды.", ""])
+    assert merged == [*gaps, "Нет значения pH попутной воды."]
+
+
 @needs_db
 def test_scanned_pdf_and_source_table(client, generated, tmp_path):
     from PIL import Image
@@ -633,6 +687,24 @@ def test_registry_columns_and_two_row_header(tmp_path):
     assert no_date["records"][0]["new_well"] is False                          # no well list: taken as is
 
 
+
+def test_registry_well_header_with_latin_letters(tmp_path):
+    from app.core.documents import nkt_registry
+
+    # «Cкважина» typed with a Latin C (and «Скв. №» with a Latin «C» and «к»): still the well column.
+    for title in ("Cкважина", "Cкв. №", "Скважина (№)"):
+        head = ["№", "ДО", "Месторождение", "Куст", title, *REGISTRY_HEAD[5:]]
+        path = _registry(tmp_path / "r.xlsx", [_registry_row(1, "DEMO-001")])
+        from openpyxl import load_workbook
+
+        book = load_workbook(path)
+        for column, value in enumerate(head, start=1):
+            book.active.cell(row=1, column=column, value=value)
+        book.save(path)
+        result = nkt_registry.read_workbook(path.read_bytes(), ["DEMO-001"], TODAY)
+        assert [record["well_id"] for record in result["records"]] == ["DEMO-001"], title
+
+
 @needs_db
 def test_registry_through_documents(client, tmp_path, monkeypatch):
     from app import db
@@ -666,7 +738,7 @@ def test_registry_through_documents(client, tmp_path, monkeypatch):
     assert new_well["field"] == "Южное"                                         # a new well gets a rating row
     # A registry row is not a measurement: no «in operation», and no ДАРС telemetry.
     assert new_well["in_operation"] is None and new_well["index"] is None
-    assert "Нет телеметрии ДАРС." in [gap["note"] for gap in new_well["data_gaps"]]
+    assert any(gap["note"].startswith("Нет замеров телеметрии: ") for gap in new_well["data_gaps"])
     assert well["provenance"]["in_operation"]["source_id"] != "DOC_NKT"
     # The light card endpoint ranks the well exactly as the full rating does.
     ranks = {item["well_id"]: item["rank"] for item in client.get("/api/v1/rating").json()["wells"]}

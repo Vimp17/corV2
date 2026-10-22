@@ -388,22 +388,32 @@ def build_values(well_id: str, records: list[TelemetryPoint], events: list[dict]
     values.update(scores)
     prov.update(score_prov)
 
-    # What is missing, by section, so the dashboard can say what to request.
+    # What is missing, by section, so the dashboard can say what to request: the notes name the
+    # missing fields and dates, not only the system they come from.
     gaps: list[dict] = []
     if not series:
-        gaps.append({"key": "telemetry", "note": "Нет телеметрии ДАРС."})
+        gaps.append({"key": "telemetry", "note": "Нет замеров телеметрии: обводнённость, CO₂, хлориды, "
+                                                 "дебит жидкости, статус работы скважины."})
     elif skipped is not None:
-        gaps.append({"key": "telemetry", "note": "Мало замеров для расчёта моделей."})
+        # Readiness explains what is short; the lines about unconfigured source APIs are left out.
+        reasons = [item.strip() for item in skipped.missing_items if not item.startswith("Источник ")]
+        gaps.append({"key": "telemetry", "note": "Мало замеров для расчёта моделей. "
+                     + (" ".join(reasons[:2]) if reasons else f"Нужно не менее {settings.min_telemetry_records} "
+                        "замеров с разными датами.")})
     elif (now - _utc(series[-1].timestamp)).total_seconds() / 3600 > settings.max_telemetry_age_hours:
-        gaps.append({"key": "telemetry", "note": "Телеметрия устарела."})
+        gaps.append({"key": "telemetry", "note": f"Последний замер телеметрии — {_local(series[-1].timestamp):%d.%m.%Y}, "
+                                                 f"старше {settings.max_telemetry_age_hours:g} ч."})
     if values.get("sampling") is not True:
-        gaps.append({"key": "samples", "note": f"Нет лабораторной пробы (ХИМИК или протокол) за "
-                                               f"{settings.rating_sampling_days} сут."})
+        last_sample = (f"последняя — {_local(lab_points[-1].timestamp):%d.%m.%Y}" if lab_points
+                       else "проб нет")
+        gaps.append({"key": "samples", "note": f"Нет лабораторной пробы (CO₂, хлориды, эффективность ингибитора) "
+                                               f"за {settings.rating_sampling_days} сут.: {last_sample}."})
     demounts = [event for event in by_kind["demount"] if _utc(event["event_date"]) >= window_start]
     if demounts:
         last_demount = _utc(demounts[-1]["event_date"])
         if not any(_utc(event["event_date"]) >= last_demount for event in by_kind["base_inspection"]):
-            gaps.append({"key": "base_act", "note": "Демонтаж был, акта разбора на базе нет."})
+            gaps.append({"key": "base_act", "note": f"Демонтаж {_local(last_demount):%d.%m.%Y} был, "
+                                                    "акта разбора на базе после него нет."})
     values["data_gaps"] = gaps
     return values, prov
 
