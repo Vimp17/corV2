@@ -211,7 +211,8 @@
     },
     {
       "parameters": {
-        "jsCode": "const alert=$('4. Развернуть список рискованных скважин').item.json; const run=$('5. Получить расчёт и историю работ').item.json; const external=$input.first().json; if(!run.analysis?.context) throw new Error('Не получен паспорт анализа скважины'); return [{json:{analysis_id:alert.analysis_id,context:run.analysis.context,external_data:external}}];"
+        "mode": "runOnceForEachItem",
+        "jsCode": "const alert=$('4. Развернуть список рискованных скважин').item.json; const run=$('5. Получить расчёт и историю работ').item.json; const external=$input.item.json; if(!run.analysis?.context) throw new Error('Не получен паспорт анализа скважины '+alert.well_id); return {json:{analysis_id:alert.analysis_id,context:run.analysis.context,external_data:external}};"
       },
       "id": "610f591d-0e60-47fd-8730-8e21e4d00008",
       "name": "7. Подготовить данные для ИИ",
