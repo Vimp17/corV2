@@ -180,6 +180,9 @@ def evaluate(row: dict[str, Any]) -> dict[str, Any]:
         "oil_l_day": (round(row["liquid_rate_m3_day"] * row["oil_pct"] * 10)
                       if row.get("liquid_rate_m3_day") is not None and row.get("oil_pct") is not None else None),
         "data_gaps": gaps,
+        # Fields the classification has no current value for (rating_builder._missing_fields).
+        "missing_fields": next((list(item.get("items") or []) for item in row.get("data_gaps") or []
+                                if isinstance(item, dict) and item.get("key") == "fields"), []),
         # Protection means present (inhibitor, coated tubing), whatever their effect.
         "protection_means": list(protection_prov.get("means") or []),
         "data_gap_labels": [GAP_LABELS.get(item["key"], item["key"]) for item in gaps],

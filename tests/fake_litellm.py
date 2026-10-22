@@ -152,7 +152,7 @@ class FakeLiteLLM:
                 "actions": (example or {}).get("действия") or ["Мониторинг в обычном режиме"],
                 "deadline": rating.get("крайний срок"),
                 "crew": {"crew_id": crew["бригада"], "date": rating.get("крайний срок")} if crew else None,
-                "reasoning": f"Индекс {rating.get('индекс приоритета (0–100)')}; категория {rating.get('категория фонда')}.",
+                "reasoning": f"Индекс {rating.get('индекс коррозии на НКТ (0–100)')}; категория {rating.get('категория фонда')}.",
                 "missing_data": [],
                 "based_on": [f"{act['вид']} {act['дата']}" for act in payload["акты из истории ремонтов"]][:5],
             }, ensure_ascii=False)

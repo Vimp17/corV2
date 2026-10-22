@@ -115,7 +115,7 @@ def for_model(context: dict, known_gaps: list[str], examples: list[dict], act_da
         "скважина": context["well_id"],
         "сегодня": context["today"],
         "рейтинг": {
-            "индекс приоритета (0–100)": rating.get("index"),
+            "индекс коррозии на НКТ (0–100)": rating.get("index"),
             "индекс без учёта защиты": rating.get("index_before_protection"),
             "код мероприятия": rating.get("measure_code") or "нет оценки",
             "мероприятие": rating.get("measure"),

@@ -120,6 +120,38 @@ def _latest(records: list[TelemetryPoint], field: str) -> tuple[Any, TelemetryPo
 
 
 ENV_RULE_PREFIX = "ENV_"
+# Measured fields the rating classifies a well by: (field, name in the card, what it is needed for).
+CLASSIFICATION_FIELDS = (
+    ("water_cut_pct", "обводнённость", "среда"),
+    ("co2_pct", "CO₂", "среда"),
+    ("chlorides_mg_l", "хлориды", "среда"),
+    ("corrosion_rate_mm_year", "скорость коррозии", "категория фонда, подтверждение защиты"),
+    ("inhibitor_efficiency", "эффективность ингибитора", "защита"),
+)
+
+
+def _missing_fields(values: dict, records: list[TelemetryPoint], current: dict) -> list[dict]:
+    """Fields the classification (environment, category, protection) has no current value for.
+
+    {"field", "for", "last"}: last is the date of the latest value when there is one, too old to
+    count (the value is stale); None when the field was never received for the well."""
+    items = []
+    fields = list(CLASSIFICATION_FIELDS)
+    if current.get("inhibitor_efficiency") is not None:
+        fields.append(("injection_deviation_pct", "отклонение закачки ингибитора", "защита"))
+    for field, name, purpose in fields:
+        if current.get(field) is not None:
+            continue
+        _, point = _latest(records, field)
+        items.append({"field": name, "for": purpose,
+                      "last": f"{_local(point.timestamp):%d.%m.%Y}" if point is not None else None})
+    if not values.get("equipment"):
+        items.append({"field": "спущенное оборудование (исполнение НКТ)", "for": "защита", "last": None})
+    for act, corrosion, name in (("demount_act", "demount_corrosion", "признак коррозии в акте демонтажа"),
+                                 ("base_act", "base_corrosion", "признак коррозии в акте разбора на базе")):
+        if values.get(act) and values.get(corrosion) is None:
+            items.append({"field": name, "for": "категория фонда, защита", "last": None})
+    return items
 
 
 def _model_scores(result: PipelineResult | None, sources: _Sources,
@@ -414,6 +446,10 @@ def build_values(well_id: str, records: list[TelemetryPoint], events: list[dict]
         if not any(_utc(event["event_date"]) >= last_demount for event in by_kind["base_inspection"]):
             gaps.append({"key": "base_act", "note": f"Демонтаж {_local(last_demount):%d.%m.%Y} был, "
                                                     "акта разбора на базе после него нет."})
+    # Not a section of «Полнота данных»: the card lists the fields (rating.evaluate → missing_fields).
+    fields = _missing_fields(values, records, current)
+    if fields:
+        gaps.append({"key": "fields", "items": fields})
     values["data_gaps"] = gaps
     return values, prov
 
