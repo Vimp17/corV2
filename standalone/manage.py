@@ -11,6 +11,7 @@ Windows: mai.cmd <команда>        Linux: python standalone/manage.py <к�
   link      ссылка на дашборд с ключом доступа
   n8n       сценарии n8n с адресом этого сервера → папка n8n-demo
   cleanup   после демонстрации: удалить таблицы демо и загруженные файлы
+  diag      отчёт для разработчика: версия, проверка, состояние, журналы (пароли и ключи скрыты)
   version   версия сборки
 
 Подробно — README-DEMO.md в корне сборки.
@@ -18,7 +19,10 @@ Windows: mai.cmd <команда>        Linux: python standalone/manage.py <к�
 from __future__ import annotations
 
 import argparse
+import contextlib
 import getpass
+import io
+import platform
 import json
 import os
 import re
@@ -52,6 +56,7 @@ N8N_OUT = ROOT / "n8n-demo"
 N8N_WORKFLOWS = ("scheduled_risk_monitor.json", "well_analysis_operator.json")
 N8N_ORIGINAL_URL = "http://mai-api:8000"
 BUILD_INFO = ROOT / "BUILD_INFO.json"
+DIAG_DIR = ROOT / "diag"
 ENTRY = "standalone.asgi:app"
 WINDOWS = os.name == "nt"
 LOG_ROTATE_BYTES = 20 * 1024 * 1024
@@ -1128,6 +1133,140 @@ def cmd_cleanup(args) -> int:
     return 0
 
 
+# --------------------------------------------------------------------------- diag
+SECRET_NAMES = re.compile(r"(PASSWORD|KEY|TOKEN|SECRET)", re.IGNORECASE)
+
+
+def _masker(values: dict[str, str]):
+    """A function hiding passwords, keys and tokens in a text (settings, check output, logs)."""
+    secrets_ = {value for name, value in values.items() if SECRET_NAMES.search(name) and len(value) >= 4}
+    for url_name in ("MAI_DATABASE_URL",):
+        password = parse_db_url(values.get(url_name, "")).get("password")
+        if password and len(password) >= 4:
+            secrets_ |= {password, quote(password, safe="")}
+    patterns = [(re.compile(r"([?&](?:key|api_key|token)=)[^&\s\"']+", re.IGNORECASE), r"\1***"),
+                (re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/=-]+"), r"\1***"),
+                (re.compile(r"(://[^:/@\s]+:)[^@\s]+@"), r"\1***@")]
+
+    def mask(text: str) -> str:
+        for secret in sorted(secrets_, key=len, reverse=True):
+            text = text.replace(secret, "***")
+        for pattern, replacement in patterns:
+            text = pattern.sub(replacement, text)
+        return text
+    return mask
+
+
+def _log_tail(path: Path, lines: int) -> str:
+    try:
+        data = path.read_bytes()[-400_000:].decode("utf-8", errors="replace").splitlines()[-lines:]
+    except OSError:
+        return "(нет файла)"
+    return "\n".join(data) or "(пусто)"
+
+
+def _folder_size(path: Path) -> str:
+    try:
+        total = sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
+    except OSError:
+        return "?"
+    return f"{total / 1048576:.1f} МБ"
+
+
+def cmd_diag(args) -> int:
+    """One text file for a bug report: everything except passwords, keys and the data itself."""
+    values = env_values() if ENV_FILE.is_file() else {}
+    mask = _masker(values)
+    sections: list[tuple[str, str]] = []
+
+    def section(title: str, produce) -> None:
+        try:
+            body = produce()
+        except Exception as exc:  # noqa: BLE001 — a broken part must not stop the report
+            body = f"(не удалось: {type(exc).__name__}: {exc})"
+        sections.append((title, mask(str(body))))
+
+    def build() -> str:
+        info = json.loads(BUILD_INFO.read_text(encoding="utf-8")) if BUILD_INFO.is_file() else {}
+        return "\n".join([f"сборка: {info.get('version', 'из исходников')} ({info.get('git_branch', '?')}, "
+                          f"{info.get('git_commit', '?')[:12]})", f"собрана: {info.get('built_at', '?')}",
+                          f"Python: {sys.version.split()[0]} ({sys.executable})",
+                          f"система: {platform.platform()} ({platform.machine()})", f"папка: {ROOT}",
+                          f"время отчёта: {datetime.now().astimezone().isoformat(timespec='seconds')}"])
+
+    def settings_text() -> str:
+        if not values:
+            return "(.env нет — mai.cmd setup не выполнялся)"
+        lines = []
+        for name, value in values.items():
+            shown = ("***" if value else "(пусто)") if SECRET_NAMES.search(name) else (value or "(пусто)")
+            lines.append(f"{name}={shown}")
+        return "\n".join(lines)
+
+    def check_text() -> str:
+        if args.no_check:
+            return "(пропущено: --no-check)"
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            try:
+                code = cmd_check(args)
+            except Stop as exc:
+                say(str(exc))
+                code = 1
+        return buffer.getvalue() + f"\n(код завершения {code})"
+
+    def state_text() -> str:
+        lines = []
+        if values:
+            pid, answering = _running(values)
+            lines.append(f"API: {'работает' if answering else 'не отвечает'}" + (f", процесс {pid}" if pid else ""))
+            lines.append(f"адрес API: {local_url(values)}  (слушает {bind_host(values)}:{port_of(values)})")
+            if local_db(values):
+                lines.append(f"встроенная база: {'работает' if pg_running(values) else 'не запущена'}, "
+                             f"порт {values.get('MAI_STANDALONE_PG_PORT') or PG_DEFAULT_PORT}")
+            status, body = _http_status(f"{local_url(values)}/health/ready", timeout=5)
+            lines.append(f"/health/ready: {status} {body[:400]}")
+        usage = shutil.disk_usage(ROOT)
+        lines.append(f"свободно на диске: {usage.free / 1073741824:.1f} ГБ из {usage.total / 1073741824:.1f} ГБ")
+        for folder in (PG_DATA, ROOT / "data" / "documents", ROOT / "inbox", LOG_DIR):
+            lines.append(f"папка {folder.relative_to(ROOT)}: {_folder_size(folder)}")
+        return "\n".join(lines)
+
+    def documents_text() -> str:
+        if not values or args.no_check:
+            return "(пропущено)"
+        _prepare_app_environment()
+        from app import db as app_db
+
+        counts = app_db.document_status_counts()
+        lines = [f"по статусам: {counts or 'документов нет'}"]
+        problems = [row for row in app_db.list_documents(limit=200) if row.get("status") in {"failed", "not_recognized"}]
+        for index, row in enumerate(problems[:15], start=1):
+            # File names may be confidential: only the extension and the size are reported.
+            suffix = Path(row.get("filename") or "").suffix.lower() or "?"
+            lines.append(f"  {index}. {row.get('status')} | документ{suffix}, {row.get('size_bytes')} байт | "
+                         f"{row.get('created_at')} | {str(row.get('status_message') or '')[:300]}")
+        return "\n".join(lines)
+
+    say("Собираю отчёт (проверка может занять до минуты)…")
+    section("Сборка и система", build)
+    section("Настройки .env (пароли и ключи скрыты)", settings_text)
+    section("Проверка (mai.cmd check)", check_text)
+    section("Состояние", state_text)
+    section("Документы с ошибками (имена файлов скрыты)", documents_text)
+    section(f"Журнал приложения logs/api.log — последние {args.lines} строк", lambda: _log_tail(LOG_FILE, args.lines))
+    section("Журнал встроенной базы logs/postgres.log — последние 100 строк", lambda: _log_tail(PG_LOG, 100))
+    section("Запуски программ базы logs/postgres-tools.log — последние 60 строк", lambda: _log_tail(PG_TOOLS_LOG, 60))
+    DIAG_DIR.mkdir(exist_ok=True)
+    target = DIAG_DIR / f"mai-diag-{datetime.now():%Y%m%d-%H%M%S}.txt"
+    text_ = "\n\n".join(f"===== {title} =====\n{body}" for title, body in sections)
+    target.write_text("Отчёт демо-сборки MAI Corrosion Control (mai.cmd diag)\n\n" + text_ + "\n", encoding="utf-8")
+    say(f"\nОтчёт: {target}")
+    say("Пароли, ключи и ключ в ссылках скрыты, имена файлов документов — тоже. В журнале могут быть номера")
+    say("скважин: просмотрите файл перед отправкой и при необходимости замените их.")
+    return 0
+
+
 def cmd_version(args) -> int:
     if BUILD_INFO.is_file():
         info = json.loads(BUILD_INFO.read_text(encoding="utf-8"))
@@ -1170,6 +1309,9 @@ def parser() -> argparse.ArgumentParser:
     cleanup = commands.add_parser("cleanup", help="удалить данные демо")
     cleanup.add_argument("--yes", action="store_true", help="без подтверждения")
     cleanup.add_argument("--drop-schema", action="store_true", help="удалить и пустую схему")
+    diag = commands.add_parser("diag", help="отчёт для разработчика (пароли и ключи скрыты)")
+    diag.add_argument("-n", "--lines", type=int, default=300, help="строк журнала приложения")
+    diag.add_argument("--no-check", action="store_true", help="без проверки базы и модели (быстрее)")
     commands.add_parser("version", help="версия сборки")
     return main
 
@@ -1182,7 +1324,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     handlers = {"setup": cmd_setup, "check": cmd_check, "start": cmd_start, "stop": cmd_stop,
                 "restart": cmd_restart, "status": cmd_status, "run": cmd_run, "logs": cmd_logs, "link": cmd_link,
-                "n8n": cmd_n8n, "cleanup": cmd_cleanup, "version": cmd_version}
+                "n8n": cmd_n8n, "cleanup": cmd_cleanup, "diag": cmd_diag, "version": cmd_version}
     if not args.command:
         parser().print_help()
         return 0
