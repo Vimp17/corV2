@@ -109,9 +109,17 @@ MARKERS = {"corrosion_facts", "nno_days", "esp_mode", "tubing_new", "damaged_str
 SUSPENSION = re.compile(r"состав\w*\s+подвеск")
 # Columns describing where the well is, not what was measured: a row needs more than these.
 LOCATION = {"subsidiary", "field", "pad", "formation"}
-WELL_HEADER = re.compile(r"^(№\s*)?(скв(ажин[аы]?)?\.?)(\s*№)?$|^№\s*скв|^номер\s+скв")
+WELL_HEADER = re.compile(r"^(№\s*)?(скв(ажин[аы]?)?\.?)(\s*№)?$|^№\s*скв|^номер\s+скв|^скв(ажин[аы]?)?[\s.,:;(/№-]")
+# Latin letters typed in place of Cyrillic look-alikes («Cкважина» with a Latin C): read as Cyrillic.
+_CYRILLIC = str.maketrans({"a": "а", "c": "с", "e": "е", "o": "о", "p": "р", "x": "х", "k": "к", "y": "у",
+                           "b": "в", "h": "н", "m": "м", "t": "т"})
 REGISTRY_DATE = re.compile(r"состояни\w*\s+на|на\s+дату|дата|период|^на\s+\d", re.IGNORECASE)
 _LATIN = str.maketrans({"а": "a", "с": "c", "о": "o", "е": "e", "к": "k", "н": "h", "м": "m", "р": "p", "х": "x"})
+
+
+def _is_well_header(text: str) -> bool:
+    norm = _norm(text)
+    return bool(WELL_HEADER.search(norm) or WELL_HEADER.search(norm.translate(_CYRILLIC)))
 
 
 def _formula(text: str) -> str:
@@ -164,7 +172,7 @@ def find_header(rows: list[list[Any]]) -> dict | None:
     """{"row", "data_from", "well", "columns": {col: key}, "titles": {col: label}} or None."""
     for r in range(1, min(len(rows), HEADER_SCAN_ROWS) + 1):
         labels, data_from = _labels(rows, r)
-        well = next((c for c, text in labels.items() if WELL_HEADER.search(_norm(text))), None)
+        well = next((c for c, text in labels.items() if _is_well_header(text)), None)
         if well is None:
             continue
         used: set[str] = set()
