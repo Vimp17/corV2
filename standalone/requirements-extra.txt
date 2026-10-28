@@ -1,0 +1,4 @@
+# Packages of the standalone build only, added to requirements.txt when the Windows lock is
+# resolved (standalone/build/build.sh --relock). pyodbc: the MSSQL mode (standalone/mssql_compat.py);
+# it needs "ODBC Driver 17/18 for SQL Server" (x64) installed on the computer.
+pyodbc>=5.1,<6

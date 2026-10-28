@@ -151,8 +151,13 @@ def client(generated, fake):
 
     with TestClient(app) as test_client:
         with db.engine().begin() as conn:
-            conn.execute(text("TRUNCATE documents, telemetry, ingestion_batches, history_events, history_batches, "
-                              "source_health, source_documents, well_rating, analysis_runs, era_proposals CASCADE"))
+            if conn.dialect.name == "postgresql":
+                conn.execute(text("TRUNCATE documents, telemetry, ingestion_batches, history_events, history_batches, "
+                                  "source_health, source_documents, well_rating, analysis_runs, era_proposals CASCADE"))
+            else:  # SQL Server (MSSQL mode of the standalone build): no TRUNCATE … CASCADE
+                for table in reversed(db.metadata.sorted_tables):
+                    if table.name != "monitor_jobs":
+                        conn.execute(table.delete())
         for profile, name in (("dars", "sample_dars.xlsx"), ("khimik", "sample_khimik.xlsx"), ("era", "sample_era.xlsx")):
             with open(generated / name, "rb") as handle:
                 response = test_client.post("/api/v1/ingestion/excel", data={"profile_id": profile},

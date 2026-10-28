@@ -562,11 +562,15 @@ pytest                                                                          
 MAI_TEST_DATABASE_URL="postgresql+psycopg://mai:mai@localhost:5432/mai_test" pytest   # полный сценарий на пустой БД
 ```
 
+Те же тесты проходят на SQL Server через режим MSSQL демо-сборки (`standalone/mssql_compat.py`): нужны `pyodbc` и «ODBC Driver 18 for SQL Server», адрес вида `MAI_TEST_DATABASE_URL="mssql+pyodbc://логин:пароль@сервер:1433/mai_test?driver=ODBC+Driver+18+for+SQL+Server&TrustServerCertificate=yes"`, для отдельной схемы — `MAI_TEST_MSSQL_SCHEMA`. Особенности SQL Server проверяет `tests/test_mssql.py` (на PostgreSQL пропускается).
+
 Тесты подменяют LiteLLM имитацией (`tests/fake_litellm.py`) и проходят путь: выгрузки ДАРС / ХИМИК / ЭРА, акт в PDF, скан и PDF-скан (OCR), Excel без ИИ (таблица под шапкой, свои названия столбцов, дата в шапке, форма с одной пробой, скважина числом, чужая скважина — всё при выключенном LiteLLM), паспорт, выгрузка ХИМИК среди документов, нераспознанный документ, выдуманные моделью значения (не загружаются), повтор файла, повторная обработка, удаление, папка-приёмник, недоступный OCR, предложение ИИ-агента (в том числе бригада не из расписания).
 
 ## 17. База данных и миграции
 
 Схемой владеет Alembic (`migrations/versions`). При старте API выполняет `alembic upgrade head` под блокировкой PostgreSQL, поэтому несколько воркеров или реплик не мешают друг другу. Изменения схемы оформляйте новой ревизией, а не правкой таблиц в `app/db.py`. Текущая ревизия — `alembic current` из корня проекта (URL берётся из `MAI_DATABASE_URL`). Перенос со старой SQLite-версии — `scripts/migrate_sqlite_to_postgres.py`.
+
+Демо-сборка для Windows (`standalone/`) может хранить те же таблицы в Microsoft SQL Server 2016+: режим `mssql` в `mai.cmd setup`. Там таблицы создаются по описанию в `app/db.py` без Alembic, а PostgreSQL-специфичные запросы заменяет `standalone/mssql_compat.py` (подробно — `standalone/README.md`, раздел 5.6). Основная версия (Docker) по-прежнему работает на PostgreSQL.
 
 | Таблица | Что хранит |
 | --- | --- |

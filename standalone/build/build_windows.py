@@ -13,7 +13,8 @@ The result is one zip: unpack it on Windows Server and run mai.cmd. Inside:
   mai.cmd, README-DEMO.md, BUILD_INFO.json.
 
 Steps: tools (uv, pefile) → Python package (SHA-512 checked against nuget.org) → Windows wheels
-from standalone/requirements-windows.lock (the versions tested in the Docker image) → bytecode →
+from standalone/requirements-windows.lock (the versions tested in the Docker image, plus pyodbc of
+standalone/requirements-extra.txt for the MSSQL mode) → bytecode →
 check that every extension module finds its DLLs → project files → zip and its SHA-256.
 
 Downloads go to standalone/dist/cache and are reused by the next build.
@@ -54,11 +55,14 @@ POSTGRES_PARTS = ("pgsql/bin/", "pgsql/lib/", "pgsql/share/")
 POSTGRES_SKIP = re.compile(r"(^pgsql/bin/stackbuilder\.exe$)|(^pgsql/lib/[^/]*(plperl|plpython|pltcl)[^/]*\.dll$)",
                            re.IGNORECASE)
 LOCK = SRC / "standalone" / "requirements-windows.lock"
+# Packages of the standalone build only (not of the Docker image): pyodbc for the MSSQL mode.
+EXTRA_REQUIREMENTS = SRC / "standalone" / "requirements-extra.txt"
 APP_NAME = "mai-demo"
 # Project files copied into the build (directories are copied without caches and tests).
 PROJECT_ITEMS = ["app", "dashboard", "config", "migrations", "n8n", "scripts", "docs", "examples/documents",
                  "alembic.ini", "requirements.txt", "README.md"]
-STANDALONE_ITEMS = ["__init__.py", "asgi.py", "envfile.py", "manage.py", "env.template", "README.md"]
+STANDALONE_ITEMS = ["__init__.py", "asgi.py", "envfile.py", "manage.py", "mssql_compat.py", "env.template",
+                    "README.md"]
 TEXT_CRLF = {".cmd", ".md", ".txt", ".template"}
 # DLLs every supported Windows (Server 2016 and later) has: system libraries and the Universal CRT.
 SYSTEM_DLLS = {
@@ -69,7 +73,7 @@ SYSTEM_DLLS = {
     "glu32", "d2d1", "d3d11", "dxgi", "dwrite", "windowscodecs", "mpr", "netapi32", "powrprof", "propsys",
     "cfgmgr32", "ucrtbase", "wintrust", "oleacc", "usp10", "winspool.drv", "shcore", "authz", "fwpuclnt",
     "msi", "cabinet", "dhcpcsvc", "credui", "wtsapi32", "pdh", "tdh", "virtdisk", "wevtapi", "bthprops.cpl",
-    "bcryptprimitives", "synchronization",
+    "bcryptprimitives", "synchronization", "odbc32",
 }
 
 
@@ -193,7 +197,7 @@ def relock(uv: Path, constraints: Path | None) -> None:
     # uv writes through a temporary file beside the output: the source tree may be read-only, so
     # the lock is resolved into the cache and copied into place.
     resolved = CACHE / "requirements-windows.lock.new"
-    command = [uv, "pip", "compile", SRC / "requirements.txt", "--python-platform", PLATFORM,
+    command = [uv, "pip", "compile", SRC / "requirements.txt", EXTRA_REQUIREMENTS, "--python-platform", PLATFORM,
                "--python-version", "3.12", "--no-header", "--no-annotate", "-o", resolved]
     if constraints:
         command += ["--constraint", constraints]

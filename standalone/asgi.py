@@ -12,6 +12,9 @@
    key in a cookie of this site and returns to /dashboard; a request with the cookie and without
    an X-API-Key header is let through as if it had the header. n8n and scripts send the header.
 
+4. SQL Server. With MAI_STANDALONE_DB=mssql the application keeps its tables in Microsoft SQL
+   Server: standalone/mssql_compat.py adapts app.db before the application uses it.
+
 The application itself (app/) is not changed. Run: python -m uvicorn standalone.asgi:app
 (standalone/manage.py does it).
 """
@@ -103,7 +106,14 @@ def prepare_environment() -> dict:
     when = _data_date(os.environ.get("MAI_STANDALONE_DATA_DATE") or file_values.get("MAI_STANDALONE_DATA_DATE", ""))
     windows = archive_windows(when)
     os.environ.update(windows)
-    return {"cleared": cleared, "windows": windows}
+    database = os.environ.get("MAI_STANDALONE_DB") or file_values.get("MAI_STANDALONE_DB", "")
+    if database == "mssql":
+        from standalone import mssql_compat
+
+        mssql_compat.install(os.environ.get("MAI_DATABASE_URL") or file_values.get("MAI_DATABASE_URL", ""),
+                             os.environ.get("MAI_STANDALONE_MSSQL_SCHEMA")
+                             or file_values.get("MAI_STANDALONE_MSSQL_SCHEMA", ""))
+    return {"cleared": cleared, "windows": windows, "database": database or "server"}
 
 
 PREPARED = prepare_environment()
