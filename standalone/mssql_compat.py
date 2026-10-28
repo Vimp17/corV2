@@ -2,9 +2,10 @@
 
 MAI_STANDALONE_DB=mssql keeps the tables in a SQL Server database (2016 or later, database
 compatibility level 130 or higher for the JSON functions). The connection goes through pyodbc
-and the "ODBC Driver 17/18 for SQL Server" installed on the computer: MAI_DATABASE_URL is the
-mssql+pyodbc URL written by "mai.cmd setup", MAI_STANDALONE_MSSQL_SCHEMA the schema of the
-tables (empty: the default schema of the login, usually dbo).
+and the "ODBC Driver 17/18 for SQL Server" installed on the computer (mssql+pyodbc URL), or
+through pymssql, which needs no ODBC driver (mssql+pymssql URL). MAI_DATABASE_URL is written by
+"mai.cmd setup", MAI_STANDALONE_MSSQL_SCHEMA names the schema of the tables (empty: the default
+schema of the login, usually dbo).
 
 app/db.py is written for PostgreSQL. install() adapts that same module in place, before the
 application uses it, so app/ itself is unchanged:
@@ -170,6 +171,14 @@ def upsert(table) -> Upsert:
 
 
 # --------------------------------------------------------------------------- install
+def connect_args(url: str, login_timeout: int = 30) -> dict:
+    """Driver options: a login timeout (pymssql's "timeout" limits every query, so its own option);
+    pymssql binds DATETIME2 with full precision, as pyodbc does."""
+    if url.startswith("mssql+pymssql"):
+        return {"login_timeout": login_timeout, "use_datetime2": True}
+    return {"timeout": login_timeout}
+
+
 def qualified(name: str, dialect) -> str:
     """A table name for hand-written SQL, in the configured schema."""
     quote = dialect.identifier_preparer.quote
@@ -192,8 +201,7 @@ def install(url: str, schema: str = "") -> None:
             elif isinstance(kind, String):
                 column.type = _text_type(kind)
 
-    engine = create_engine(url, pool_pre_ping=True, pool_size=5, max_overflow=10,
-                           connect_args={"timeout": 30})
+    engine = create_engine(url, pool_pre_ping=True, pool_size=5, max_overflow=10, connect_args=connect_args(url))
     if _schema:
         engine = engine.execution_options(schema_translate_map={None: _schema})
     db._engine = engine

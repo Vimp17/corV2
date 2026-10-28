@@ -173,10 +173,18 @@ def libpq_url(url: str) -> str:
     return re.sub(r"^postgresql\+psycopg://", "postgresql://", url)
 
 
+PYMSSQL = "pymssql"
+
+
 def build_mssql_url(host: str, port: str, name: str, user: str, password: str, driver: str, trust: bool) -> str:
-    """mssql+pyodbc URL; no user = Windows authentication of the account the build runs under."""
+    """mssql+pyodbc URL with an ODBC driver, or mssql+pymssql (driver "pymssql": no ODBC driver needed);
+    no user = Windows authentication of the account the build runs under."""
     from sqlalchemy.engine import URL
 
+    if driver == PYMSSQL:
+        url = URL.create("mssql+pymssql", username=user or None, password=password or None, host=host,
+                         port=int(port) if port else None, database=name)
+        return url.render_as_string(hide_password=False)
     query = {"driver": driver, "TrustServerCertificate": "yes" if trust else "no"}
     if not user:
         query["Trusted_Connection"] = "yes"
@@ -192,8 +200,9 @@ def parse_mssql_url(url: str) -> dict:
 
     parts = make_url(url)
     query = {key.lower(): value for key, value in parts.query.items()}
+    driver = PYMSSQL if parts.drivername.endswith(PYMSSQL) else query.get("driver", "")
     return {"host": parts.host or "", "port": str(parts.port or ""), "name": parts.database or "",
-            "user": parts.username or "", "password": parts.password or "", "driver": query.get("driver", ""),
+            "user": parts.username or "", "password": parts.password or "", "driver": driver,
             "trust": str(query.get("trustservercertificate", "yes")).lower() == "yes",
             "windows": not parts.username}
 
@@ -439,10 +448,10 @@ def _setup_mssql(args, old: dict[str, str], was_mssql: bool, interactive: bool) 
     drivers = odbc_drivers()
     note("SQL Server 2016 или новее. Адрес, база, схема и вход — от администраторов (README-DEMO.md, раздел 5.6).")
     if drivers:
-        note("ODBC-драйверы на этом компьютере: " + ", ".join(drivers))
+        note("ODBC-драйверы на этом компьютере: " + ", ".join(drivers) + "; без ODBC-драйвера — pymssql.")
     else:
-        warn("ODBC-драйвер SQL Server не найден: нужен «ODBC Driver 18 (или 17) for SQL Server» x64 — его ставит")
-        warn("администратор. Настройку можно записать сейчас, проверка (mai.cmd check) пройдёт после установки.")
+        note("ODBC-драйвер SQL Server не найден — подключение через pymssql (входит в сборку, ничего ставить")
+        note("не нужно). Если нужен ODBC: «ODBC Driver 18 (или 17) for SQL Server» x64 ставит администратор.")
     host = _ask("Сервер (имя или IP; именованный экземпляр — сервер\\ИМЯ)", db.get("host", ""),
                 interactive=interactive, preset=args.db_host, check=_required)
     port = _ask("Порт (- = без порта: именованный экземпляр с динамическим портом)",
@@ -461,11 +470,16 @@ def _setup_mssql(args, old: dict[str, str], was_mssql: bool, interactive: bool) 
         user = _ask("Логин", db.get("user", ""), interactive=interactive, preset=args.db_user, check=_required)
         password = _ask("Пароль (не отображается)", db.get("password", ""), secret=True, interactive=interactive,
                         preset=args.db_password, shown_default="оставить прежний" if db.get("password") else "")
-    driver = _ask("ODBC-драйвер", db.get("driver") or (drivers[0] if drivers else "ODBC Driver 18 for SQL Server"),
-                  interactive=interactive, preset=args.db_driver, check=_required)
-    trust = _yes(_ask("Доверять сертификату сервера без проверки? да — если сертификат самоподписанный "
-                      "(обычно во внутренней сети) / нет", "да" if db.get("trust", True) else "нет",
-                      interactive=interactive, preset=args.db_trust_cert))
+    driver = _ask(f"Драйвер: {' / '.join(drivers + [PYMSSQL])} (pymssql — без ODBC-драйвера)",
+                  db.get("driver") or (drivers[0] if drivers else PYMSSQL), interactive=interactive,
+                  preset=args.db_driver, check=_required)
+    trust = True
+    if driver != PYMSSQL:
+        trust = _yes(_ask("Доверять сертификату сервера без проверки? да — если сертификат самоподписанный "
+                          "(обычно во внутренней сети) / нет", "да" if db.get("trust", True) else "нет",
+                          interactive=interactive, preset=args.db_trust_cert))
+    elif auth == "windows":
+        warn("Вход Windows через pymssql зависит от настроек домена; если не пройдёт — вход sql или ODBC-драйвер.")
     return build_mssql_url(host, port, name, user, password, driver, trust), schema
 
 
@@ -955,7 +969,7 @@ def cmd_check(args) -> int:
 
     say("\nПакеты")
     modules = ("numpy", "pandas", "scipy", "lifelines", "psycopg", "sqlalchemy", "fastapi", "uvicorn",
-               "openpyxl", "pypdfium2", "PIL", "requests", "alembic", "tzdata") + (("pyodbc",) if mssql_db(values) else ())
+               "openpyxl", "pypdfium2", "PIL", "requests", "alembic", "tzdata", "pyodbc", "pymssql")
     missing = []
     for module in modules:
         try:
@@ -1095,16 +1109,22 @@ def _check_mssql(values: dict[str, str]) -> str | None:
     target = (f"{info['host']}" + (f",{info['port']}" if info["port"] else "") + f"/{info['name']}"
               + (f", схема {schema_option}" if schema_option else ""))
     drivers = odbc_drivers()
-    if info["driver"] not in drivers:
+    if info["driver"] == PYMSSQL:
+        ok("драйвер: pymssql (без ODBC-драйвера)")
+    elif info["driver"] not in drivers:
         note("Установлены: " + (", ".join(drivers) or "ни одного ODBC-драйвера SQL Server"))
-        note("Нужен «ODBC Driver 18 (или 17) for SQL Server» x64 (ставит администратор) или выбрать")
-        note("установленный: mai.cmd setup.")
+        note("Нужен «ODBC Driver 18 (или 17) for SQL Server» x64 (ставит администратор), выбрать")
+        note("установленный или pymssql (без ODBC-драйвера): mai.cmd setup.")
         return f"ODBC-драйвер «{info['driver']}» не установлен"
-    ok(f"ODBC-драйвер: {info['driver']}")
+    else:
+        ok(f"ODBC-драйвер: {info['driver']}")
     from sqlalchemy import create_engine, text
     from sqlalchemy.pool import NullPool
 
-    engine = create_engine(values["MAI_DATABASE_URL"], poolclass=NullPool, connect_args={"timeout": 15})
+    from standalone.mssql_compat import connect_args
+
+    engine = create_engine(values["MAI_DATABASE_URL"], poolclass=NullPool,
+                           connect_args=connect_args(values["MAI_DATABASE_URL"], 15))
     try:
         with engine.connect() as conn:
             row = conn.execute(text(
