@@ -2,10 +2,10 @@
 
 Windows: mai.cmd <команда>        Linux: python standalone/manage.py <команда>
 
-  setup     мастер настройки: база данных (встроенная или сервер), LiteLLM, данные, доступ → .env
+  setup     мастер настройки: база данных SQL Server, LiteLLM, данные, доступ → .env
   check     проверка перед запуском: пакеты, база данных (и создание таблиц), модель, порт
-  start     запустить в фоне (встроенную базу и API; журналы в logs/)
-  stop      остановить (API и встроенную базу)   restart   перезапустить
+  start     запустить в фоне (журналы в logs/)
+  stop      остановить                       restart   перезапустить
   status    состояние и ссылки               run       запустить в этом окне (Ctrl+C — остановить)
   logs      последние строки журнала (-f — следить за журналом)
   link      ссылка на дашборд с ключом доступа
@@ -36,7 +36,7 @@ import time
 import uuid
 from datetime import date, datetime
 from pathlib import Path
-from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit
+from urllib.parse import quote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -61,18 +61,12 @@ ENTRY = "standalone.asgi:app"
 WINDOWS = os.name == "nt"
 LOG_ROTATE_BYTES = 20 * 1024 * 1024
 START_TIMEOUT_SECONDS = 180
-SCHEMA_NAME = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
-DEFAULTS = {"port": "8000", "timezone": "Europe/Moscow", "sslmode": "prefer", "db_port": "5432",
-            "mssql_port": "1433"}
+DEFAULTS = {"port": "8000", "timezone": "Europe/Moscow", "mssql_port": "1433"}
+# Settings of the database modes of earlier builds (built-in PostgreSQL, SQLite): removed by setup.
+OBSOLETE_SETTINGS = {"MAI_STANDALONE_DB", "MAI_STANDALONE_PG_PORT", "MAI_STANDALONE_PG_PASSWORD",
+                     "MAI_STANDALONE_PG_BIN"}
 # Schema names of SQL Server (MSSQL mode, standalone/mssql_compat.py).
 MSSQL_SCHEMA_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
-# The built-in PostgreSQL (pgsql/ of the build): data in pgdata/, listens on 127.0.0.1 only.
-PG_DATA = ROOT / "pgdata"
-PG_LOG = LOG_DIR / "postgres.log"
-PG_TOOLS_LOG = LOG_DIR / "postgres-tools.log"
-PG_DEFAULT_PORT = "55432"
-PG_USER = "mai"
-PG_DATABASE = "mai_demo"
 
 
 # --------------------------------------------------------------------------- output
@@ -98,10 +92,6 @@ def note(text: str) -> None:
 
 class Stop(Exception):
     """A user-facing error: printed without a traceback, exit code 1."""
-
-
-class _ServerChecked(Exception):
-    """The database was checked by its own function (SQL Server): the PostgreSQL checks are skipped."""
 
 
 # --------------------------------------------------------------------------- settings
@@ -143,36 +133,6 @@ def dashboard_link(values: dict[str, str]) -> str:
     return f"{base}?key={quote(key, safe='')}" if key else base
 
 
-def build_db_url(host: str, port: str, name: str, user: str, password: str, schema: str, sslmode: str) -> str:
-    query = {}
-    if schema:
-        query["options"] = f"-csearch_path={schema}"
-    if sslmode:
-        query["sslmode"] = sslmode
-    auth = quote(user, safe="") + (":" + quote(password, safe="") if password else "")
-    host_part = f"[{host}]" if ":" in host else host
-    url = f"postgresql+psycopg://{auth}@{host_part}:{port}/{quote(name, safe='')}"
-    return url + ("?" + urlencode(query, safe="") if query else "")
-
-
-def parse_db_url(url: str) -> dict[str, str]:
-    if not url:
-        return {}
-    parts = urlsplit(url)
-    query = dict(parse_qsl(parts.query))
-    options = query.get("options", "")
-    match = re.search(r"search_path=([^\s,]+)", options)
-    return {"host": parts.hostname or "", "port": str(parts.port or DEFAULTS["db_port"]),
-            "name": unquote(parts.path.lstrip("/")), "user": unquote(parts.username or ""),
-            "password": unquote(parts.password or ""), "schema": match.group(1) if match else "",
-            "sslmode": query.get("sslmode", "")}
-
-
-def libpq_url(url: str) -> str:
-    """The SQLAlchemy URL as a libpq connection URI (for psycopg.connect)."""
-    return re.sub(r"^postgresql\+psycopg://", "postgresql://", url)
-
-
 PYMSSQL = "pymssql"
 
 
@@ -205,6 +165,15 @@ def parse_mssql_url(url: str) -> dict:
             "user": parts.username or "", "password": parts.password or "", "driver": driver,
             "trust": str(query.get("trustservercertificate", "yes")).lower() == "yes",
             "windows": not parts.username}
+
+
+def database_target(values: dict[str, str]) -> str:
+    """server[,port]/database, schema — for messages (no login, no password)."""
+    info = parse_mssql_url(values.get("MAI_DATABASE_URL", ""))
+    if not info:
+        return "не настроен (mai.cmd setup)"
+    schema = values.get("MAI_STANDALONE_MSSQL_SCHEMA") or "по умолчанию для входа"
+    return f"{info['host']}" + (f",{info['port']}" if info["port"] else "") + f"/{info['name']}, схема {schema}"
 
 
 def odbc_drivers() -> list[str]:
@@ -278,10 +247,6 @@ def _check_mssql_schema(value: str) -> str | None:
     return None if not value or MSSQL_SCHEMA_NAME.match(value) else "латиница, цифры и _"
 
 
-def _check_schema(value: str) -> str | None:
-    return None if not value or SCHEMA_NAME.match(value) else "латиница в нижнем регистре, цифры и _"
-
-
 def _check_timezone(value: str) -> str | None:
     from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -308,46 +273,10 @@ def _required(value: str) -> str | None:
 def cmd_setup(args) -> int:
     interactive = not args.non_interactive
     old = env_values() if ENV_FILE.is_file() else {}
-    db = parse_db_url(old.get("MAI_DATABASE_URL", ""))
     say("Настройка демо-сборки MAI Corrosion Control. Enter — оставить значение в [скобках].")
 
-    say("\n1/4  База данных")
-    previous_mode = old.get("MAI_STANDALONE_DB") or ("server" if old.get("MAI_DATABASE_URL") else "local")
-    names = {"local": "встроенная", "server": "сервер", "mssql": "mssql"}
-    preset_mode = None if args.db is None else names.get(args.db, args.db)
-    mode = _ask("Где база: встроенная (PostgreSQL на этом компьютере) / сервер (PostgreSQL) / mssql (SQL Server)",
-                names.get(previous_mode, "встроенная"), interactive=interactive, preset=preset_mode,
-                check=lambda v: None if v in set(names.values()) else "встроенная, сервер или mssql")
-    local, mssql = mode == "встроенная", mode == "mssql"
-    mssql_schema = old.get("MAI_STANDALONE_MSSQL_SCHEMA", "")
-    pg_port = old.get("MAI_STANDALONE_PG_PORT") or PG_DEFAULT_PORT
-    # The password of the built-in database is set once, when its data folder is created.
-    pg_password = old.get("MAI_STANDALONE_PG_PASSWORD") or secrets.token_urlsafe(18)
-    if local:
-        pg_port = _ask("Порт встроенной базы (только для этого компьютера)", pg_port, interactive=interactive,
-                       preset=args.pg_port, check=_check_port)
-        db_url = build_db_url("127.0.0.1", pg_port, PG_DATABASE, PG_USER, pg_password, "", "disable")
-    elif mssql:
-        db_url, mssql_schema = _setup_mssql(args, old, previous_mode == "mssql", interactive)
-    else:
-        if previous_mode != "server":
-            db = {}
-        note("Адрес, база или схема и пользователь — от администраторов (README-DEMO.md, раздел 4).")
-        host = _ask("Сервер (имя или IP)", db.get("host") or "", interactive=interactive,
-                    preset=args.db_host, check=_required)
-        port = _ask("Порт", db.get("port") or DEFAULTS["db_port"], interactive=interactive, preset=args.db_port,
-                    check=_check_port)
-        name = _ask("База данных", db.get("name", ""), interactive=interactive, preset=args.db_name, check=_required)
-        schema = _ask("Схема (если выделили схему в общей базе; пусто — своя база, схема public)",
-                      db.get("schema", ""), interactive=interactive, preset=args.db_schema, check=_check_schema)
-        user = _ask("Пользователь", db.get("user", ""), interactive=interactive, preset=args.db_user, check=_required)
-        password = _ask("Пароль (не отображается)", db.get("password", ""), secret=True, interactive=interactive,
-                        preset=args.db_password, shown_default="оставить прежний" if db.get("password") else "")
-        sslmode = _ask("SSL: disable / prefer / require", db.get("sslmode") or DEFAULTS["sslmode"],
-                       interactive=interactive, preset=args.db_sslmode,
-                       check=lambda v: None if v in {"disable", "allow", "prefer", "require", "verify-ca",
-                                                     "verify-full"} else "disable, prefer или require")
-        db_url = build_db_url(host, port, name, user, password, schema, sslmode)
+    say("\n1/4  База данных Microsoft SQL Server")
+    db_url, mssql_schema = _setup_mssql(args, old, old.get("MAI_DATABASE_URL", "").startswith("mssql"), interactive)
 
     say("\n2/4  Языковая модель через LiteLLM (справка ИИ, предложение агента, документы)")
     llm_url = _ask("Адрес LiteLLM, например http://litellm.corp:4000 (пусто — без ИИ)",
@@ -401,11 +330,10 @@ def cmd_setup(args) -> int:
     else:
         key = ""
 
-    values = dict(old)
+    # Settings of the database modes earlier builds had (built-in PostgreSQL, SQLite) are dropped.
+    values = {name_: value for name_, value in old.items() if name_ not in OBSOLETE_SETTINGS}
     values.update({
-        "MAI_DATABASE_URL": db_url, "MAI_STANDALONE_DB": "local" if local else ("mssql" if mssql else "server"),
-        "MAI_STANDALONE_MSSQL_SCHEMA": mssql_schema,
-        "MAI_STANDALONE_PG_PORT": pg_port, "MAI_STANDALONE_PG_PASSWORD": pg_password,
+        "MAI_DATABASE_URL": db_url, "MAI_STANDALONE_MSSQL_SCHEMA": mssql_schema,
         "MAI_LLM_API_URL": llm_url, "MAI_LLM_API_KEY": llm_key, "MAI_LLM_MODEL": llm_model,
         "MAI_OCR_MODEL": ocr_model, "MAI_SOURCE_TIMEZONE": timezone_name, "MAI_STANDALONE_DATA_DATE": data_date,
         "MAI_STANDALONE_HOST": "0.0.0.0" if network else "127.0.0.1", "MAI_STANDALONE_PORT": api_port,
@@ -422,13 +350,6 @@ def cmd_setup(args) -> int:
         folder.mkdir(parents=True, exist_ok=True)
 
     say("\nГотово: настройки записаны в .env" + (" (прежние — в .env.bak)." if (ROOT / ".env.bak").is_file() else "."))
-    if local:
-        ensure_local_db(values)
-        ok(f"встроенная база работает: 127.0.0.1:{pg_port}, база {PG_DATABASE}")
-    elif pg_running(values):
-        pg_stop(values)
-        note("Встроенная база остановлена: теперь используется " + ("SQL Server" if mssql else "сервер PostgreSQL")
-             + ". Её данные остались в pgdata.")
     if not llm_url:
         warn("Языковая модель не задана: справка и предложение ИИ, распознавание PDF и сканов работать не будут.")
     if network:
@@ -437,7 +358,7 @@ def cmd_setup(args) -> int:
         if key:
             say("Ссылка для демонстрации (после запуска; ключ в ссылке — не пересылайте её посторонним):")
             say(f"  {dashboard_link(values)}")
-    say("\nДальше:  mai.cmd check   — проверить базу, модель и порт")
+    say("\nДальше:  mai.cmd check   — проверить базу (и создать таблицы), модель и порт")
     say("         mai.cmd start   — запустить")
     return 0
 
@@ -446,7 +367,7 @@ def _setup_mssql(args, old: dict[str, str], was_mssql: bool, interactive: bool) 
     """Questions of the MSSQL mode; returns (MAI_DATABASE_URL, schema)."""
     db = parse_mssql_url(old.get("MAI_DATABASE_URL", "")) if was_mssql else {}
     drivers = odbc_drivers()
-    note("SQL Server 2016 или новее. Адрес, база, схема и вход — от администраторов (README-DEMO.md, раздел 5.6).")
+    note("SQL Server 2016 или новее. Адрес, база, схема и вход — от администраторов (README-DEMO.md, раздел 4).")
     if drivers:
         note("ODBC-драйверы на этом компьютере: " + ", ".join(drivers) + "; без ODBC-драйвера — pymssql.")
     else:
@@ -488,116 +409,6 @@ def _server_name() -> str:
         if name and not name.startswith("localhost"):
             return name
     return "localhost"
-
-
-# --------------------------------------------------------------------------- built-in PostgreSQL
-def local_db(values: dict[str, str]) -> bool:
-    return values.get("MAI_STANDALONE_DB") == "local"
-
-
-def mssql_db(values: dict[str, str]) -> bool:
-    return values.get("MAI_STANDALONE_DB") == "mssql"
-
-
-def _pg_tool(values: dict[str, str], name: str) -> Path:
-    folder = values.get("MAI_STANDALONE_PG_BIN") or os.environ.get("MAI_STANDALONE_PG_BIN") or ROOT / "pgsql" / "bin"
-    return Path(folder) / (name + ".exe" if WINDOWS else name)
-
-
-def _pg_call(values: dict[str, str], tool: str, *args: str, timeout: int = 180) -> tuple[int, str]:
-    """Run a PostgreSQL tool; its output goes to logs/postgres-tools.log (a file, not a pipe: the
-    server started by pg_ctl inherits the handles) and is returned."""
-    executable = _pg_tool(values, tool)
-    if not executable.is_file():
-        raise Stop(f"Нет встроенного PostgreSQL: {executable}. Распакуйте архив целиком "
-                   "или выберите сервер PostgreSQL (mai.cmd setup).")
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-    start = PG_TOOLS_LOG.stat().st_size if PG_TOOLS_LOG.exists() else 0
-    env = {**os.environ, "LANG": "C", "LC_ALL": "C", "LC_MESSAGES": "C"}
-    for name in ("PGDATA", "PGPORT", "PGHOST", "PGUSER", "PGDATABASE", "PGPASSWORD", "PGOPTIONS"):
-        env.pop(name, None)
-    # A hidden console of its own: closing the window of mai.cmd must not stop the database.
-    flags = 0x08000000 | 0x00000200 if WINDOWS else 0  # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
-    with PG_TOOLS_LOG.open("ab") as log:
-        log.write(f"\n== {datetime.now():%Y-%m-%d %H:%M:%S} {tool} {' '.join(args)}\n".encode())
-        log.flush()
-        try:
-            code = subprocess.run([str(executable), *args], stdin=subprocess.DEVNULL, stdout=log,
-                                  stderr=subprocess.STDOUT, env=env, timeout=timeout, creationflags=flags).returncode
-        except subprocess.TimeoutExpired:
-            code = -1
-    with PG_TOOLS_LOG.open("rb") as log:
-        log.seek(start)
-        return code, log.read().decode("utf-8", errors="replace")
-
-
-def pg_running(values: dict[str, str]) -> bool:
-    if not (PG_DATA / "PG_VERSION").is_file() or not _pg_tool(values, "pg_ctl").is_file():
-        return False
-    return _pg_call(values, "pg_ctl", "status", "-D", str(PG_DATA), timeout=30)[0] == 0
-
-
-def pg_stop(values: dict[str, str]) -> None:
-    code, output = _pg_call(values, "pg_ctl", "stop", "-D", str(PG_DATA), "-m", "fast", "-w", "-t", "60")
-    if code != 0 and pg_running(values):
-        raise Stop("Встроенная база не остановилась: " + output.strip()[-300:])
-
-
-def _pg_log_tail(lines: int = 15) -> str:
-    try:
-        return "\n".join(PG_LOG.read_bytes()[-20000:].decode("utf-8", errors="replace").splitlines()[-lines:])
-    except OSError:
-        return ""
-
-
-def ensure_local_db(values: dict[str, str]) -> None:
-    """Create the built-in database on first use, start it, and create the application database."""
-    password = values.get("MAI_STANDALONE_PG_PASSWORD", "")
-    port = values.get("MAI_STANDALONE_PG_PORT") or PG_DEFAULT_PORT
-    if not password:
-        raise Stop("В .env нет пароля встроенной базы (MAI_STANDALONE_PG_PASSWORD): выполните mai.cmd setup")
-    if not (PG_DATA / "PG_VERSION").is_file():
-        if PG_DATA.exists() and any(PG_DATA.iterdir()):
-            raise Stop(f"Папка {PG_DATA.name} не пустая, но базы в ней нет. Удалите её (данные встроенной базы "
-                       "пропадут) и повторите.")
-        say("Создаю встроенную базу данных (один раз, 10–60 с)…")
-        RUN_DIR.mkdir(parents=True, exist_ok=True)
-        password_file = RUN_DIR / f"pg-init-{uuid.uuid4().hex}.txt"
-        password_file.write_text(password, encoding="utf-8")
-        try:
-            code, output = _pg_call(values, "initdb", "-D", str(PG_DATA), "-U", PG_USER, "-A", "scram-sha-256",
-                                    f"--pwfile={password_file}", "-E", "UTF8", "--locale=C", timeout=600)
-        finally:
-            password_file.unlink(missing_ok=True)
-        if code != 0:
-            raise Stop("Встроенную базу создать не удалось:\n" + output.strip()[-800:])
-        with (PG_DATA / "postgresql.conf").open("a", encoding="utf-8") as conf:
-            conf.write("\n# MAI demo build (standalone/manage.py): this computer only, no Unix sockets.\n"
-                       "listen_addresses = '127.0.0.1'\nunix_socket_directories = ''\nmax_connections = 50\n")
-    if not pg_running(values):
-        if not _port_free("127.0.0.1", int(port)):
-            raise Stop(f"Порт встроенной базы {port} занят другой программой: выберите другой (mai.cmd setup).")
-        LOG_DIR.mkdir(parents=True, exist_ok=True)
-        code, output = _pg_call(values, "pg_ctl", "start", "-D", str(PG_DATA), "-l", str(PG_LOG), "-w", "-t", "90",
-                                "-o", f"-p {port}", timeout=150)
-        if code != 0 or not pg_running(values):
-            raise Stop("Встроенная база не запустилась:\n" + (output.strip()[-400:] + "\n" + _pg_log_tail()).strip())
-    import psycopg
-
-    admin_url = f"postgresql://{PG_USER}:{quote(password, safe='')}@127.0.0.1:{port}/postgres?sslmode=disable"
-    for attempt in range(10):
-        try:
-            with psycopg.connect(admin_url, connect_timeout=10, autocommit=True) as conn:
-                if not conn.execute("SELECT 1 FROM pg_database WHERE datname = %s", (PG_DATABASE,)).fetchone():
-                    conn.execute(f'CREATE DATABASE "{PG_DATABASE}"')
-            return
-        except psycopg.OperationalError as exc:
-            if "password authentication failed" in str(exc):
-                raise Stop("Пароль встроенной базы в .env не подходит к папке pgdata (её создавали с другим .env). "
-                           "Верните прежний .env или удалите pgdata.") from exc
-            if attempt == 9:
-                raise Stop(f"Нет подключения к встроенной базе: {str(exc).strip()[:300]}") from exc
-            time.sleep(1)
 
 
 # --------------------------------------------------------------------------- process
@@ -765,9 +576,6 @@ def cmd_start(args) -> int:
         raise Stop(f"Порт {port_of(values)} занят другой программой. Выберите другой: mai.cmd setup (вопрос «Порт»).")
     for folder in DATA_DIRS:
         folder.mkdir(parents=True, exist_ok=True)
-    if local_db(values):
-        ensure_local_db(values)
-        say(f"Встроенная база работает (127.0.0.1:{values.get('MAI_STANDALONE_PG_PORT') or PG_DEFAULT_PORT}).")
     _rotate_log()
     with LOG_FILE.open("ab") as log:
         log.write(f"\n===== start {datetime.now():%Y-%m-%d %H:%M:%S} =====\n".encode())
@@ -823,9 +631,6 @@ def cmd_stop(args) -> int:
         PID_FILE.unlink(missing_ok=True)
         say("API остановлен." if not _alive(pid) else
             "Не удалось остановить API — закройте python.exe в Диспетчере задач.")
-    if pg_running(values):
-        pg_stop(values)
-        say("Встроенная база остановлена.")
     return 0
 
 
@@ -838,14 +643,7 @@ def cmd_restart(args) -> int:
 def cmd_status(args) -> int:
     values = require_env()
     pid, answering = _running(values)
-    if local_db(values):
-        (ok if pg_running(values) else warn)(
-            "встроенная база " + ("работает" if pg_running(values) else "не запущена"))
-    if mssql_db(values):
-        info = parse_mssql_url(values.get("MAI_DATABASE_URL", ""))
-        schema = values.get("MAI_STANDALONE_MSSQL_SCHEMA") or "по умолчанию для входа"
-        note(f"база: SQL Server {info.get('host')}{',' + info['port'] if info.get('port') else ''}/{info.get('name')}, "
-             f"схема {schema}")
+    note(f"база: SQL Server {database_target(values)}")
     if not pid and not answering:
         say("API не запущен.  Запуск: mai.cmd start")
         return 3
@@ -876,9 +674,6 @@ def cmd_run(args) -> int:
         raise Stop("Уже запущено в фоне. Остановите: mai.cmd stop")
     for folder in DATA_DIRS:
         folder.mkdir(parents=True, exist_ok=True)
-    if local_db(values):
-        ensure_local_db(values)
-        note("Встроенная база работает; после Ctrl+C остановите её: mai.cmd stop")
     say(f"Запуск в этом окне. Дашборд: {local_url(values)}/dashboard   (Ctrl+C — остановить)")
     try:
         return subprocess.call(_api_command(values), cwd=str(ROOT), env=_child_env())
@@ -968,8 +763,8 @@ def cmd_check(args) -> int:
         return 1
 
     say("\nПакеты")
-    modules = ("numpy", "pandas", "scipy", "lifelines", "psycopg", "sqlalchemy", "fastapi", "uvicorn",
-               "openpyxl", "pypdfium2", "PIL", "requests", "alembic", "tzdata", "pyodbc", "pymssql")
+    modules = ("numpy", "pandas", "scipy", "lifelines", "sqlalchemy", "fastapi", "uvicorn",
+               "openpyxl", "pypdfium2", "PIL", "requests", "tzdata", "pyodbc", "pymssql")
     missing = []
     for module in modules:
         try:
@@ -986,54 +781,9 @@ def cmd_check(args) -> int:
     ok("все пакеты загружаются")
 
     say("\nБаза данных")
-    if local_db(values):
-        try:
-            ensure_local_db(values)
-            ok(f"встроенная база работает (127.0.0.1:{values.get('MAI_STANDALONE_PG_PORT') or PG_DEFAULT_PORT}, "
-               f"данные в папке {PG_DATA.name})")
-        except Stop as exc:
-            fail(str(exc))
-            return 1
-    db = parse_db_url(values["MAI_DATABASE_URL"])
-    target = f"{db.get('host')}:{db.get('port')}/{db.get('name')}" + (f", схема {db['schema']}" if db.get("schema") else "")
-    if mssql_db(values):
-        problem = _check_mssql(values)
-        if problem:
-            fail(problem)
-            return 1
-    try:
-        if mssql_db(values):
-            raise _ServerChecked
-        import psycopg
-
-        with psycopg.connect(libpq_url(values["MAI_DATABASE_URL"]), connect_timeout=10, autocommit=True) as conn:
-            version = conn.execute("SHOW server_version").fetchone()[0]
-            user = conn.execute("SELECT current_user").fetchone()[0]
-            ok(f"подключение к {target} (PostgreSQL {version}, пользователь {user})")
-            if int(version.split(".")[0]) < 12:
-                warn("PostgreSQL старше 12 не проверялся — возможны ошибки миграций")
-            schema = db.get("schema") or "public"
-            exists = conn.execute("SELECT 1 FROM pg_namespace WHERE nspname = %s", (schema,)).fetchone()
-            if not exists:
-                try:
-                    conn.execute(f'CREATE SCHEMA "{schema}"')
-                    ok(f"создана схема {schema}")
-                except psycopg.Error as exc:
-                    fail(f"схемы {schema} нет, создать её не удалось: {str(exc).strip()[:200]}")
-                    note("Попросите администратора создать схему и дать на неё права пользователю.")
-                    return 1
-            can_create = conn.execute("SELECT has_schema_privilege(current_user, %s, 'CREATE')", (schema,)).fetchone()[0]
-            if not can_create:
-                fail(f"нет права создавать таблицы в схеме {schema}")
-                note(f"Нужно: GRANT USAGE, CREATE ON SCHEMA {schema} TO {user};  (делает администратор БД)")
-                return 1
-            ok(f"есть право создавать таблицы в схеме {schema}")
-    except _ServerChecked:
-        pass
-    except Exception as exc:  # noqa: BLE001
-        fail(f"нет подключения к {target}: {str(exc).strip()[:300]}")
-        if not local_db(values):
-            note("Проверьте адрес, порт, имя базы, пользователя и пароль (mai.cmd setup) и доступ с этого сервера к порту БД.")
+    problem = _check_mssql(values)
+    if problem:
+        fail(problem)
         return 1
 
     prepared = _prepare_app_environment()
@@ -1045,13 +795,9 @@ def cmd_check(args) -> int:
         with app_db.engine().connect() as conn:
             from sqlalchemy import text
 
-            if mssql_db(values):
-                tables = conn.execute(text("SELECT count(*) FROM sys.tables WHERE schema_id = "
-                                           "SCHEMA_ID(COALESCE(NULLIF(:schema, ''), SCHEMA_NAME()))"),
-                                      {"schema": values.get("MAI_STANDALONE_MSSQL_SCHEMA", "")}).scalar()
-            else:
-                tables = conn.execute(text("SELECT count(*) FROM information_schema.tables "
-                                           "WHERE table_schema = current_schema()")).scalar()
+            tables = conn.execute(text("SELECT count(*) FROM sys.tables WHERE schema_id = "
+                                       "SCHEMA_ID(COALESCE(NULLIF(:schema, ''), SCHEMA_NAME()))"),
+                                  {"schema": values.get("MAI_STANDALONE_MSSQL_SCHEMA", "")}).scalar()
         ok(f"таблицы приложения созданы или обновлены (в схеме {tables} таблиц)")
     except Exception as exc:  # noqa: BLE001
         fail(f"создать таблицы не удалось: {str(exc).strip()[:300]}")
@@ -1272,54 +1018,35 @@ def cmd_n8n(args) -> int:
 # --------------------------------------------------------------------------- cleanup
 def cmd_cleanup(args) -> int:
     values = require_env()
-    local = local_db(values)
-    if local:
-        say("Будет удалена встроенная база целиком (папка pgdata — при следующем запуске создастся пустая),")
-    else:
-        say("Будут удалены все таблицы демо-сборки в базе данных" + (" SQL Server" if mssql_db(values) else "")
-            + " (только таблицы этого приложения),")
+    say("Будут удалены все таблицы демо-сборки в базе SQL Server (только таблицы этого приложения),")
     say("загруженные документы (data/documents), содержимое inbox и журналы. Настройки (.env) останутся.")
     if not args.yes:
         answer = input("Чтобы продолжить, напишите УДАЛИТЬ: ").strip()
         if answer != "УДАЛИТЬ":
             say("Отменено.")
             return 1
-    if local:
+    pid, answering = _running(values)
+    if pid or answering:
         cmd_stop(args)
-        shutil.rmtree(PG_DATA, ignore_errors=True)
-        if PG_DATA.exists() and any(PG_DATA.iterdir()):
-            bad(f"папку {PG_DATA.name} удалить не удалось (занята?): закройте программы и повторите")
-            return 1
-        PG_DATA.mkdir(exist_ok=True)
-        ok("встроенная база удалена")
-    else:
-        pid, answering = _running(values)
-        if pid or answering:
-            cmd_stop(args)
-        _prepare_app_environment()
-        from sqlalchemy import text
+    _prepare_app_environment()
+    from sqlalchemy import text
 
-        from app import db as app_db
+    from app import db as app_db
 
+    try:
+        app_db.metadata.drop_all(app_db.engine())
+        ok("таблицы удалены")
+    except Exception as exc:  # noqa: BLE001
+        bad(f"таблицы удалить не удалось: {_db_error(exc)}")
+        return 1
+    schema = values.get("MAI_STANDALONE_MSSQL_SCHEMA")
+    if schema and args.drop_schema:
         try:
-            app_db.metadata.drop_all(app_db.engine())
-            if not mssql_db(values):  # SQL Server: tables from their definitions, no Alembic version table
-                with app_db.engine().begin() as conn:
-                    conn.execute(text("DROP TABLE IF EXISTS alembic_version"))
-            ok("таблицы удалены")
+            with app_db.engine().begin() as conn:
+                conn.execute(text(f"DROP SCHEMA IF EXISTS [{schema}]"))
+            ok(f"схема {schema} удалена")
         except Exception as exc:  # noqa: BLE001
-            bad(f"таблицы удалить не удалось: {str(exc).strip()[:300]}")
-            return 1
-        schema = (values.get("MAI_STANDALONE_MSSQL_SCHEMA") if mssql_db(values)
-                  else parse_db_url(values["MAI_DATABASE_URL"]).get("schema"))
-        if schema and args.drop_schema:
-            try:
-                with app_db.engine().begin() as conn:
-                    conn.execute(text(f"DROP SCHEMA IF EXISTS [{schema}]" if mssql_db(values)
-                                      else f'DROP SCHEMA IF EXISTS "{schema}"'))
-                ok(f"схема {schema} удалена")
-            except Exception as exc:  # noqa: BLE001
-                warn(f"схему {schema} удалить не удалось (в ней есть чужие объекты?): {str(exc).strip()[:200]}")
+            warn(f"схему {schema} удалить не удалось (в ней есть чужие объекты?): {_db_error(exc)}")
     for folder in (ROOT / "data" / "documents", ROOT / "inbox", LOG_DIR, N8N_OUT):
         if not folder.exists():
             continue
@@ -1340,7 +1067,7 @@ def _masker(values: dict[str, str]):
     """A function hiding passwords, keys and tokens in a text (settings, check output, logs)."""
     secrets_ = {value for name, value in values.items() if SECRET_NAMES.search(name) and len(value) >= 4}
     for url_name in ("MAI_DATABASE_URL",):
-        password = parse_db_url(values.get(url_name, "")).get("password")
+        password = parse_mssql_url(values.get(url_name, "")).get("password")
         if password and len(password) >= 4:
             secrets_ |= {password, quote(password, safe="")}
     patterns = [(re.compile(r"([?&](?:key|api_key|token)=)[^&\s\"']+", re.IGNORECASE), r"\1***"),
@@ -1420,21 +1147,15 @@ def cmd_diag(args) -> int:
             pid, answering = _running(values)
             lines.append(f"API: {'работает' if answering else 'не отвечает'}" + (f", процесс {pid}" if pid else ""))
             lines.append(f"адрес API: {local_url(values)}  (слушает {bind_host(values)}:{port_of(values)})")
-            lines.append(f"режим базы: {values.get('MAI_STANDALONE_DB') or 'server'}")
-            if local_db(values):
-                lines.append(f"встроенная база: {'работает' if pg_running(values) else 'не запущена'}, "
-                             f"порт {values.get('MAI_STANDALONE_PG_PORT') or PG_DEFAULT_PORT}")
-            if mssql_db(values):
-                info = parse_mssql_url(values.get("MAI_DATABASE_URL", ""))
-                lines.append(f"SQL Server: {info.get('host')}{',' + info['port'] if info.get('port') else ''}/"
-                             f"{info.get('name')}, схема {values.get('MAI_STANDALONE_MSSQL_SCHEMA') or '(по умолчанию)'}, "
-                             f"вход {'Windows' if info.get('windows') else 'SQL'}, драйвер {info.get('driver')}; "
-                             f"ODBC-драйверы на компьютере: {', '.join(odbc_drivers()) or 'нет'}")
+            info = parse_mssql_url(values.get("MAI_DATABASE_URL", ""))
+            lines.append(f"SQL Server: {database_target(values)}, вход {'Windows' if info.get('windows') else 'SQL'}, "
+                         f"драйвер {info.get('driver') or '—'}; "
+                         f"ODBC-драйверы на компьютере: {', '.join(odbc_drivers()) or 'нет'}")
             status, body = _http_status(f"{local_url(values)}/health/ready", timeout=5)
             lines.append(f"/health/ready: {status} {body[:400]}")
         usage = shutil.disk_usage(ROOT)
         lines.append(f"свободно на диске: {usage.free / 1073741824:.1f} ГБ из {usage.total / 1073741824:.1f} ГБ")
-        for folder in (PG_DATA, ROOT / "data" / "documents", ROOT / "inbox", LOG_DIR):
+        for folder in (ROOT / "data" / "documents", ROOT / "inbox", LOG_DIR):
             lines.append(f"папка {folder.relative_to(ROOT)}: {_folder_size(folder)}")
         return "\n".join(lines)
 
@@ -1461,8 +1182,6 @@ def cmd_diag(args) -> int:
     section("Состояние", state_text)
     section("Документы с ошибками (имена файлов скрыты)", documents_text)
     section(f"Журнал приложения logs/api.log — последние {args.lines} строк", lambda: _log_tail(LOG_FILE, args.lines))
-    section("Журнал встроенной базы logs/postgres.log — последние 100 строк", lambda: _log_tail(PG_LOG, 100))
-    section("Запуски программ базы logs/postgres-tools.log — последние 60 строк", lambda: _log_tail(PG_TOOLS_LOG, 60))
     DIAG_DIR.mkdir(exist_ok=True)
     target = DIAG_DIR / f"mai-diag-{datetime.now():%Y%m%d-%H%M%S}.txt"
     text_ = "\n\n".join(f"===== {title} =====\n{body}" for title, body in sections)
@@ -1492,9 +1211,7 @@ def parser() -> argparse.ArgumentParser:
     commands = main.add_subparsers(dest="command")
     setup = commands.add_parser("setup", help="мастер настройки → .env")
     setup.add_argument("--non-interactive", action="store_true", help="не задавать вопросов: значения из параметров и .env")
-    setup.add_argument("--db", choices=["local", "server", "mssql"],
-                       help="база: local — встроенная, server — сервер PostgreSQL, mssql — SQL Server")
-    for option in ("pg-port", "db-host", "db-port", "db-name", "db-schema", "db-user", "db-password", "db-sslmode",
+    for option in ("db-host", "db-port", "db-name", "db-schema", "db-user", "db-password",
                    "db-auth", "db-driver", "db-trust-cert", "llm-url", "llm-key", "llm-model", "ocr-model", "timezone",
                    "data-date", "port", "public-host"):
         setup.add_argument(f"--{option}")

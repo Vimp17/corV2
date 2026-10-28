@@ -570,7 +570,7 @@ MAI_TEST_DATABASE_URL="postgresql+psycopg://mai:mai@localhost:5432/mai_test" pyt
 
 Схемой владеет Alembic (`migrations/versions`). При старте API выполняет `alembic upgrade head` под блокировкой PostgreSQL, поэтому несколько воркеров или реплик не мешают друг другу. Изменения схемы оформляйте новой ревизией, а не правкой таблиц в `app/db.py`. Текущая ревизия — `alembic current` из корня проекта (URL берётся из `MAI_DATABASE_URL`). Перенос со старой SQLite-версии — `scripts/migrate_sqlite_to_postgres.py`.
 
-Демо-сборка для Windows (`standalone/`) может хранить те же таблицы в Microsoft SQL Server 2016+: режим `mssql` в `mai.cmd setup`. Там таблицы создаются по описанию в `app/db.py` без Alembic, а PostgreSQL-специфичные запросы заменяет `standalone/mssql_compat.py` (подробно — `standalone/README.md`, раздел 5.6). Основная версия (Docker) по-прежнему работает на PostgreSQL.
+Демо-сборка для Windows (`standalone/`) хранит те же таблицы в Microsoft SQL Server 2016+. Там таблицы создаются по описанию в `app/db.py` без Alembic, а PostgreSQL-специфичные запросы заменяет `standalone/mssql_compat.py` (подробно — `standalone/README.md`, раздел 5.5). Основная версия (Docker) работает на PostgreSQL.
 
 | Таблица | Что хранит |
 | --- | --- |

@@ -90,10 +90,11 @@ def ready():
     try:
         db.check_database()
     except Exception as exc:
-        logger.warning("PostgreSQL readiness check failed (%s)", type(exc).__name__)
-        raise HTTPException(status_code=503, detail="PostgreSQL database is unavailable") from exc
+        logger.warning("Database readiness check failed (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Database is unavailable") from exc
     return {
-        "status": "ready", "storage": "postgresql", "database_connected": True,
+        # "postgresql"; "mssql" in the standalone build (standalone/mssql_compat.py).
+        "status": "ready", "storage": db.engine().dialect.name, "database_connected": True,
         "cox_model": "loaded" if app.state.cox_model else "unavailable",
         "cox_model_detail": app.state.cox_model_error,
         "risk_models_registered": len(app.state.risk_model_registry.models),
