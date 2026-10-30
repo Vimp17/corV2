@@ -24,7 +24,7 @@ from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 
 from app.config import settings
-from app.core.documents.extract import EARLIEST_DATE, match_well
+from app.core.documents.extract import EARLIEST_DATE, resolve_well
 
 MAX_ROWS = 2000
 MAX_COLUMNS = 60
@@ -225,9 +225,9 @@ def _record(well_raw: str, well_quote: str, moment: datetime | None, date_quote:
         moment = moment.astimezone(ZoneInfo(settings.source_timezone))
     fields: dict[str, dict] = {"well_id": _entry(well_raw, well_quote)}
     issues: list[str] = []
-    well = match_well(well_raw, known)
+    well, new_well = resolve_well(well_raw, known)
     if well is None:
-        issues.append(f"Скважины «{well_raw}» нет в справочнике.")
+        issues.append(f"Не распознан номер скважины «{well_raw}».")
     if moment is not None and not EARLIEST_DATE <= moment.date() <= date.today() + timedelta(days=1):
         issues.append(f"Неправдоподобная дата {moment:%d.%m.%Y}.")
         moment = None
@@ -243,7 +243,7 @@ def _record(well_raw: str, well_quote: str, moment: datetime | None, date_quote:
                                     else {"value": None, "quote": None, "status": "missing"})
     if not values and not extras:
         issues.append("Нет показателей.")
-    return {"well_id": well, "fields": fields, "accepted": not issues, "issues": issues,
+    return {"well_id": well, "new_well": new_well, "fields": fields, "accepted": not issues, "issues": issues,
             "moment": moment.isoformat() if moment else None}
 
 

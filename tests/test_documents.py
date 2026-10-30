@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 from datetime import date, timedelta
+from io import BytesIO
 
 import pytest
 
@@ -110,8 +111,9 @@ def test_keywords_classify_demo_texts():
 def test_file_kinds():
     assert intake.detect_kind(b"%PDF-1.7 ...", "a.pdf") == "pdf"
     assert intake.detect_kind(b"\x89PNG\r\n\x1a\n....", "scan.png") == "image"
+    assert intake.detect_kind(b"\xd0\xcf\x11\xe0....", "old.xls") == "xls"        # Excel 97-2003
     with pytest.raises(intake.DocumentRejected):
-        intake.detect_kind(b"\xd0\xcf\x11\xe0....", "old.xls")
+        intake.detect_kind(b"\xd0\xcf\x11\xe0....", "old.doc")
     with pytest.raises(intake.DocumentRejected):
         intake.detect_kind(b"PK\x03\x04....", "letter.docx")
 
@@ -546,17 +548,90 @@ def test_excel_table_with_custom_headers_and_date_in_title(tmp_path):
     assert record["fields"]["chlorides_mg_l"]["quote"].startswith("Лист «Анализы», D5")
 
 
-def test_excel_numeric_well_unknown_well_and_missing_date(tmp_path):
+def test_excel_numeric_well_new_well_and_missing_date(tmp_path):
     from app.core.documents.excel_reader import not_found_reason, read_workbook
 
-    path = _book(tmp_path / "n.xlsx", [["Скважина", "Дата", "Хлориды, мг/л"], [1234, TODAY, 21000], [5555, TODAY, 20000]])
+    path = _book(tmp_path / "n.xlsx", [["Скважина", "Дата", "Хлориды, мг/л"], [1234, TODAY, 21000], [5555, TODAY, 20000],
+                                       ["скв. Б/Н", TODAY, 19000]])
     result = read_workbook(path.read_bytes(), ["1234"])
-    assert result["accepted"] == 1 and result["records"][0]["well_id"] == "1234"
-    assert "Скважины «5555» нет в справочнике." in result["records"][1]["issues"]
+    known, new, unnamed = result["records"]
+    assert known["well_id"] == "1234" and known["accepted"] and not known["new_well"]
+    # A well the system does not know yet: the document is its first source (a number is needed).
+    assert new["well_id"] == "5555" and new["accepted"] and new["new_well"]
+    assert not unnamed["accepted"] and "Не распознан номер скважины «скв. Б/Н»." in unnamed["issues"]
     no_date = read_workbook(_custom_table(tmp_path / "d.xlsx", date_in_title=False).read_bytes(), ["DEMO-012", "DEMO-013"])
     assert no_date["accepted"] == 0 and "Не найдена дата" in not_found_reason(no_date)
     nothing = read_workbook(_book(tmp_path / "x.xlsx", [["Итоги квартала"], ["План", 10]]).read_bytes(), ["DEMO-012"])
     assert "не найдена скважина" in not_found_reason(nothing)
+
+
+
+def _xls(path, rows, merge=None):
+    """An Excel 97-2003 workbook (xlwt): dates with a date format, as Excel writes them."""
+    import xlwt
+    from datetime import date as _date, datetime as _datetime
+
+    book = xlwt.Workbook()
+    sheet = book.add_sheet("Анализы")
+    date_style = xlwt.easyxf(num_format_str="DD.MM.YYYY")
+    for row_index, row in enumerate(rows):
+        for column, value in enumerate(row):
+            if isinstance(value, (_date, _datetime)):
+                sheet.write(row_index, column, value, date_style)
+            elif value is not None:
+                sheet.write(row_index, column, value)
+    if merge:
+        sheet.merge(*merge)
+    book.save(str(path))
+    return path
+
+
+def test_xls_converts_to_xlsx_with_types_and_merges(tmp_path):
+    from openpyxl import load_workbook
+
+    from app.core.excel_legacy import is_legacy_workbook, xls_to_xlsx
+
+    path = _xls(tmp_path / "a.xls", [["Реестр", None, None], ["Скважина", "Дата", "Хлориды"], [7781, TODAY, 21000.5]],
+                merge=(0, 0, 0, 2))
+    content = path.read_bytes()
+    assert is_legacy_workbook(content)
+    sheet = load_workbook(BytesIO(xls_to_xlsx(content))).active
+    assert sheet.title == "Анализы" and sheet["A1"].value == "Реестр"
+    assert sheet["A3"].value == 7781 and isinstance(sheet["A3"].value, int)       # not 7781.0
+    assert sheet["B3"].value.date() == TODAY and sheet["C3"].value == 21000.5
+    assert [str(item) for item in sheet.merged_cells.ranges] == ["A1:C1"]
+    with pytest.raises(ValueError):
+        xls_to_xlsx(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\0" * 600)
+
+
+@needs_db
+def test_xls_through_documents_and_source_import(client, generated, tmp_path):
+    from openpyxl import load_workbook
+
+    # A laboratory table saved as Excel 97-2003, through «Документы».
+    when = TODAY - timedelta(days=2)
+    rows = [["Скважина", "Дата отбора", "Обводнённость, %", "Хлориды, мг/л", "CO2, %"],
+            ["DEMO-012", when, 47, 21000, 1.4], ["DEMO-013", when, 52, 19500, 1.2]]
+    document = _upload(client, _xls(tmp_path / "analizy.xls", rows))
+    assert document["status"] == "loaded", document["status_message"]
+    assert document["file_kind"] == "xls" and document["doc_type"] == "source:khimik"   # standard columns: ХИМИК
+    assert _well(client, "DEMO-012")["sampling"] is True
+
+    # A ДАРС export saved as .xls, through «Загрузка данных» (source profile).
+    source = load_workbook(generated / "sample_dars.xlsx", data_only=True)
+    sheet = source.active
+    xls_path = _xls(tmp_path / "dars.xls", [list(row) for row in sheet.iter_rows(values_only=True)])
+    with open(generated / "sample_dars.xlsx", "rb") as handle:
+        as_xlsx = client.post("/api/v1/ingestion/excel", data={"profile_id": "dars"},
+                              files={"file": ("dars.xlsx", handle)}).json()
+    with open(xls_path, "rb") as handle:
+        response = client.post("/api/v1/ingestion/excel", data={"profile_id": "dars"}, files={"file": ("dars.xls", handle)})
+    assert response.status_code == 201, response.text
+    as_xls = response.json()
+    assert as_xls["rows_accepted"] == as_xlsx["rows_accepted"] > 0
+    # A Word 97-2003 file has the same container as .xls: it is still refused.
+    rejected = client.post("/api/v1/documents?wait=true", files=[("files", ("notes.doc", b"\xd0\xcf\x11\xe0" + b"\0" * 600))])
+    assert rejected.json()["documents"][0]["error"] == "Файлы .doc не поддерживаются: сохраните документ как PDF."
 
 
 def _form(path, well="DEMO-012"):
@@ -594,8 +669,13 @@ def test_excel_documents_load_without_llm(client, tmp_path, monkeypatch):
     assert {"pH", "Fe общ., мг/л"} <= {item["name"] for item in well["extra_measurements"]}
     form = _upload(client, _form(tmp_path / "forma.xlsx", well="DEMO-013"))
     assert form["status"] == "loaded" and form["doc_type"] == "excel:form", form["status_message"]
-    unknown = _upload(client, _custom_table(tmp_path / "chuzhie.xlsx", wells=("X-1", "X-2")))
-    assert unknown["status"] == "not_recognized" and "нет в справочнике" in unknown["status_message"]
+    # Wells the system does not know yet: the document creates them, and its deletion removes them.
+    new = _upload(client, _custom_table(tmp_path / "novye.xlsx", wells=("X-1", "X-2")))
+    assert new["status"] == "loaded" and "Новых скважин в системе: 2 (X-1, X-2)." in new["status_message"]
+    assert _well(client, "X-1")["sampling"] is True
+    assert client.delete(f"/api/v1/documents/{new['document_id']}").status_code == 200
+    assert client.get("/api/v1/rating/wells/X-1").status_code == 404
+    assert "X-1" not in {item["well_id"] for item in client.get("/api/v1/rating").json()["wells"]}
     detail = client.get(f"/api/v1/documents/{table['document_id']}").json()
     assert detail["field_labels"]["chlorides_mg_l"] == "Хлориды, мг/л"
 

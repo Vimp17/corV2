@@ -10,6 +10,8 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from openpyxl import load_workbook
+
+from app.core.excel_legacy import is_legacy_workbook, xls_to_xlsx
 from pydantic import ValidationError
 
 from app.config import settings
@@ -230,10 +232,17 @@ def parse_excel(content: bytes, filename: str, profile_id: str, supplied_well_id
     """Parse a workbook with a source profile. auto_header: look for the header row (with the
     well and date columns) in the first 30 rows instead of the configured row — for tables
     under a title, e.g. a laboratory protocol saved as Excel."""
-    if Path(filename).suffix.casefold() != ".xlsx":
-        raise ExcelImportError("Only .xlsx files are supported. Save legacy .xls files as .xlsx first.")
+    suffix = Path(filename).suffix.casefold()
+    if suffix not in {".xlsx", ".xls"}:
+        raise ExcelImportError("Only Excel workbooks (.xlsx, .xls) are supported.")
     if len(content) > settings.max_excel_bytes:
         raise ExcelImportError(f"Workbook exceeds the {settings.max_excel_bytes // (1024 * 1024)} MB upload limit")
+    if suffix == ".xls" or is_legacy_workbook(content):
+        # Excel 97-2003: converted to .xlsx in memory and read as one.
+        try:
+            content = xls_to_xlsx(content)
+        except ValueError as exc:
+            raise ExcelImportError(str(exc)) from exc
     profiles = load_profiles()
     profile = profiles.get(profile_id)
     if not isinstance(profile, dict):

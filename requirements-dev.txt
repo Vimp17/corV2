@@ -3,3 +3,5 @@ pytest>=8,<10
 httpx>=0.27,<1.0
 # scripts/build_demo_documents.py
 reportlab>=4.2,<6
+# tests: an Excel 97-2003 (.xls) workbook to load
+xlwt>=1.3,<2

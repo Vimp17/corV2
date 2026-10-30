@@ -991,6 +991,23 @@ def load_extra_measurements(well_id: str) -> list[dict]:
              "timestamp": row["timestamp"], "extras": row["extras"]} for row in rows]
 
 
+def well_has_data(well_id: str) -> bool:
+    """Whether any source data of the well remain: telemetry, history events or source documents."""
+    with engine().connect() as conn:
+        for table in (telemetry, history_events, source_documents):
+            if conn.execute(select(table.c.well_id).where(table.c.well_id == well_id).limit(1)).first():
+                return True
+    return False
+
+
+def forget_well(well_id: str) -> None:
+    """Remove what was derived for a well that has no data left (its rating row, analyses and
+    source statuses), e.g. a well a deleted document had created."""
+    with engine().begin() as conn:
+        for table in (well_rating, analysis_runs, source_health):
+            conn.execute(delete(table).where(table.c.well_id == well_id))
+
+
 def known_well_ids() -> list[str]:
     """Wells the system knows from any source, the rating or MAI_WELL_IDS."""
     query = text("""

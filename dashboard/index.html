@@ -451,9 +451,9 @@
         <div class="dropzone" id="dropzone">
           <div class="grow-1">
             <strong>Перетащите файлы сюда</strong>
-            <div class="hint" id="dropHint">PDF, Excel (.xlsx), JPG, PNG, TIFF. Можно несколько файлов сразу.</div>
+            <div class="hint" id="dropHint">PDF, Excel (.xlsx, .xls), JPG, PNG, TIFF. Можно несколько файлов сразу.</div>
           </div>
-          <input id="docFiles" type="file" multiple accept=".pdf,.xlsx,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp" class="visually-hidden">
+          <input id="docFiles" type="file" multiple accept=".pdf,.xlsx,.xls,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp" class="visually-hidden">
           <button class="btn" id="docPick" type="button">Выбрать файлы</button>
         </div>
         <div class="docs-meta" id="docsMeta"></div>
@@ -1251,13 +1251,13 @@
     }
 
     function excelCard(source, data) {
-      const file = el('input', { type: 'file', accept: '.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', required: true });
+      const file = el('input', { type: 'file', accept: '.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel', required: true });
       const wellId = source.per_well ? el('input', { type: 'text', placeholder: 'если нет в файле', maxlength: '128' }) : null;
       const button = el('button', { class: 'btn', type: 'submit', text: 'Загрузить файл' });
       const result = el('div', { class: 'result', 'aria-live': 'polite', text: lastStatusLine(source.source_id, data.last_status) });
       const form = el('form', { onSubmit: async (event) => {
         event.preventDefault();
-        if (!file.files[0]) { notice('Выберите файл .xlsx.', 'warning'); return; }
+        if (!file.files[0]) { notice('Выберите файл Excel (.xlsx или .xls).', 'warning'); return; }
         button.disabled = true; state.busy = true; result.textContent = 'Файл загружается и проверяется…';
         try {
           const body = new FormData(); body.append('profile_id', source.profile_id); body.append('file', file.files[0]);
@@ -1342,7 +1342,7 @@
     function renderDocuments() {
       const { documents, counts, settings, status_labels: labels } = state.docs;
       const mb = Math.round(settings.max_bytes / 1048576);
-      $('dropHint').textContent = `PDF, Excel (.xlsx), JPG, PNG, TIFF — до ${mb} МБ и ${settings.max_pages} стр. Можно несколько файлов сразу.`;
+      $('dropHint').textContent = `PDF, Excel (.xlsx, .xls), JPG, PNG, TIFF — до ${mb} МБ и ${settings.max_pages} стр. Можно несколько файлов сразу.`;
       const meta = [
         el('span', {}, 'OCR-модель: ', el('span', { class: settings.ocr_configured ? 'ok' : 'warn', text: settings.ocr_configured ? 'подключена' : 'не настроена — сканы не распознаются' })),
         el('span', {}, 'Извлечение данных (LLM): ', el('span', { class: settings.llm_configured ? 'ok' : 'warn', text: settings.llm_configured ? 'подключено' : 'не настроено' })),
