@@ -111,7 +111,8 @@ def assess_readiness(well_id: str, records: list[TelemetryPoint], source_rows: l
     return SkippedAnalysis(
         well_id=well_id, horizon_days=horizon_days,
         telemetry_records=len(records), unique_timestamps=len(timestamps),
-        current_signal_count=current_signal_count, missing_items=missing,
+        current_signal_count=current_signal_count, recent_observations=len(recent_timestamps),
+        current_signals=[field for field in SIGNAL_FIELDS if field in current_signals], missing_items=missing,
         source_statuses=source_status_contract(source_rows), operator_message=message,
         requested_data=list(dict.fromkeys(requested_data)),
     )

@@ -52,11 +52,6 @@ def is_snapshot(point: Any, snapshot_ids: set[str]) -> bool:
     return bool(sources) and sources <= snapshot_ids
 
 
-def is_lab_only(point: Any, lab_ids: set[str]) -> bool:
-    sources = point_sources(point)
-    return bool(sources) and sources <= lab_ids
-
-
 def observations(records: list, snapshot_ids: set[str] | None = None) -> list:
     """The points that are real measurements (snapshots left out)."""
     snapshot_ids = snapshot_source_ids() if snapshot_ids is None else snapshot_ids
