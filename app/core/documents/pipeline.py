@@ -148,6 +148,7 @@ def _read_excel(document: dict, content: bytes, app_state) -> dict:
     dates = sorted(record["fields"]["sample_date"]["value"] for record in result["records"]
                    if record["accepted"] and record["fields"]["sample_date"]["value"])
     message = f"Excel: загружено проб — {loaded['records']}, скважин — {len(loaded['wells'])}."
+    message += _new_wells_note(result["records"])
     if result["rejected"]:
         reasons = list(dict.fromkeys(issue for record in result["records"] if not record["accepted"]
                                      for issue in record["issues"]))
@@ -221,6 +222,15 @@ def process_document(document_id: str, app_state=None) -> dict:
         content = intake.read_original(document)
     except OSError:
         return _finish(document_id, "failed", "Оригинал файла не найден в хранилище.")
+    if document["file_kind"] == "xls":
+        # Excel 97-2003: read as the .xlsx it converts to; the stored original stays .xls.
+        from app.core.excel_legacy import xls_to_xlsx
+
+        try:
+            content = xls_to_xlsx(content)
+        except ValueError as exc:
+            return _finish(document_id, "failed", str(exc))
+        document = {**document, "file_kind": "xlsx"}
 
     if document["file_kind"] == "xlsx":
         from app.core.documents import nkt_registry
@@ -292,10 +302,21 @@ def process_document(document_id: str, app_state=None) -> dict:
     wells = sorted(set(loaded["wells"]) | set(mentioned))
     _recompute(loaded["wells"], app_state)
     message = f"{spec.get('title')}: загружено записей — {loaded['records']}, скважин — {len(loaded['wells'])}."
+    message += _new_wells_note(checked)
     if len(accepted) < len(checked):
         message += f" Не подтверждено записей: {len(checked) - len(accepted)}."
     return _finish(document_id, "loaded", message, doc_type=type_id, well_ids=wells, extraction=extraction,
                    loaded=loaded, doc_date=doc_date and datetime.fromisoformat(doc_date).date(), **text_values)
+
+
+def _new_wells_note(records: list[dict]) -> str:
+    """The wells this document added to the system: shown so that a misread number is noticed (deleting
+    the document removes the well again)."""
+    wells = sorted({record["well_id"] for record in records if record.get("accepted") and record.get("new_well")})
+    if not wells:
+        return ""
+    shown = ", ".join(wells[:5]) + (f" и ещё {len(wells) - 5}" if len(wells) > 5 else "")
+    return f" Новых скважин в системе: {len(wells)} ({shown})."
 
 
 def load_date_field(spec: dict) -> str:
@@ -351,7 +372,7 @@ def delete_documents(statuses: set[str] | None, app_state=None) -> dict:
         if removed is not None:
             deleted += 1
             wells |= set((removed.get("loaded") or {}).get("wells") or [])
-    _recompute(sorted(wells), app_state)
+    _recompute([well for well in sorted(wells) if db.well_has_data(well)], app_state)
     return {"deleted": deleted, "wells": sorted(wells)}
 
 
@@ -367,8 +388,15 @@ def delete_document(document_id: str, app_state=None, recompute: bool = True) ->
         (settings.docs_storage_dir / document["storage_path"]).unlink(missing_ok=True)
     except OSError:
         logger.warning("Stored original could not be removed document_id=%s", document_id)
+    # A well the document had created (no other data) leaves the rating with it.
+    remaining = []
+    for well in loaded.get("wells") or []:
+        if db.well_has_data(well):
+            remaining.append(well)
+        else:
+            db.forget_well(well)
     if recompute:
-        _recompute(loaded.get("wells") or [], app_state)
+        _recompute(remaining, app_state)
     return document
 
 

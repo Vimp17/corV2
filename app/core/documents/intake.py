@@ -20,7 +20,7 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp"}
-ACCEPTED_EXTENSIONS = {".pdf", ".xlsx"} | IMAGE_EXTENSIONS
+ACCEPTED_EXTENSIONS = {".pdf", ".xlsx", ".xls"} | IMAGE_EXTENSIONS
 _SKIP_SUFFIXES = (".tmp", ".part", ".crdownload", ".download", ".error.txt")
 # An inbox file still being copied is left for the next scan.
 _SETTLE_SECONDS = 5
@@ -41,7 +41,7 @@ def safe_filename(name: str | None) -> str:
 
 
 def detect_kind(content: bytes, filename: str) -> str:
-    """pdf / xlsx / image by the file's content; the extension must agree for xlsx."""
+    """pdf / xlsx / xls / image by the file's content; the extension must agree for Excel."""
     suffix = Path(filename).suffix.casefold()
     head = content[:16]
     if head.startswith(b"%PDF-"):
@@ -49,14 +49,17 @@ def detect_kind(content: bytes, filename: str) -> str:
     if head.startswith(b"PK\x03\x04"):
         if suffix == ".xlsx":
             return "xlsx"
-        raise DocumentRejected("Архив или файл Office не поддерживается: загрузите .xlsx, PDF или изображение.")
+        raise DocumentRejected("Архив или файл Office не поддерживается: загрузите .xlsx, .xls, PDF или изображение.")
     if head.startswith(b"\xd0\xcf\x11\xe0"):
-        raise DocumentRejected("Файлы .xls и .doc не поддерживаются: сохраните таблицу как .xlsx или документ как PDF.")
+        # Excel 97-2003: converted to .xlsx when processed (app.core.excel_legacy).
+        if suffix == ".xls":
+            return "xls"
+        raise DocumentRejected("Файлы .doc не поддерживаются: сохраните документ как PDF.")
     if (head.startswith(b"\xff\xd8\xff") or head.startswith(b"\x89PNG\r\n\x1a\n")
             or head.startswith(b"II*\x00") or head.startswith(b"MM\x00*") or head.startswith(b"BM")
             or (head.startswith(b"RIFF") and content[8:12] == b"WEBP")):
         return "image"
-    raise DocumentRejected("Неподдерживаемый формат: принимаются PDF, .xlsx и изображения (JPG, PNG, TIFF).")
+    raise DocumentRejected("Неподдерживаемый формат: принимаются PDF, Excel (.xlsx, .xls) и изображения (JPG, PNG, TIFF).")
 
 
 def storage_path_for(sha256: str, filename: str) -> Path:
@@ -77,7 +80,7 @@ def accept_file(content: bytes, filename: str, channel: str) -> dict:
     if len(content) > settings.docs_max_bytes:
         raise DocumentRejected(f"Файл больше {settings.docs_max_bytes // (1024 * 1024)} МБ.")
     kind = detect_kind(content, filename)
-    if kind == "xlsx" and len(content) > settings.max_excel_bytes:
+    if kind in {"xlsx", "xls"} and len(content) > settings.max_excel_bytes:
         raise DocumentRejected(f"Таблица больше {settings.max_excel_bytes // (1024 * 1024)} МБ.")
     sha256 = hashlib.sha256(content).hexdigest()
     relative = storage_path_for(sha256, filename)

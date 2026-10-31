@@ -12,3 +12,5 @@ tzdata>=2024.1,<2027
 alembic>=1.13,<2.0
 pypdfium2>=4.30,<6
 Pillow>=10.4,<13
+# Excel 97-2003 (.xls) workbooks, converted to .xlsx (app/core/excel_legacy.py)
+xlrd>=2.0.1,<3

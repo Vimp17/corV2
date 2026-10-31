@@ -33,7 +33,7 @@ from openpyxl.utils import get_column_letter
 from app import db
 from app.config import settings
 from app.core.documents.excel_reader import DATE_TEXT, _cell, _moment, _norm, _number, _well_text
-from app.core.documents.extract import EARLIEST_DATE, clean_well_id, match_well
+from app.core.documents.extract import EARLIEST_DATE, resolve_well
 from app.schemas import TelemetryPoint
 
 SOURCE_ID = "DOC_NKT"
@@ -329,14 +329,9 @@ def _check(records: list[dict], known: list[str]) -> None:
     fields_of: dict[str, set[str]] = defaultdict(set)
     for record in records:
         issues: list[str] = []
-        well = match_well(record["well_raw"], known)
-        record["new_well"] = False
+        well, record["new_well"] = resolve_well(record["well_raw"], known)
         if well is None:
-            cleaned = clean_well_id(record["well_raw"])
-            if cleaned and re.search(r"\d", cleaned):
-                well, record["new_well"] = cleaned, True
-            else:
-                issues.append(f"Не распознан номер скважины «{record['well_raw']}».")
+            issues.append(f"Не распознан номер скважины «{record['well_raw']}».")
         record["well_id"] = well
         values = [key for key in record["fields"] if key != "well_id" and key not in LOCATION]
         if well and not values:

@@ -115,6 +115,19 @@ def match_well(value: Any, known: list[str]) -> str | None:
     return None
 
 
+def resolve_well(value: Any, known: list[str]) -> tuple[str | None, bool]:
+    """(well, new): the known well the value names, or — when the system does not know it yet — the
+    cleaned number as a new well (a document may be the first source of a well). None when the
+    value has no digit and is not a well number."""
+    well = match_well(value, known)
+    if well is not None:
+        return well, False
+    cleaned = clean_well_id(value)
+    if cleaned and re.search(r"\d", cleaned):
+        return cleaned, True
+    return None, False
+
+
 # --------------------------------------------------------------------------- value parsing
 def parse_value(raw: Any, field_type: str) -> Any:
     """Typed value or None; raises ValueError for a value of the wrong type."""
@@ -317,11 +330,11 @@ def check_record(raw: dict, spec: dict, normalized_text: str, known_wells: list[
                 entry["value"] = value.isoformat() if isinstance(value, date) else value
         fields[name] = entry
 
-    well = None
+    well, new_well = None, False
     if fields["well_id"]["status"] == "ok":
-        well = match_well(fields["well_id"]["value"], known_wells)
+        well, new_well = resolve_well(fields["well_id"]["value"], known_wells)
         if well is None:
-            issues.append(f"Скважина «{fields['well_id']['value']}» не найдена в справочнике.")
+            issues.append(f"Не распознан номер скважины «{fields['well_id']['value']}».")
     for name, field in spec["fields"].items():
         if field.get("required") and fields[name]["status"] != "ok":
             issues.append(f"Не найдено обязательное поле «{field.get('label', name)}».")
@@ -337,7 +350,7 @@ def check_record(raw: dict, spec: dict, normalized_text: str, known_wells: list[
     if informative and not any(fields[name]["status"] == "ok" for name in informative):
         labels = ", ".join(spec["fields"][name].get("label", name) for name in informative)
         issues.append(f"В документе нет данных по существу ({labels}).")
-    return {"well_id": well, "fields": fields, "accepted": not issues, "issues": issues}
+    return {"well_id": well, "new_well": new_well, "fields": fields, "accepted": not issues, "issues": issues}
 
 
 def _stem(label: str) -> str:
