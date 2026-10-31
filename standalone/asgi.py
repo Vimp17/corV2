@@ -1,4 +1,4 @@
-"""Entry point of the standalone demo build (no Docker): the regular application with three additions.
+"""Entry point of the standalone demo build (no Docker): the regular application with four additions.
 
 1. Nothing goes to data sources or Промайн. Before the application reads its settings, the pull
    addresses of every source profile (MAI_SOURCE_<ID>_URL / _TOKEN) are cleared and
@@ -11,6 +11,9 @@
 3. A dashboard link with the API key. With MAI_API_KEY set, opening /dashboard?key=<key> keeps the
    key in a cookie of this site and returns to /dashboard; a request with the cookie and without
    an X-API-Key header is let through as if it had the header. n8n and scripts send the header.
+4. SQL Server. The build keeps its tables in Microsoft SQL Server (MAI_DATABASE_URL, a
+   mssql+pyodbc or mssql+pymssql address): standalone/mssql_compat.py adapts app.db before the
+   application uses it.
 
 The application itself (app/) is not changed. Run: python -m uvicorn standalone.asgi:app
 (standalone/manage.py does it).
@@ -103,6 +106,14 @@ def prepare_environment() -> dict:
     when = _data_date(os.environ.get("MAI_STANDALONE_DATA_DATE") or file_values.get("MAI_STANDALONE_DATA_DATE", ""))
     windows = archive_windows(when)
     os.environ.update(windows)
+    url = os.environ.get("MAI_DATABASE_URL") or file_values.get("MAI_DATABASE_URL", "")
+    if not url.startswith("mssql"):
+        raise SystemExit("MAI_DATABASE_URL is not a SQL Server address (mssql+pyodbc:// or mssql+pymssql://): "
+                         "run mai.cmd setup")
+    from standalone import mssql_compat
+
+    mssql_compat.install(url, os.environ.get("MAI_STANDALONE_MSSQL_SCHEMA")
+                         or file_values.get("MAI_STANDALONE_MSSQL_SCHEMA", ""))
     return {"cleared": cleared, "windows": windows}
 
 

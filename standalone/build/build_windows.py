@@ -1,10 +1,9 @@
 """Build the Windows archive of the standalone demo build (no Docker on the server).
 
 Runs on the build machine (Linux) inside a Python 3.12 container — see standalone/build/build.sh.
-The result is one zip: unpack it on Windows Server and run mai.cmd. Inside:
+The result is one zip: unpack it on Windows Server and run mai.cmd. The database is Microsoft SQL
+Server (standalone/mssql_compat.py); the archive holds no database server. Inside:
 
-  pgsql/              PostgreSQL 16 for Windows (EnterpriseDB binaries: bin, lib, share only) — the
-                      built-in database, started by mai.cmd under the user, 127.0.0.1 only;
   runtime/            official portable Python 3.12.10 for Windows (NuGet package "python",
                       signed by the Python Software Foundation) with every package already
                       installed: no internet, pip or administrator rights are needed on the server;
@@ -13,7 +12,8 @@ The result is one zip: unpack it on Windows Server and run mai.cmd. Inside:
   mai.cmd, README-DEMO.md, BUILD_INFO.json.
 
 Steps: tools (uv, pefile) → Python package (SHA-512 checked against nuget.org) → Windows wheels
-from standalone/requirements-windows.lock (the versions tested in the Docker image) → bytecode →
+from standalone/requirements-windows.lock (the versions tested in the Docker image, plus pyodbc and
+pymssql of standalone/requirements-extra.txt for SQL Server) → bytecode →
 check that every extension module finds its DLLs → project files → zip and its SHA-256.
 
 Downloads go to standalone/dist/cache and are reused by the next build.
@@ -43,22 +43,17 @@ PYTHON_VERSION = "3.12.10"
 NUPKG_URL = f"https://www.nuget.org/api/v2/package/python/{PYTHON_VERSION}"
 NUPKG_CATALOG = f"https://api.nuget.org/v3/registration5-semver1/python/{PYTHON_VERSION}.json"
 PLATFORM = "x86_64-pc-windows-msvc"
-# PostgreSQL for the built-in database: the official EnterpriseDB binaries zip. EDB publishes no
-# checksum file, so the SHA-256 of the archive used for the tested build is pinned here.
-POSTGRES_VERSION = "16.10-1"
-POSTGRES_URL = f"https://get.enterprisedb.com/postgresql/postgresql-{POSTGRES_VERSION}-windows-x64-binaries.zip"
-POSTGRES_SHA256 = "ebb3b6af4fa69dea9951b66855bc4d42dc04e56ccb9aa7024ce3c58bd89d6b0c"
-POSTGRES_PARTS = ("pgsql/bin/", "pgsql/lib/", "pgsql/share/")
-# Not needed by the application and depending on Perl, Python 3.11 or Tcl that the build does not
-# ship: procedural languages and their transforms, and the StackBuilder installer.
-POSTGRES_SKIP = re.compile(r"(^pgsql/bin/stackbuilder\.exe$)|(^pgsql/lib/[^/]*(plperl|plpython|pltcl)[^/]*\.dll$)",
-                           re.IGNORECASE)
 LOCK = SRC / "standalone" / "requirements-windows.lock"
+# Packages of the standalone build only (not of the Docker image): the SQL Server drivers.
+EXTRA_REQUIREMENTS = SRC / "standalone" / "requirements-extra.txt"
 APP_NAME = "mai-demo"
 # Project files copied into the build (directories are copied without caches and tests).
-PROJECT_ITEMS = ["app", "dashboard", "config", "migrations", "n8n", "scripts", "docs", "examples/documents",
-                 "alembic.ini", "requirements.txt", "README.md"]
-STANDALONE_ITEMS = ["__init__.py", "asgi.py", "envfile.py", "manage.py", "env.template", "README.md"]
+# No migrations/ and alembic.ini: they are the PostgreSQL schema; SQL Server tables are created from the
+# table definitions of app/db.py (standalone/mssql_compat.py).
+PROJECT_ITEMS = ["app", "dashboard", "config", "n8n", "scripts", "docs", "examples/documents",
+                 "requirements.txt", "README.md"]
+STANDALONE_ITEMS = ["__init__.py", "asgi.py", "envfile.py", "manage.py", "mssql_compat.py", "env.template",
+                    "README.md"]
 TEXT_CRLF = {".cmd", ".md", ".txt", ".template"}
 # DLLs every supported Windows (Server 2016 and later) has: system libraries and the Universal CRT.
 SYSTEM_DLLS = {
@@ -69,7 +64,7 @@ SYSTEM_DLLS = {
     "glu32", "d2d1", "d3d11", "dxgi", "dwrite", "windowscodecs", "mpr", "netapi32", "powrprof", "propsys",
     "cfgmgr32", "ucrtbase", "wintrust", "oleacc", "usp10", "winspool.drv", "shcore", "authz", "fwpuclnt",
     "msi", "cabinet", "dhcpcsvc", "credui", "wtsapi32", "pdh", "tdh", "virtdisk", "wevtapi", "bthprops.cpl",
-    "bcryptprimitives", "synchronization",
+    "bcryptprimitives", "synchronization", "odbc32",
 }
 
 
@@ -134,66 +129,11 @@ def python_runtime(target: Path) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def postgres_runtime(root: Path) -> str:
-    """Unpack bin, lib and share of the PostgreSQL binaries into root/pgsql; returns the SHA-256."""
-    package = download(POSTGRES_URL, CACHE / "downloads" / f"postgresql-{POSTGRES_VERSION}-windows-x64-binaries.zip")
-    digest = hashlib.sha256()
-    with package.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    if digest.hexdigest() != POSTGRES_SHA256:
-        raise SystemExit(f"PostgreSQL archive SHA-256 {digest.hexdigest()} != pinned {POSTGRES_SHA256}")
-    log(f"postgresql {POSTGRES_VERSION}: sha256 matches the pinned value")
-    with zipfile.ZipFile(package) as archive:
-        for member in archive.infolist():
-            name = member.filename
-            if (member.is_dir() or not name.startswith(POSTGRES_PARTS) or name.lower().endswith(".pdb")
-                    or POSTGRES_SKIP.search(name)):
-                continue
-            destination = root / name
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            with archive.open(member) as source, destination.open("wb") as out:
-                shutil.copyfileobj(source, out)
-    if not (root / "pgsql" / "bin" / "pg_ctl.exe").is_file():
-        raise SystemExit("pg_ctl.exe not found in the PostgreSQL archive")
-    return digest.hexdigest()
-
-
-def postgres_vc_runtime(root: Path) -> None:
-    """The Microsoft Visual C++ runtime beside the PostgreSQL programs, so the server starts without
-    the system-wide Redistributable: vcruntime140 from Python, msvcp140 (needed by ICU, which
-    postgres.exe loads) from the copy numpy ships — both checked to be Microsoft's own files."""
-    sys.path.insert(0, str(next((TOOLS / "lib").glob("python3*/site-packages"))))
-    import pefile
-
-    def company(path: Path) -> tuple[str, str]:
-        image = pefile.PE(str(path))
-        info: dict[str, str] = {}
-        for file_info in getattr(image, "FileInfo", None) or []:
-            for entry in file_info:
-                for table in getattr(entry, "StringTable", None) or []:
-                    info.update({key.decode(): value.decode() for key, value in table.entries.items()})
-        image.close()
-        return info.get("CompanyName", ""), info.get("OriginalFilename", "").lower()
-
-    bin_dir = root / "pgsql" / "bin"
-    sources = {"vcruntime140.dll": root / "runtime" / "vcruntime140.dll",
-               "vcruntime140_1.dll": root / "runtime" / "vcruntime140_1.dll",
-               "msvcp140.dll": next((root / "runtime" / "Lib" / "site-packages" / "numpy.libs").glob("msvcp140-*.dll"))}
-    for name, source in sources.items():
-        maker, original = company(source)
-        if maker != "Microsoft Corporation" or original != name:
-            raise SystemExit(f"{source.name} is not Microsoft's {name} ({maker!r}, {original!r})")
-        if not (bin_dir / name).exists():
-            shutil.copy2(source, bin_dir / name)
-    log("PostgreSQL: Visual C++ runtime (vcruntime140, msvcp140) placed beside its programs")
-
-
 def relock(uv: Path, constraints: Path | None) -> None:
     # uv writes through a temporary file beside the output: the source tree may be read-only, so
     # the lock is resolved into the cache and copied into place.
     resolved = CACHE / "requirements-windows.lock.new"
-    command = [uv, "pip", "compile", SRC / "requirements.txt", "--python-platform", PLATFORM,
+    command = [uv, "pip", "compile", SRC / "requirements.txt", EXTRA_REQUIREMENTS, "--python-platform", PLATFORM,
                "--python-version", "3.12", "--no-header", "--no-annotate", "-o", resolved]
     if constraints:
         command += ["--constraint", constraints]
@@ -228,7 +168,7 @@ def install_packages(uv: Path, site_packages: Path, wheelhouse: Path) -> None:
     shutil.rmtree(site_packages / "bin", ignore_errors=True)
 
 
-def check_dlls(runtime: Path, pgsql: Path | None = None) -> list[str]:
+def check_dlls(runtime: Path) -> list[str]:
     """Imported DLLs Windows would not find; returns readable problems.
 
     A DLL counts as found the way Python 3.8+ loads extension modules: in the module's own folder,
@@ -240,16 +180,11 @@ def check_dlls(runtime: Path, pgsql: Path | None = None) -> list[str]:
     site_packages = runtime / "Lib" / "site-packages"
     names_in: dict[Path, set[str]] = {}
     files = [path for path in runtime.rglob("*") if path.suffix.lower() in {".dll", ".pyd"}]
-    if pgsql is not None:
-        files += [path for path in pgsql.rglob("*") if path.suffix.lower() in {".dll", ".exe"}]
     for path in files:
         names_in.setdefault(path.parent, set()).add(path.name.lower())
     problems: dict[str, set[str]] = {}
     for path in files:
         folders = {path.parent, runtime, runtime / "DLLs"}
-        if pgsql is not None and pgsql in path.parents:
-            # PostgreSQL programs and the modules they load find DLLs beside the programs (bin).
-            folders = {path.parent, pgsql / "bin"}
         try:
             top = path.relative_to(site_packages).parts[0]
             folders.add(site_packages / f"{top.split('.')[0]}.libs")
@@ -284,7 +219,7 @@ def compile_bytecode(root: Path) -> None:
     unchecked = py_compile.PycInvalidationMode.UNCHECKED_HASH
     checked = py_compile.PycInvalidationMode.CHECKED_HASH
     for folder, mode in ((root / "runtime" / "Lib", unchecked), (root / "app", checked),
-                         (root / "standalone", checked), (root / "migrations", checked)):
+                         (root / "standalone", checked)):
         compileall.compile_dir(str(folder), quiet=1, invalidation_mode=mode, workers=0,
                                rx=re.compile(r"[\\/](test|tests|idle_test)[\\/]"))
 
@@ -311,7 +246,7 @@ def copy_project(root: Path) -> None:
         path.write_bytes(data)
 
 
-def build_info(root: Path, nupkg_sha256: str, postgres_sha256: str) -> dict:
+def build_info(root: Path, nupkg_sha256: str) -> dict:
     packages = [line.strip() for line in LOCK.read_text(encoding="utf-8").splitlines()
                 if re.match(r"^[A-Za-z0-9_.\-]+==", line.strip())]
     commit = os.environ.get("MAI_BUILD_GIT_COMMIT", "unknown")
@@ -321,8 +256,7 @@ def build_info(root: Path, nupkg_sha256: str, postgres_sha256: str) -> dict:
         "git_dirty": os.environ.get("MAI_BUILD_GIT_DIRTY", "unknown"),
         "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "python": f"{PYTHON_VERSION} (NuGet python, win_amd64)", "python_package_sha256": nupkg_sha256,
-        "postgresql": f"{POSTGRES_VERSION} (EnterpriseDB binaries: bin, lib, share)",
-        "postgresql_archive_sha256": postgres_sha256,
+        "database": "Microsoft SQL Server 2016+ (pyodbc with ODBC Driver 17/18, or pymssql)",
         "platform": "Windows x64 (Windows Server 2016 and later)", "packages": packages,
     }
     (root / "BUILD_INFO.json").write_text(json.dumps(info, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -362,11 +296,9 @@ def main() -> int:
     shutil.rmtree(root.parent, ignore_errors=True)
     root.mkdir(parents=True)
     nupkg_sha256 = python_runtime(root / "runtime")
-    postgres_sha256 = postgres_runtime(root)
     site_packages = root / "runtime" / "Lib" / "site-packages"
     install_packages(uv, site_packages, sdist_wheels())
-    postgres_vc_runtime(root)
-    problems = check_dlls(root / "runtime", root / "pgsql")
+    problems = check_dlls(root / "runtime")
     if problems:
         log("DLLs not shipped and not part of Windows (needs Microsoft Visual C++ Redistributable 2015-2022 x64):")
         for problem in problems:
@@ -375,7 +307,7 @@ def main() -> int:
         log("every extension module finds its DLLs (Python runtime, package folders or Windows)")
     copy_project(root)
     compile_bytecode(root)
-    info = build_info(root, nupkg_sha256, postgres_sha256)
+    info = build_info(root, nupkg_sha256)
     info["dll_problems"] = problems
     (DIST / "last-build.json").write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
     if args.no_zip:
