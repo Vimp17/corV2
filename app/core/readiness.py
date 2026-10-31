@@ -1,118 +1,66 @@
+"""Whether a well has enough measurements for the НТЦ rule score.
+
+Needed: MAI_MIN_TELEMETRY_RECORDS measurements with different times, MAI_MIN_TREND_OBSERVATIONS of
+them within the trend window (MAI_TREND_WINDOW_DAYS) and MAI_MIN_CURRENT_SIGNALS model inputs measured
+within MAI_MAX_FORWARD_FILL_DAYS of the latest one; the latest may not be ahead of the clock by more
+than MAI_MAX_FUTURE_SKEW_HOURS (a clock or time-zone error). Stale data do not block the score: the
+rating keeps the last known risk and its data gaps show the dates. Snapshots (a registry without its
+own measurement time) are not measurements and are left out.
+"""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from app.config import settings
-from app.core.quality import AUXILIARY_RANGES, RANGE_LIMITS
-from app.schemas import ExternalSourceStatus, SkippedAnalysis, TelemetryPoint
+from app.core.normalization import RANGE_LIMITS, as_utc
+from app.core.source_kinds import observations
+from app.schemas import TelemetryPoint
 
-SIGNAL_FIELDS = (
-    "water_cut_pct", "co2_pct", "chlorides_mg_l", "inhibitor_efficiency",
-    "injection_deviation_pct", "corrosion_rate_mm_year", "wall_thickness_mm",
-    "initial_wall_thickness_mm", "metal_loss_mm", "corrosion_load",
-)
-FIELD_LABELS = {
-    "water_cut_pct": "обводнённость, %", "co2_pct": "содержание CO₂, %",
-    "chlorides_mg_l": "хлориды, мг/л", "inhibitor_efficiency": "эффективность ингибитора",
-    "injection_deviation_pct": "отклонение закачки, %",
-    "corrosion_rate_mm_year": "скорость коррозии, мм/год",
-    "wall_thickness_mm": "толщина стенки, мм", "initial_wall_thickness_mm": "начальная толщина стенки, мм",
-    "metal_loss_mm": "потеря металла, мм", "corrosion_load": "коррозионная нагрузка",
+# Model inputs by name; the first MAIN_SIGNALS are measured routinely, the rest are rare.
+SIGNAL_NAMES = {
+    "water_cut_pct": "обводнённость", "co2_pct": "CO₂", "chlorides_mg_l": "хлориды",
+    "inhibitor_efficiency": "эффективность ингибитора", "injection_deviation_pct": "отклонение закачки",
+    "corrosion_rate_mm_year": "скорость коррозии", "wall_thickness_mm": "толщина стенки",
+    "initial_wall_thickness_mm": "начальная толщина стенки", "metal_loss_mm": "потеря металла",
+    "corrosion_load": "коррозионная нагрузка",
 }
+MAIN_SIGNALS = 7
 
 
-def source_status_contract(rows: list[dict]) -> list[ExternalSourceStatus]:
-    return [ExternalSourceStatus(
-        source_id=row["source_id"], status=row["status"], retrieved_at=row["retrieved_at"],
-        record_count=row["record_count"], message=row["message"],
-    ) for row in rows]
+@dataclass
+class Readiness:
+    unique_timestamps: int
+    recent_observations: int
+    # Model inputs with a valid value within MAI_MAX_FORWARD_FILL_DAYS of the latest measurement.
+    current_signals: list[str]
+    # Hours the latest measurement is ahead of the clock, when beyond MAI_MAX_FUTURE_SKEW_HOURS.
+    ahead_hours: float | None = None
+
+    @property
+    def ready(self) -> bool:
+        return (self.unique_timestamps >= settings.min_telemetry_records
+                and self.recent_observations >= settings.min_trend_observations
+                and len(self.current_signals) >= settings.min_current_signals
+                and self.ahead_hours is None)
 
 
-def assess_readiness(well_id: str, records: list[TelemetryPoint], source_rows: list[dict],
-                     horizon_days: int | None = None) -> SkippedAnalysis | None:
-    """Return a SkippedAnalysis when the data cannot support a model run, else None.
-
-    Blocking: too few unique measurements, too few recent observations for a trend, too few
-    current signals, or timestamps beyond the allowed future skew. Staleness is not blocking.
-    Snapshots (a registry without its own measurement time) are not measurements and are left out.
-    """
-    from app.core.source_kinds import observations
-
-    records = observations(records)
-    timestamps = {
-        (point.timestamp.replace(tzinfo=timezone.utc) if point.timestamp.tzinfo is None
-         else point.timestamp.astimezone(timezone.utc)).isoformat()
-        for point in records
-    }
-    def as_utc(point: TelemetryPoint) -> datetime:
-        return (point.timestamp.replace(tzinfo=timezone.utc) if point.timestamp.tzinfo is None
-                else point.timestamp.astimezone(timezone.utc))
-
-    latest_point = max(records, key=as_utc) if records else None
-    latest_utc = as_utc(latest_point) if latest_point else None
-    recent_window_start = latest_utc - timedelta(days=settings.trend_window_days) if latest_utc else None
-    recent_timestamps = {stamp for stamp in (
-        point.timestamp.replace(tzinfo=timezone.utc) if point.timestamp.tzinfo is None
-        else point.timestamp.astimezone(timezone.utc) for point in records
-    ) if recent_window_start is not None and recent_window_start <= stamp <= latest_utc}
-    current_window_start = latest_utc - timedelta(days=settings.max_forward_fill_days) if latest_utc else None
-    current_signals: set[str] = set()
-    if latest_utc is not None and current_window_start is not None:
-        for point in records:
-            timestamp = as_utc(point)
-            if not current_window_start <= timestamp <= latest_utc:
-                continue
-            values = point.model_dump()
-            for field in SIGNAL_FIELDS:
-                value = values.get(field)
-                bounds = RANGE_LIMITS.get(field) or AUXILIARY_RANGES.get(field)
-                if value is not None and bounds and bounds[0] <= value <= bounds[1]:
-                    current_signals.add(field)
-    current_signal_count = len(current_signals)
-    missing: list[str] = []
-    requested_data: list[str] = []
-
-    if len(timestamps) < settings.min_telemetry_records:
-        missing.append(f"Есть {len(timestamps)} уникальных измерений; нужно не менее {settings.min_telemetry_records}.")
-        requested_data.append(f"Передайте не менее {settings.min_telemetry_records} измерений с разными датами и временем.")
-    if len(recent_timestamps) < settings.min_trend_observations:
-        missing.append(f"За последние {settings.trend_window_days} дней есть {len(recent_timestamps)} измерений; нужно не менее {settings.min_trend_observations} для оценки динамики.")
-        requested_data.append(f"Предоставьте не менее {settings.min_trend_observations} измерений в скользящем окне {settings.trend_window_days} дней.")
-    if current_signal_count < settings.min_current_signals:
-        missing.append(f"За последние {settings.max_forward_fill_days} дней заполнено {current_signal_count} прогнозных показателя; нужно не менее {settings.min_current_signals}.")
-        candidates = ", ".join(FIELD_LABELS[field] for field in SIGNAL_FIELDS)
-        requested_data.append(f"Добавьте как минимум {settings.min_current_signals} показателя из списка: {candidates}.")
-    # Stale telemetry is deliberately NOT a blocking condition: hiding a well's last known
-    # risk because its feed stopped would be worse than showing it. The pipeline marks such
-    # results as stale (data_freshness / data_update_required) instead. Timestamps far in
-    # the future indicate a clock or timezone error and do block the analysis.
-    if latest_utc is None:
-        missing.append("Нет временной отметки телеметрии.")
-    else:
-        ahead_hours = (latest_utc - datetime.now(timezone.utc)).total_seconds() / 3600
-        if ahead_hours > settings.max_future_skew_hours:
-            missing.append(
-                f"Последнее измерение датировано будущим временем (+{ahead_hours:.1f} ч.; "
-                f"допустимо до {settings.max_future_skew_hours:g} ч.); проверьте часы и часовой пояс источника."
-            )
-            requested_data.append("Исправьте дату/часовой пояс последнего измерения и повторите загрузку.")
-
-    if not missing:
-        return None
-    bad_sources = [row for row in source_rows if row["status"] in {"error", "unavailable", "not_configured"}]
-    for row in bad_sources:
-        missing.append(f"Источник {row['source_id']}: {row['status']} — {row.get('message') or 'нет подробностей'}")
-        if row["status"] == "not_configured":
-            requested_data.append(f"Настройте API-адрес источника {row['source_id']} или загрузите его Excel по соответствующему профилю.")
-        else:
-            requested_data.append(f"Проверьте доступность API/выгрузки источника {row['source_id']} и повторите синхронизацию.")
-    message = (f"Анализ скважины {well_id} пропущен: данных пока недостаточно или источник недоступен. "
-               "Модели не запускались. Исправьте перечисленные пункты и повторите синхронизацию.")
-    return SkippedAnalysis(
-        well_id=well_id, horizon_days=horizon_days,
-        telemetry_records=len(records), unique_timestamps=len(timestamps),
-        current_signal_count=current_signal_count, recent_observations=len(recent_timestamps),
-        current_signals=[field for field in SIGNAL_FIELDS if field in current_signals], missing_items=missing,
-        source_statuses=source_status_contract(source_rows), operator_message=message,
-        requested_data=list(dict.fromkeys(requested_data)),
-    )
+def assess(records: list[TelemetryPoint]) -> Readiness:
+    points = observations(records)
+    moments = [as_utc(point.timestamp) for point in points]
+    latest = max(moments, default=None)
+    recent: set[datetime] = set()
+    current: set[str] = set()
+    for point, moment in zip(points, moments):
+        if latest - moment <= timedelta(days=settings.trend_window_days):
+            recent.add(moment)
+        if latest - moment <= timedelta(days=settings.max_forward_fill_days):
+            for field in SIGNAL_NAMES:
+                value = getattr(point, field)
+                low, high = RANGE_LIMITS[field]
+                if value is not None and low <= value <= high:
+                    current.add(field)
+    ahead = (latest - datetime.now(timezone.utc)).total_seconds() / 3600 if latest is not None else None
+    return Readiness(unique_timestamps=len(set(moments)), recent_observations=len(recent),
+                     current_signals=[field for field in SIGNAL_NAMES if field in current],
+                     ahead_hours=ahead if ahead is not None and ahead > settings.max_future_skew_hours else None)

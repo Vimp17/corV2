@@ -62,10 +62,10 @@ WINDOWS = os.name == "nt"
 LOG_ROTATE_BYTES = 20 * 1024 * 1024
 START_TIMEOUT_SECONDS = 180
 DEFAULTS = {"port": "8000", "timezone": "Europe/Moscow", "mssql_port": "1433"}
-# Settings of the database modes of earlier builds (built-in PostgreSQL, SQLite): removed by setup.
+# Settings of earlier builds (built-in PostgreSQL, SQLite; the old name of the schema): removed by setup.
 OBSOLETE_SETTINGS = {"MAI_STANDALONE_DB", "MAI_STANDALONE_PG_PORT", "MAI_STANDALONE_PG_PASSWORD",
-                     "MAI_STANDALONE_PG_BIN"}
-# Schema names of SQL Server (MSSQL mode, standalone/mssql_compat.py).
+                     "MAI_STANDALONE_PG_BIN", "MAI_STANDALONE_MSSQL_SCHEMA"}
+# Schema names of SQL Server.
 MSSQL_SCHEMA_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 
 
@@ -167,12 +167,17 @@ def parse_mssql_url(url: str) -> dict:
             "windows": not parts.username}
 
 
+def schema_of(values: dict[str, str]) -> str:
+    """The schema of the tables (MAI_STANDALONE_MSSQL_SCHEMA in .env files of earlier builds)."""
+    return values.get("MAI_DATABASE_SCHEMA") or values.get("MAI_STANDALONE_MSSQL_SCHEMA", "")
+
+
 def database_target(values: dict[str, str]) -> str:
     """server[,port]/database, schema — for messages (no login, no password)."""
     info = parse_mssql_url(values.get("MAI_DATABASE_URL", ""))
     if not info:
         return "не настроен (mai.cmd setup)"
-    schema = values.get("MAI_STANDALONE_MSSQL_SCHEMA") or "по умолчанию для входа"
+    schema = schema_of(values) or "по умолчанию для входа"
     return f"{info['host']}" + (f",{info['port']}" if info["port"] else "") + f"/{info['name']}, схема {schema}"
 
 
@@ -278,7 +283,7 @@ def cmd_setup(args) -> int:
     say("\n1/4  База данных Microsoft SQL Server")
     db_url, mssql_schema = _setup_mssql(args, old, old.get("MAI_DATABASE_URL", "").startswith("mssql"), interactive)
 
-    say("\n2/4  Языковая модель через LiteLLM (справка ИИ, предложение агента, документы)")
+    say("\n2/4  Языковая модель через LiteLLM (предложения ИИ-агента, документы)")
     llm_url = _ask("Адрес LiteLLM, например http://litellm.corp:4000 (пусто — без ИИ)",
                    old.get("MAI_LLM_API_URL", ""), interactive=interactive, preset=args.llm_url)
     llm_url = normalize_llm_url(llm_url)
@@ -333,7 +338,7 @@ def cmd_setup(args) -> int:
     # Settings of the database modes earlier builds had (built-in PostgreSQL, SQLite) are dropped.
     values = {name_: value for name_, value in old.items() if name_ not in OBSOLETE_SETTINGS}
     values.update({
-        "MAI_DATABASE_URL": db_url, "MAI_STANDALONE_MSSQL_SCHEMA": mssql_schema,
+        "MAI_DATABASE_URL": db_url, "MAI_DATABASE_SCHEMA": mssql_schema,
         "MAI_LLM_API_URL": llm_url, "MAI_LLM_API_KEY": llm_key, "MAI_LLM_MODEL": llm_model,
         "MAI_OCR_MODEL": ocr_model, "MAI_SOURCE_TIMEZONE": timezone_name, "MAI_STANDALONE_DATA_DATE": data_date,
         "MAI_STANDALONE_HOST": "0.0.0.0" if network else "127.0.0.1", "MAI_STANDALONE_PORT": api_port,
@@ -351,7 +356,7 @@ def cmd_setup(args) -> int:
 
     say("\nГотово: настройки записаны в .env" + (" (прежние — в .env.bak)." if (ROOT / ".env.bak").is_file() else "."))
     if not llm_url:
-        warn("Языковая модель не задана: справка и предложение ИИ, распознавание PDF и сканов работать не будут.")
+        warn("Языковая модель не задана: предложения ИИ-агента, распознавание PDF и сканов работать не будут.")
     if network:
         say(f"\nПорт {api_port} должен быть открыт в брандмауэре Windows для входящих подключений — это делает")
         say("администратор (см. README-DEMO.md, «Что попросить у администраторов»).")
@@ -381,7 +386,7 @@ def _setup_mssql(args, old: dict[str, str], was_mssql: bool, interactive: bool) 
     port = "" if port.strip() == "-" else port
     name = _ask("База данных", db.get("name", ""), interactive=interactive, preset=args.db_name, check=_required)
     schema = _ask("Схема (пусто — схема по умолчанию для входа, обычно dbo)",
-                  old.get("MAI_STANDALONE_MSSQL_SCHEMA", "") if was_mssql else "", interactive=interactive,
+                  schema_of(old) if was_mssql else "", interactive=interactive,
                   preset=args.db_schema, check=_check_mssql_schema)
     auth = _ask("Вход: sql (логин и пароль SQL Server) / windows (учётная запись Windows, под которой запущена сборка)",
                 "windows" if db.get("windows") else "sql", interactive=interactive, preset=args.db_auth,
@@ -797,7 +802,7 @@ def cmd_check(args) -> int:
 
             tables = conn.execute(text("SELECT count(*) FROM sys.tables WHERE schema_id = "
                                        "SCHEMA_ID(COALESCE(NULLIF(:schema, ''), SCHEMA_NAME()))"),
-                                  {"schema": values.get("MAI_STANDALONE_MSSQL_SCHEMA", "")}).scalar()
+                                  {"schema": schema_of(values)}).scalar()
         ok(f"таблицы приложения созданы или обновлены (в схеме {tables} таблиц)")
     except Exception as exc:  # noqa: BLE001
         fail(f"создать таблицы не удалось: {str(exc).strip()[:300]}")
@@ -805,7 +810,7 @@ def cmd_check(args) -> int:
 
     say("\nЯзыковая модель")
     if not (settings.llm_api_url and settings.llm_model):
-        warn("не настроена: справка и предложение ИИ, распознавание PDF и сканов не работают")
+        warn("не настроена: предложения ИИ-агента, распознавание PDF и сканов не работают")
     else:
         failures += _check_llm(settings)
 
@@ -824,8 +829,15 @@ def cmd_check(args) -> int:
         if not values.get("MAI_API_KEY"):
             warn("ключ доступа не задан — данные откроются всем в сети, кто знает адрес")
 
-    say("\nОграничения демо-сборки")
-    ok(f"запросы к источникам выключены ({len(prepared['cleared'])} адресов очищено), отправка в Промайн выключена")
+    say("\nИсточники данных")
+    try:
+        from app.core.source_connectors import source_modes
+
+        for source in source_modes():
+            ok(f"{source['title']}: " + {"api": "запрос по API (MAI_SOURCE_…_URL)", "adapter": "адаптер",
+                                          "adapter_missing": "адаптер не установлен"}.get(source["mode"], "загрузка файлов"))
+    except Exception as exc:  # noqa: BLE001
+        fail(f"профили источников не читаются: {str(exc)[:200]}")
     if prepared["windows"]:
         windows = prepared["windows"]
         ok(f"архивные данные на {values.get('MAI_STANDALONE_DATA_DATE')}: телеметрия свежая "
@@ -851,7 +863,7 @@ def _check_mssql(values: dict[str, str]) -> str | None:
     info = parse_mssql_url(values.get("MAI_DATABASE_URL", ""))
     if not info:
         return "в .env нет адреса SQL Server (MAI_DATABASE_URL): выполните mai.cmd setup → mssql"
-    schema_option = values.get("MAI_STANDALONE_MSSQL_SCHEMA", "")
+    schema_option = schema_of(values)
     target = (f"{info['host']}" + (f",{info['port']}" if info["port"] else "") + f"/{info['name']}"
               + (f", схема {schema_option}" if schema_option else ""))
     drivers = odbc_drivers()
@@ -867,7 +879,7 @@ def _check_mssql(values: dict[str, str]) -> str | None:
     from sqlalchemy import create_engine, text
     from sqlalchemy.pool import NullPool
 
-    from standalone.mssql_compat import connect_args
+    from app.db import connect_args
 
     engine = create_engine(values["MAI_DATABASE_URL"], poolclass=NullPool,
                            connect_args=connect_args(values["MAI_DATABASE_URL"], 15))
@@ -1039,7 +1051,7 @@ def cmd_cleanup(args) -> int:
     except Exception as exc:  # noqa: BLE001
         bad(f"таблицы удалить не удалось: {_db_error(exc)}")
         return 1
-    schema = values.get("MAI_STANDALONE_MSSQL_SCHEMA")
+    schema = schema_of(values)
     if schema and args.drop_schema:
         try:
             with app_db.engine().begin() as conn:

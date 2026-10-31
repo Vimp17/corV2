@@ -4,7 +4,6 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .ruff_cache/
-models/*.json
 *.log
 *.db
 *.sqlite

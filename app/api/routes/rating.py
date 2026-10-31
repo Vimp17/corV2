@@ -1,4 +1,4 @@
-"""Well rating computed from source data, its Excel export, and ERA repair proposals.
+"""Well rating computed from source data, its Excel export and the AI agent's proposals.
 
 The rating is recomputed by the daily cycle (POST /monitor/run, which pulls configured source
 APIs first), by the per-well analysis (POST /monitor/wells/{id}/analyze) and after uploads or
@@ -9,16 +9,16 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
 from app import db
 from app.config import settings
-from app.core import promine, proposal_agent, rating, rating_builder, rating_export
+from app.core import proposal_agent, rating, rating_builder, rating_export
 from app.core.documents import nkt_registry, pipeline as document_pipeline
 from app.core.excel_ingestion import ExcelImportError
 from app.core.source_connectors import source_modes
-from app.schemas import EraProposalRequest, RatingWellPatch
+from app.schemas import RatingWellPatch
 
 logger = logging.getLogger(__name__)
 
@@ -27,15 +27,13 @@ router = APIRouter(tags=["rating"])
 
 def _rated_wells() -> list[dict]:
     wells = rating.build_rating(db.list_rating_rows())
-    proposals = db.latest_era_proposals()
     for well in wells:
-        well["last_proposal"] = proposals.get(well["well_id"])
         # The full AI proposal is served with the well card only.
         well.pop("ai_proposal", None)
     return wells
 
 
-def _rated_well(well_id: str) -> dict | None:
+def rated_well(well_id: str) -> dict | None:
     """One well as in the rating, without evaluating every row: the rank comes from the scores."""
     row = db.get_rating_row(well_id)
     if row is None:
@@ -43,11 +41,10 @@ def _rated_well(well_id: str) -> dict | None:
     well = rating.evaluate(row)
     index = well["index"]
     if index is not None:
-        others = (rating.priority_index(ntc, math) for _, ntc, math in db.rating_scores())
+        others = (rating.priority_index(ntc) for ntc in db.rating_scores())
         well["rank"] = 1 + sum(1 for value in others if value is not None and value > index)
     else:
         well["rank"] = None
-    well["last_proposal"] = db.latest_era_proposal(well_id)
     return well
 
 
@@ -73,12 +70,9 @@ def _data_state(wells: list[dict]) -> dict:
 
 def _payload() -> dict:
     wells = _rated_wells()
-    ready, explanation = promine.configured()
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "settings": {
-            "combine": settings.rating_combine,
-            "horizon_days": settings.rating_horizon_days,
             "protection": {"mode": settings.rating_protection_mode,
                            "factor": settings.rating_protection_factor,
                            "min_inhibitor": settings.rating_protection_min_inhibitor,
@@ -87,9 +81,8 @@ def _payload() -> dict:
                            "labels": rating.PROTECTION_LABELS},
             "thresholds": rating.thresholds(),
             "measures": rating.measures_catalog(),
-            "promine": {"transport": settings.promine_transport, "ready": ready, "message": explanation},
             "gap_labels": rating.GAP_LABELS,
-            "change_types": [{"key": key, "label": label} for key, label in promine.CHANGE_LABELS.items()],
+            "ai_agent_configured": proposal_agent.configured(),
         },
         "counts": rating.summarize(wells),
         "data": _data_state(wells),
@@ -116,11 +109,11 @@ def export_rating() -> Response:
 
 @router.get("/rating/wells/{well_id}")
 def get_rating_well(well_id: str) -> dict:
-    well = _rated_well(well_id)
+    well = rated_well(well_id)
     if well is None:
         raise HTTPException(status_code=404, detail="Скважины нет в рейтинге")
     titles = document_pipeline.type_titles()
-    return {**well, "proposals": db.list_era_proposals(well_id, limit=20),
+    return {**well,
             "documents": [document_pipeline.decorate(row, titles) for row in db.list_documents(well_id=well_id, limit=50)],
             "extra_measurements": rating_builder.extra_measurements(well_id),
             "nkt_registry": nkt_registry.well_registry(well_id),
@@ -147,35 +140,3 @@ def patch_rating_well(well_id: str, request: RatingWellPatch) -> dict:
     if not db.update_rating_row(well_id, values):
         raise HTTPException(status_code=404, detail="Скважины нет в рейтинге")
     return get_rating_well(well_id)
-
-
-@router.get("/promine/era-proposals")
-def list_proposals(well_id: str | None = Query(default=None, max_length=128),
-                   limit: int = Query(default=50, ge=1, le=500)) -> dict:
-    return {"proposals": db.list_era_proposals(well_id, limit)}
-
-
-@router.post("/promine/era-proposals", status_code=201)
-def create_proposal(request: EraProposalRequest) -> dict:
-    """Store a proposal to change the ERA repair plan and send it through Промайн.
-
-    The proposal is kept whatever happens on delivery; its status says whether it was sent
-    (sent), could not be sent (failed) or waits for the transport to be configured.
-    """
-    well = _rated_well(request.well_id)
-    if well is not None:
-        well.pop("ai_proposal", None)
-    if well is None:
-        raise HTTPException(status_code=404, detail="Скважины нет в рейтинге")
-    return promine.create_and_send(well, request.change_type, request.reason,
-                                   request.proposed_date, request.author)
-
-
-@router.post("/promine/era-proposals/{proposal_id}/resend")
-def resend_proposal(proposal_id: str) -> dict:
-    proposal = db.get_era_proposal(proposal_id)
-    if proposal is None:
-        raise HTTPException(status_code=404, detail="Предложение не найдено")
-    if proposal["status"] == "sent":
-        raise HTTPException(status_code=409, detail="Предложение уже отправлено")
-    return promine.deliver(proposal_id)

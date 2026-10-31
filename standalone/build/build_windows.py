@@ -1,18 +1,18 @@
-"""Build the Windows archive of the standalone demo build (no Docker on the server).
+"""Build the Windows archive of the standalone build (no Docker on the server).
 
 Runs on the build machine (Linux) inside a Python 3.12 container — see standalone/build/build.sh.
 The result is one zip: unpack it on Windows Server and run mai.cmd. The database is Microsoft SQL
-Server (standalone/mssql_compat.py); the archive holds no database server. Inside:
+Server (app/db.py); the archive holds no database server. Inside:
 
   runtime/            official portable Python 3.12.10 for Windows (NuGet package "python",
                       signed by the Python Software Foundation) with every package already
                       installed: no internet, pip or administrator rights are needed on the server;
-  app/ dashboard/ config/ migrations/ n8n/ scripts/ docs/ examples/   — as in the repository;
+  app/ dashboard/ config/ n8n/ examples/documents/   — as in the repository;
   standalone/         the standalone layer (entry point, management commands, .env template);
   mai.cmd, README-DEMO.md, BUILD_INFO.json.
 
 Steps: tools (uv, pefile) → Python package (SHA-512 checked against nuget.org) → Windows wheels
-from standalone/requirements-windows.lock (standalone/requirements.txt resolved with the versions
+from standalone/requirements-windows.lock (requirements.txt resolved with the versions
 tested in the Docker image) → bytecode →
 check that every extension module finds its DLLs → project files → zip and its SHA-256.
 
@@ -44,17 +44,13 @@ NUPKG_URL = f"https://www.nuget.org/api/v2/package/python/{PYTHON_VERSION}"
 NUPKG_CATALOG = f"https://api.nuget.org/v3/registration5-semver1/python/{PYTHON_VERSION}.json"
 PLATFORM = "x86_64-pc-windows-msvc"
 LOCK = SRC / "standalone" / "requirements-windows.lock"
-# The build's own requirements: only what the application imports when it runs (not the
-# requirements.txt of the main version, which carries PostgreSQL and the model-training packages).
-REQUIREMENTS = SRC / "standalone" / "requirements.txt"
+REQUIREMENTS = SRC / "requirements.txt"
 APP_NAME = "mai-demo"
 # Project files copied into the build (directories are copied without caches and tests).
-# No migrations/ and alembic.ini: they are the PostgreSQL schema; SQL Server tables are created from the
-# table definitions of app/db.py (standalone/mssql_compat.py).
-# No scripts/ (sample data, model training, migrations of the main version) and no README.md /
-# requirements.txt of the main version: README-DEMO.md and standalone/requirements.txt describe the build.
-PROJECT_ITEMS = ["app", "dashboard", "config", "n8n", "docs", "examples/documents"]
-STANDALONE_ITEMS = ["__init__.py", "asgi.py", "envfile.py", "manage.py", "mssql_compat.py", "env.template",
+# No scripts/ (sample data for tests and demos) and no README.md of the repository: README-DEMO.md
+# describes the build.
+PROJECT_ITEMS = ["app", "dashboard", "config", "n8n", "examples/documents"]
+STANDALONE_ITEMS = ["__init__.py", "asgi.py", "envfile.py", "manage.py", "env.template",
                     "README.md"]
 TEXT_CRLF = {".cmd", ".md", ".txt", ".template"}
 # DLLs every supported Windows (Server 2016 and later) has: system libraries and the Universal CRT.
@@ -140,8 +136,8 @@ def relock(uv: Path, constraints: Path | None) -> None:
     if constraints:
         command += ["--constraint", constraints]
     run(command, env={**os.environ, "UV_CACHE_DIR": str(CACHE / "uv")})
-    header = ("# Windows (x86_64, Python 3.12) packages of the standalone demo build, resolved by\n"
-              "# standalone/build/build.sh --relock from standalone/requirements.txt with the versions of\n"
+    header = ("# Windows (x86_64, Python 3.12) packages of the standalone build, resolved by\n"
+              "# standalone/build/build.sh --relock from requirements.txt with the versions of\n"
               "# the tested Docker image. Edit by relocking, not by hand.\n")
     LOCK.write_text(header + resolved.read_text(encoding="utf-8"), encoding="utf-8")
     resolved.unlink()

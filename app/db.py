@@ -1,35 +1,94 @@
-"""PostgreSQL repository boundary for ingestion, analysis history and source health."""
+"""Database of the service: Microsoft SQL Server 2016+ (compatibility level 130+ for the JSON functions).
+
+MAI_DATABASE_URL connects through pyodbc and an installed "ODBC Driver 17/18 for SQL Server"
+(mssql+pyodbc://…?driver=…) or through pymssql, which needs no ODBC driver (mssql+pymssql://…);
+MAI_DATABASE_SCHEMA names the schema of the tables (empty: the default schema of the login, usually
+dbo). At start (init_db) the tables are created from the definitions below, columns a later version
+defines are added to existing tables, and tables and columns of earlier versions are dropped.
+
+Text is NVARCHAR with a binary collation, so keys compare exactly whatever the collation of the
+database (DEMO-1 and demo-1 stay two wells); moments are DATETIME2 in UTC, read back with tzinfo=UTC;
+JSON is NVARCHAR(MAX).
+"""
 from __future__ import annotations
 
 import hashlib
 import json
 import uuid
-from datetime import datetime, timezone
-from pathlib import Path
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from typing import Iterable, Iterator
 
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, JSON, MetaData, String, Table, Text, Column, UniqueConstraint, create_engine, delete, select, text, update
-from sqlalchemy.dialects.postgresql import JSONB, insert as pg_insert
+from sqlalchemy import (BigInteger, Boolean, Column, Date, Float, ForeignKey, Index, Integer, JSON, MetaData, Table,
+                        Unicode, UnicodeText, UniqueConstraint, bindparam, create_engine, delete, func, inspect,
+                        literal_column, select, text, union, update)
+from sqlalchemy.dialects.mssql import DATETIME2
 from sqlalchemy.engine import Engine
+from sqlalchemy.ext.compiler import compiles
+from sqlalchemy.schema import CreateColumn
+from sqlalchemy.sql.base import Executable
+from sqlalchemy.sql.elements import ClauseElement
+from sqlalchemy.types import TypeDecorator
 
 from app.config import settings
-from app.schemas import FailureHistoryItem, PipelineResult, TelemetryPoint, WorkHistoryItem
+from app.schemas import FailureHistoryItem, TelemetryPoint, WorkHistoryItem
+
+# Exact comparison and ordering of text, independent of the collation of the database.
+BINARY_COLLATION = "Latin1_General_100_BIN2"
+# SQL Server accepts at most 2100 parameters in one request and 1000 rows in one VALUES list.
+MAX_PARAMETERS = 2000
+MAX_VALUES_ROWS = 1000
+# Wait for the schema lock of another starting process (milliseconds).
+SCHEMA_LOCK_TIMEOUT_MS = 600_000
+# Tables and columns of earlier versions, dropped at start: a NOT NULL column the application no
+# longer writes would make its inserts fail.
+OBSOLETE_TABLES = ("analysis_runs", "era_proposals")
+OBSOLETE_COLUMNS = {"monitor_jobs": ("horizon_days",),
+                    "well_rating": ("model_math", "skip_reason", "analysis_id")}
+# Unique constraints of SQL Server let one NULL in; rows without a valid source are keyed under this
+# sentinel, so identical rows are never stored twice.
+_UNSPECIFIED_SOURCE = "__unspecified__"
+
+
+class UTCDateTime(TypeDecorator):
+    """A moment stored as UTC in DATETIME2 and returned with tzinfo=UTC (naive values are UTC)."""
+
+    impl = DATETIME2
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            value = datetime.fromisoformat(value)
+        return value if value.tzinfo is None else value.astimezone(timezone.utc).replace(tzinfo=None)
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+
+
+def NVarchar(length: int | None = None):  # noqa: N802  (a column type, named like the SQLAlchemy ones)
+    """NVARCHAR(length); NVARCHAR(MAX) without a length or beyond 4000; binary collation."""
+    if length and length <= 4000:
+        return Unicode(length, collation=BINARY_COLLATION)
+    return UnicodeText(collation=BINARY_COLLATION)
 
 metadata = MetaData()
 ingestion_batches = Table(
     "ingestion_batches", metadata,
-    Column("batch_id", String(128), primary_key=True), Column("well_id", String(128), nullable=False),
-    Column("record_count", Integer, nullable=False), Column("created_at", DateTime(timezone=True), nullable=False),
-    Column("payload_sha256", String(64), nullable=False),
+    Column("batch_id", NVarchar(128), primary_key=True), Column("well_id", NVarchar(128), nullable=False),
+    Column("record_count", Integer, nullable=False), Column("created_at", UTCDateTime, nullable=False),
+    Column("payload_sha256", NVarchar(64), nullable=False),
 )
 telemetry = Table(
     "telemetry", metadata,
     Column("id", BigInteger, primary_key=True, autoincrement=True),
-    Column("batch_id", String(128), ForeignKey("ingestion_batches.batch_id", ondelete="CASCADE"), nullable=False),
-    Column("well_id", String(128), nullable=False), Column("source_id", String(128)),
+    Column("batch_id", NVarchar(128), ForeignKey("ingestion_batches.batch_id", ondelete="CASCADE"), nullable=False),
+    Column("well_id", NVarchar(128), nullable=False), Column("source_id", NVarchar(128)),
     Column("source_occurrence", Integer), Column("record_index", Integer, nullable=False),
-    Column("timestamp", DateTime(timezone=True), nullable=False), Column("payload_json", JSON, nullable=False),
+    Column("timestamp", UTCDateTime, nullable=False), Column("payload_json", JSON, nullable=False),
     UniqueConstraint("batch_id", "record_index", name="uq_telemetry_batch_record"),
     UniqueConstraint("well_id", "source_id", "timestamp", "source_occurrence",
                      name="uq_telemetry_source_observation"),
@@ -37,203 +96,181 @@ telemetry = Table(
 Index("idx_telemetry_well_time", telemetry.c.well_id, telemetry.c.timestamp)
 history_batches = Table(
     "history_batches", metadata,
-    Column("batch_id", String(128), primary_key=True), Column("well_id", String(128), nullable=False),
+    Column("batch_id", NVarchar(128), primary_key=True), Column("well_id", NVarchar(128), nullable=False),
     Column("work_count", Integer, nullable=False), Column("failure_count", Integer, nullable=False),
-    Column("payload_sha256", String(64), nullable=False), Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("payload_sha256", NVarchar(64), nullable=False), Column("created_at", UTCDateTime, nullable=False),
 )
 history_events = Table(
     "history_events", metadata,
     Column("id", BigInteger, primary_key=True, autoincrement=True),
-    Column("batch_id", String(128), ForeignKey("history_batches.batch_id", ondelete="CASCADE"), nullable=False),
-    Column("well_id", String(128), nullable=False), Column("source_id", String(128)),
-    Column("event_type", String(16), nullable=False), Column("event_fingerprint", String(64), nullable=False),
-    Column("record_index", Integer, nullable=False), Column("event_date", DateTime(timezone=True), nullable=False),
+    Column("batch_id", NVarchar(128), ForeignKey("history_batches.batch_id", ondelete="CASCADE"), nullable=False),
+    Column("well_id", NVarchar(128), nullable=False), Column("source_id", NVarchar(128)),
+    Column("event_type", NVarchar(16), nullable=False), Column("event_fingerprint", NVarchar(64), nullable=False),
+    Column("record_index", Integer, nullable=False), Column("event_date", UTCDateTime, nullable=False),
     Column("payload_json", JSON, nullable=False),
     UniqueConstraint("batch_id", "event_type", "record_index", name="uq_history_batch_event"),
     UniqueConstraint("well_id", "source_id", "event_type", "event_fingerprint",
                      name="uq_history_source_event"),
 )
 Index("idx_history_well_time", history_events.c.well_id, history_events.c.event_date)
-analysis_runs = Table(
-    "analysis_runs", metadata,
-    Column("analysis_id", String(64), primary_key=True), Column("well_id", String(128), nullable=False),
-    Column("request_id", String(128)), Column("created_at", DateTime(timezone=True), nullable=False),
-    Column("status", String(64), nullable=False), Column("model_versions_json", JSON, nullable=False),
-    Column("result_json", JSON, nullable=False), Column("agent_status", String(64)),
-    Column("agent_updated_at", DateTime(timezone=True)), Column("agent_response_json", JSON),
-    Column("external_data_json", JSON), Column("horizon_days", Integer),
-)
-Index("idx_analysis_runs_well_time", analysis_runs.c.well_id, analysis_runs.c.created_at)
-Index("idx_analysis_runs_well_horizon_time", analysis_runs.c.well_id,
-      analysis_runs.c.horizon_days, analysis_runs.c.created_at)
 source_health = Table(
-    "source_health",
-    metadata,
-    Column("source_id", String(128), primary_key=True),
-    Column("well_id", String(128), primary_key=True),
-    Column(
-        "origin",
-        String(32),
-        primary_key=True,
-        nullable=False,
-        server_default="api_refresh",
-    ),
-    Column("status", String(32), nullable=False),
-    Column("message", String(2000)),
-    Column("record_count", Integer),
-    Column("retrieved_at", DateTime(timezone=True), nullable=False),
+    "source_health", metadata,
+    Column("source_id", NVarchar(128), primary_key=True), Column("well_id", NVarchar(128), primary_key=True),
+    Column("origin", NVarchar(32), primary_key=True, nullable=False, server_default="api_refresh"),
+    Column("status", NVarchar(32), nullable=False), Column("message", NVarchar(2000)),
+    Column("record_count", Integer), Column("retrieved_at", UTCDateTime, nullable=False),
 )
-
 monitor_jobs = Table(
     "monitor_jobs", metadata,
-    Column("job_id", String(64), primary_key=True),
-    Column("status", String(32), nullable=False),
-    Column("horizon_days", Integer, nullable=False),
-    Column("created_at", DateTime(timezone=True), nullable=False),
-    Column("started_at", DateTime(timezone=True)),
-    Column("completed_at", DateTime(timezone=True)),
-    Column("result_json", JSON),
-    Column("error", String(2000)),
+    Column("job_id", NVarchar(64), primary_key=True), Column("status", NVarchar(32), nullable=False),
+    Column("created_at", UTCDateTime, nullable=False), Column("started_at", UTCDateTime), Column("completed_at", UTCDateTime),
+    Column("result_json", JSON), Column("error", NVarchar(2000)),
 )
-
-# Current rating per well. Evidence and model scores are computed from source data by
+# Current rating per well. Evidence and the НТЦ score are computed from source data by
 # app.core.rating_builder (provenance records the source and date of each value); plan_date,
-# promine_status and comment are operator fields edited on the dashboard and never overwritten
-# by a recomputation. The index, measure and deadline are derived in app.core.rating.
+# promine_status and comment are operator fields (PATCH /rating/wells/{id}) never overwritten by a
+# recomputation. The index, measure and deadline are derived in app.core.rating.
 well_rating = Table(
     "well_rating", metadata,
-    Column("well_id", String(128), primary_key=True),
-    Column("field", String(256)), Column("equipment", String(256)),
+    Column("well_id", NVarchar(128), primary_key=True),
+    Column("field", NVarchar(256)), Column("equipment", NVarchar(256)),
     Column("in_operation", Boolean), Column("sampling", Boolean),
     Column("corrosive_environment", Boolean),
     Column("tonnage_t", Float), Column("noo_days", Float),
     Column("demount_act", Boolean), Column("demount_corrosion", Boolean),
     Column("base_act", Boolean), Column("base_corrosion", Boolean),
-    Column("category", String(32)),
-    Column("model_ntc", Float), Column("model_math", Float),
-    Column("plan_date", Date), Column("promine_status", String(32)),
-    Column("comment", String(2000)),
-    Column("assessed_at", DateTime(timezone=True)),
-    Column("updated_at", DateTime(timezone=True), nullable=False),
-    Column("source", String(32), nullable=False),
-    Column("measure", String(32)), Column("measure_since", DateTime(timezone=True)),
-    Column("provenance", JSON), Column("computed_at", DateTime(timezone=True)),
-    Column("skip_reason", String(2000)), Column("analysis_id", String(64)),
-    Column("protection", String(32)), Column("model_ntc_raw", Float),
-    Column("installed_at", DateTime(timezone=True)), Column("liquid_rate_m3_day", Float),
+    Column("category", NVarchar(32)),
+    Column("model_ntc", Float),
+    Column("plan_date", Date), Column("promine_status", NVarchar(32)),
+    Column("comment", NVarchar(2000)),
+    Column("assessed_at", UTCDateTime),
+    Column("updated_at", UTCDateTime, nullable=False),
+    Column("source", NVarchar(32), nullable=False),
+    Column("measure", NVarchar(32)), Column("measure_since", UTCDateTime),
+    Column("provenance", JSON), Column("computed_at", UTCDateTime),
+    Column("protection", NVarchar(32)), Column("model_ntc_raw", Float),
+    Column("installed_at", UTCDateTime), Column("liquid_rate_m3_day", Float),
     Column("oil_pct", Float), Column("data_gaps", JSON),
     # Latest proposal drafted by the AI agent from all well data (app.core.proposal_agent).
-    Column("ai_proposal", JSON), Column("ai_proposal_at", DateTime(timezone=True)),
+    Column("ai_proposal", JSON), Column("ai_proposal_at", UTCDateTime),
 )
-
-# Proposals to change the ERA repair plan, sent through Промайн.
-era_proposals = Table(
-    "era_proposals", metadata,
-    Column("proposal_id", String(64), primary_key=True),
-    Column("well_id", String(128), nullable=False),
-    Column("change_type", String(32), nullable=False),
-    Column("reason", String(4000), nullable=False),
-    Column("proposed_date", Date),
-    Column("author", String(200)),
-    Column("created_at", DateTime(timezone=True), nullable=False),
-    Column("status", String(32), nullable=False),
-    Column("transport", String(16), nullable=False),
-    Column("attempts", Integer, nullable=False),
-    Column("sent_at", DateTime(timezone=True)),
-    Column("external_id", String(256)),
-    Column("error", String(2000)),
-    Column("subject", String(500), nullable=False),
-    Column("body", String(20000), nullable=False),
-    Column("rating_json", JSON),
-)
-Index("idx_era_proposals_well_time", era_proposals.c.well_id, era_proposals.c.created_at)
-
 source_documents = Table(
     "source_documents", metadata,
-    Column("source_id", String(128), primary_key=True), Column("well_id", String(128), primary_key=True),
-    Column("payload_json", JSON, nullable=False), Column("updated_at", DateTime(timezone=True), nullable=False),
+    Column("source_id", NVarchar(128), primary_key=True), Column("well_id", NVarchar(128), primary_key=True),
+    Column("payload_json", JSON, nullable=False), Column("updated_at", UTCDateTime, nullable=False),
 )
-
 # Documents received as files (manual upload or the inbox folder): the original is stored on
 # disk, the extracted text and fields here. Data taken from a document is written to the usual
 # telemetry / history tables under batch ids "doc-<document_id>-<well_id>".
 documents = Table(
     "documents", metadata,
-    Column("document_id", String(36), primary_key=True),
-    Column("sha256", String(64), nullable=False, unique=True),
-    Column("filename", String(512), nullable=False),
-    Column("channel", String(16), nullable=False),
-    Column("file_kind", String(16), nullable=False),
+    Column("document_id", NVarchar(36), primary_key=True),
+    Column("sha256", NVarchar(64), nullable=False, unique=True),
+    Column("filename", NVarchar(512), nullable=False),
+    Column("channel", NVarchar(16), nullable=False),
+    Column("file_kind", NVarchar(16), nullable=False),
     Column("size_bytes", BigInteger, nullable=False),
-    Column("storage_path", String(1024), nullable=False),
-    Column("status", String(32), nullable=False),
-    Column("status_message", String(2000)),
+    Column("storage_path", NVarchar(1024), nullable=False),
+    Column("status", NVarchar(32), nullable=False),
+    Column("status_message", NVarchar(2000)),
     Column("pages", Integer),
-    Column("doc_type", String(64)),
+    Column("doc_type", NVarchar(64)),
     Column("well_ids", JSON),
     Column("doc_date", Date),
-    Column("text_method", String(32)),
+    Column("text_method", NVarchar(32)),
     Column("text_chars", Integer),
-    Column("text", Text),
+    Column("text", NVarchar()),
     Column("extraction", JSON),
     Column("loaded", JSON),
     Column("attempts", Integer, nullable=False, server_default="0"),
-    Column("created_at", DateTime(timezone=True), nullable=False),
-    Column("started_at", DateTime(timezone=True)),
-    Column("processed_at", DateTime(timezone=True)),
+    Column("created_at", UTCDateTime, nullable=False),
+    Column("started_at", UTCDateTime),
+    Column("processed_at", UTCDateTime),
 )
 Index("idx_documents_status_created", documents.c.status, documents.c.created_at)
 Index("idx_documents_created", documents.c.created_at)
 
+
+# --------------------------------------------------------------------------- connection
 _engine: Engine | None = None
 
-# PostgreSQL allows at most 65,535 bind parameters per statement; multi-row inserts are
-# split so that the documented 10,000-row batches stay well below that limit.
-_INSERT_CHUNK_ROWS = 2000
-# Unique constraints treat NULLs as distinct, so a NULL source_id would let identical rows
-# be stored twice. Rows without a valid source are keyed under this sentinel instead.
-_UNSPECIFIED_SOURCE = "__unspecified__"
 
-
-def _chunks(rows: list[dict], size: int = _INSERT_CHUNK_ROWS):
-    for start in range(0, len(rows), size):
-        yield rows[start:start + size]
+def connect_args(url: str, login_timeout: int = 30) -> dict:
+    """Driver options: a login timeout (pymssql's "timeout" limits every query, so its own option);
+    pymssql binds DATETIME2 with full precision, as pyodbc does."""
+    if url.startswith("mssql+pymssql"):
+        return {"login_timeout": login_timeout, "use_datetime2": True}
+    return {"timeout": login_timeout}
 
 
 def engine() -> Engine:
     global _engine
     if _engine is None:
-        _engine = create_engine(settings.database_url, pool_pre_ping=True, pool_size=5, max_overflow=10)
+        url = settings.database_url
+        if not url.startswith("mssql"):
+            raise RuntimeError("MAI_DATABASE_URL is not a SQL Server address (mssql+pyodbc:// or mssql+pymssql://)")
+        _engine = create_engine(url, pool_pre_ping=True, pool_size=5, max_overflow=10, connect_args=connect_args(url))
+        if settings.database_schema:
+            _engine = _engine.execution_options(schema_translate_map={None: settings.database_schema})
     return _engine
 
 
-_MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"
-# Separate key from MONITOR_LOCK_KEY: serialises schema upgrades when several API workers or
-# replicas start at once.
-_MIGRATION_LOCK_KEY = 0x4D41494D4947  # "MAIMIG"
+def qualified(name: str) -> str:
+    """A table name for hand-written SQL, in the configured schema."""
+    quote = engine().dialect.identifier_preparer.quote
+    return (quote(settings.database_schema) + "." if settings.database_schema else "") + quote(name)
+
+
+def _applock(conn, resource: str, timeout_ms: int) -> bool:
+    # NOCOUNT only around the call: rowcount of later statements on this connection must stay.
+    result = conn.execute(text(
+        "SET NOCOUNT ON; DECLARE @result int; "
+        "EXEC @result = sp_getapplock @Resource = :resource, @LockMode = 'Exclusive', "
+        "@LockOwner = 'Session', @LockTimeout = :timeout; "
+        "SET NOCOUNT OFF; SELECT @result"), {"resource": resource, "timeout": timeout_ms}).scalar()
+    return result is not None and result >= 0
+
+
+def _release(conn, resource: str) -> None:
+    conn.execute(text("EXEC sp_releaseapplock @Resource = :resource, @LockOwner = 'Session'"), {"resource": resource})
+
+
+def _lock_name(key: str) -> str:
+    return f"mai:{settings.database_schema or 'default'}:{key}"
 
 
 def init_db() -> None:
-    """Bring the schema to the latest Alembic revision.
-
-    The table definitions in this module describe the schema for queries; the schema itself is
-    owned by the revisions in migrations/versions. A blocking advisory lock makes concurrent
-    startups wait for one upgrade instead of racing each other.
-    """
-    from alembic import command
-    from alembic.config import Config
-
-    config = Config()
-    config.set_main_option("script_location", str(_MIGRATIONS_DIR))
+    """Create the schema and the tables; add the columns new versions define, drop obsolete ones.
+    An application lock makes processes starting at once wait for one another."""
+    schema = settings.database_schema
     with engine().connect() as conn:
-        conn.execute(text("SELECT pg_advisory_lock(:k)"), {"k": _MIGRATION_LOCK_KEY})
+        if schema:
+            conn.execute(text("DECLARE @sql nvarchar(400) = N'CREATE SCHEMA ' + QUOTENAME(:schema); "
+                              "IF SCHEMA_ID(:schema) IS NULL EXEC sp_executesql @sql"), {"schema": schema})
+            conn.commit()
+        resource = _lock_name("schema")
+        if not _applock(conn, resource, SCHEMA_LOCK_TIMEOUT_MS):
+            raise RuntimeError("Таблицы создаёт другой процесс; повторите позже.")
         conn.commit()
         try:
-            config.attributes["connection"] = conn
-            command.upgrade(config, "head")
+            metadata.create_all(conn)
+            inspector = inspect(conn)
+            quote = conn.dialect.identifier_preparer.quote
+            for name in OBSOLETE_TABLES:
+                if inspector.has_table(name, schema=schema or None):
+                    conn.execute(text(f"DROP TABLE {qualified(name)}"))
+            for table in metadata.sorted_tables:
+                existing = {column["name"].lower() for column in inspector.get_columns(table.name, schema=schema or None)}
+                for column in table.columns:
+                    if column.name.lower() not in existing:
+                        ddl = CreateColumn(column).compile(dialect=conn.dialect)
+                        conn.execute(text(f"ALTER TABLE {qualified(table.name)} ADD {ddl}"))
+                for name in OBSOLETE_COLUMNS.get(table.name, ()):
+                    if name in existing:
+                        conn.execute(text(f"ALTER TABLE {qualified(table.name)} DROP COLUMN {quote(name)}"))
             conn.commit()
         finally:
-            conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": _MIGRATION_LOCK_KEY})
+            _release(conn, resource)
             conn.commit()
 
 
@@ -242,19 +279,91 @@ def check_database() -> bool:
         conn.execute(text("SELECT 1"))
     return True
 
-_SOURCE_ORIGINS = {
-    "api_push",
-    "document",
-    "manual_upload",
-    "api_refresh",
-    "adapter",
-    "system",
-}
+
+# Any key of this application: at most one daily cycle at a time across all processes of the database.
+MONITOR_LOCK_KEY = "monitor"
 
 
-def _normalize_origin(origin: str | None) -> str:
-    origin = str(origin or "").strip()
-    return origin if origin in _SOURCE_ORIGINS else "api_refresh"
+@contextmanager
+def advisory_lock(key) -> Iterator[bool]:
+    """Try to take an application lock of this database; yields whether it was acquired."""
+    resource = _lock_name(str(key))
+    with engine().connect() as conn:
+        acquired = _applock(conn, resource, 0)
+        conn.commit()
+        try:
+            yield acquired
+        finally:
+            if acquired:
+                _release(conn, resource)
+                conn.commit()
+
+
+# --------------------------------------------------------------------------- insert or update (MERGE)
+class _Merge(Executable, ClauseElement):
+    """Insert the rows whose key is new; for the others update the given columns from the row
+    (MERGE … WITH (HOLDLOCK)). Rows proposing the same key: the first one wins. With output, the
+    statement returns that column of the inserted rows."""
+
+    inherit_cache = False
+    _execution_options = Executable._execution_options
+
+    def __init__(self, table, rows: list[dict], keys: tuple[str, ...], update: tuple[str, ...] = (),
+                 output: str | None = None) -> None:
+        self.table, self.keys, self.update, self.output = table, keys, update, output
+        seen: set[tuple] = set()
+        self.rows = []
+        for row in rows:
+            key = tuple(row.get(name) for name in keys)
+            if key not in seen:
+                seen.add(key)
+                self.rows.append(row)
+
+
+@compiles(_Merge, "mssql")
+def _compile_merge(element: _Merge, compiler, **kw) -> str:
+    table, quote = element.table, compiler.preparer.quote
+    columns = list(element.rows[0])
+    values = []
+    for index, row in enumerate(element.rows):
+        cells = [compiler.process(bindparam(f"m{index}_{position}", row.get(name), type_=table.c[name].type,
+                                            unique=True), **kw) for position, name in enumerate(columns)]
+        values.append("(" + ", ".join(cells) + ")")
+    source = ", ".join(quote(name) for name in columns)
+    on = " AND ".join(f"t.{quote(name)} = s.{quote(name)}" for name in element.keys)
+    sql = (f"MERGE {compiler.preparer.format_table(table)} WITH (HOLDLOCK) AS t "
+           f"USING (VALUES {', '.join(values)}) AS s ({source}) ON {on}")
+    if element.update:
+        sql += " WHEN MATCHED THEN UPDATE SET " + ", ".join(f"t.{quote(name)} = s.{quote(name)}"
+                                                           for name in element.update)
+    sql += f" WHEN NOT MATCHED THEN INSERT ({source}) VALUES (" + ", ".join(f"s.{quote(name)}" for name in columns) + ")"
+    if element.output:
+        sql += f" OUTPUT inserted.{quote(element.output)}"
+    return sql + ";"
+
+
+def _merge(conn, table, rows: list[dict], keys: tuple[str, ...], update: tuple[str, ...] = (),
+           output: str | None = None) -> int | list:
+    """Run _Merge in chunks within the parameter limits; the inserted rows' output values with
+    output, else the number of rows inserted or updated."""
+    width = max(1, len(rows[0])) if rows else 1
+    size = max(1, min(MAX_VALUES_ROWS, MAX_PARAMETERS // width))
+    count, returned = 0, []
+    for start in range(0, len(rows), size):
+        result = conn.execute(_Merge(table, rows[start:start + size], keys, update, output))
+        if output:
+            returned += [row[0] for row in result.all()]
+        else:
+            count += result.rowcount or 0
+    return returned if output else count
+
+
+# --------------------------------------------------------------------------- source data
+_SOURCE_ORIGINS = {"api_push", "document", "manual_upload", "api_refresh", "adapter", "system"}
+
+
+def _utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
 
 def _json_hash(value: object) -> str:
@@ -264,6 +373,8 @@ def _json_hash(value: object) -> str:
 
 
 def save_batch(well_id: str, requested_batch_id: str | None, records: Iterable[TelemetryPoint]) -> dict:
+    """Store telemetry; a value at a moment already stored for the source replaces the old one.
+    A batch id used again with the same well and payload is an idempotent replay."""
     batch_id = requested_batch_id or str(uuid.uuid4())
     rows = list(records)
     persisted_fields = set(TelemetryPoint.model_fields) | {"source_id"}
@@ -276,98 +387,95 @@ def save_batch(well_id: str, requested_batch_id: str | None, records: Iterable[T
         if not isinstance(source_id, str) or not source_id.strip() or len(source_id) > 128:
             source_id = _UNSPECIFIED_SOURCE
             payload.pop("source_id", None)
-        timestamp = point.timestamp.replace(tzinfo=timezone.utc) if point.timestamp.tzinfo is None else point.timestamp.astimezone(timezone.utc)
-        occurrence_key = (source_id, timestamp.isoformat())
+        occurrence_key = (source_id, _utc(point.timestamp).isoformat())
         source_occurrence = occurrences.get(occurrence_key, 0)
         occurrences[occurrence_key] = source_occurrence + 1
         telemetry_rows.append({"batch_id": batch_id, "well_id": well_id, "source_id": source_id,
                                "source_occurrence": source_occurrence, "record_index": index,
                                "timestamp": point.timestamp, "payload_json": payload})
     digest = _json_hash(payloads)
-    created_at = datetime.now(timezone.utc)
     with engine().begin() as conn:
-        inserted = conn.execute(pg_insert(ingestion_batches).values(
-            batch_id=batch_id, well_id=well_id, record_count=len(rows), created_at=created_at,
-            payload_sha256=digest,
-        ).on_conflict_do_nothing(index_elements=[ingestion_batches.c.batch_id]))
-        if inserted.rowcount == 0:
+        inserted = _merge(conn, ingestion_batches, [{
+            "batch_id": batch_id, "well_id": well_id, "record_count": len(rows),
+            "created_at": datetime.now(timezone.utc), "payload_sha256": digest}], ("batch_id",))
+        if not inserted:
             existing = conn.execute(select(ingestion_batches).where(
                 ingestion_batches.c.batch_id == batch_id)).mappings().one()
             if existing["well_id"] != well_id or existing["payload_sha256"] != digest:
                 raise ValueError("batch_id has already been used with a different well or payload")
             return {"batch_id": batch_id, "well_id": well_id, "records_received": len(rows),
                     "records_stored": existing["record_count"], "idempotent_replay": True}
-        for chunk in _chunks(telemetry_rows):
-            statement = pg_insert(telemetry).values(chunk)
-            statement = statement.on_conflict_do_update(
-                index_elements=[telemetry.c.well_id, telemetry.c.source_id,
-                                telemetry.c.timestamp, telemetry.c.source_occurrence],
-                set_={"batch_id": statement.excluded.batch_id,
-                      "record_index": statement.excluded.record_index,
-                      "payload_json": statement.excluded.payload_json},
-            )
-            conn.execute(statement)
+        if telemetry_rows:
+            _merge(conn, telemetry, telemetry_rows, ("well_id", "source_id", "timestamp", "source_occurrence"),
+                   update=("batch_id", "record_index", "payload_json"))
     return {"batch_id": batch_id, "well_id": well_id, "records_received": len(rows),
             "records_stored": len(rows), "idempotent_replay": False}
 
 
 def load_telemetry(well_id: str) -> list[TelemetryPoint]:
+    """The well's telemetry in time order; points of different sources at the same moment are merged
+    into one point with source_id "A+B" (the first value of each field wins)."""
     with engine().connect() as conn:
         rows = conn.execute(select(telemetry.c.payload_json).where(
             telemetry.c.well_id == well_id).order_by(telemetry.c.timestamp, telemetry.c.id)).all()
-    points = [TelemetryPoint.model_validate(row[0]) for row in rows]
     combined: list[TelemetryPoint] = []
-    for point in points:
-        point_utc = point.timestamp.replace(tzinfo=timezone.utc) if point.timestamp.tzinfo is None else point.timestamp.astimezone(timezone.utc)
+    for point in (TelemetryPoint.model_validate(row[0]) for row in rows):
+        point_utc = _utc(point.timestamp)
         point_source = str(getattr(point, "source_id", ""))
         merge_index = None
         merge_sources: set[str] = set()
         for index in range(len(combined) - 1, -1, -1):
             prior = combined[index]
-            prior_utc = prior.timestamp.replace(tzinfo=timezone.utc) if prior.timestamp.tzinfo is None else prior.timestamp.astimezone(timezone.utc)
+            prior_utc = _utc(prior.timestamp)
             if prior_utc < point_utc:
                 break
             prior_sources = set(str(getattr(prior, "source_id", "")).split("+")) - {""}
             if prior_utc == point_utc and prior_sources and point_source and point_source not in prior_sources:
                 merge_index, merge_sources = index, prior_sources
                 break
-        if merge_index is not None:
-            prior = combined[merge_index]
-            merged = prior.model_dump()
-            for field in TelemetryPoint.model_fields:
-                value = getattr(point, field)
-                if field == "timestamp" or value is None:
-                    continue
-                if merged.get(field) is None:
-                    merged[field] = value
-            merge_sources.add(point_source)
-            merged["source_id"] = "+".join(sorted(merge_sources))
-            combined[merge_index] = TelemetryPoint.model_validate(merged)
-        else:
+        if merge_index is None:
             combined.append(point)
+            continue
+        merged = combined[merge_index].model_dump()
+        for field in TelemetryPoint.model_fields:
+            value = getattr(point, field)
+            if field != "timestamp" and value is not None and merged.get(field) is None:
+                merged[field] = value
+        merge_sources.add(point_source)
+        merged["source_id"] = "+".join(sorted(merge_sources))
+        combined[merge_index] = TelemetryPoint.model_validate(merged)
     return combined
 
 
 def list_wells() -> list[dict]:
-    query = text("""
-        WITH well_ids AS (
-            SELECT well_id FROM telemetry UNION SELECT well_id FROM history_events
-            UNION SELECT well_id FROM analysis_runs
-            UNION SELECT well_id FROM source_health
-        )
-        SELECT w.well_id, COUNT(t.id) AS record_count, MIN(t.timestamp) AS first_timestamp,
-               MAX(t.timestamp) AS last_timestamp,
-               (SELECT COUNT(*) FROM history_events h WHERE h.well_id=w.well_id) AS history_count
-        FROM well_ids w LEFT JOIN telemetry t ON t.well_id=w.well_id
-        GROUP BY w.well_id ORDER BY w.well_id
-    """)
+    """Wells with telemetry, history or a source status: telemetry count and time span, history count."""
+    ids = union(select(telemetry.c.well_id), select(history_events.c.well_id),
+                select(source_health.c.well_id)).subquery("w")
+    history_count = (select(func.count()).select_from(history_events)
+                     .where(history_events.c.well_id == ids.c.well_id).scalar_subquery())
+    query = (select(ids.c.well_id, func.count(telemetry.c.id).label("record_count"),
+                    func.min(telemetry.c.timestamp).label("first_timestamp"),
+                    func.max(telemetry.c.timestamp).label("last_timestamp"),
+                    history_count.label("history_count"))
+             .select_from(ids.outerjoin(telemetry, telemetry.c.well_id == ids.c.well_id))
+             .group_by(ids.c.well_id).order_by(ids.c.well_id))
     with engine().connect() as conn:
         return [dict(row) for row in conn.execute(query).mappings().all()]
+
+
+def known_well_ids() -> list[str]:
+    """Wells the system knows from any source, the rating or MAI_WELL_IDS."""
+    query = union(select(telemetry.c.well_id), select(history_events.c.well_id),
+                  select(well_rating.c.well_id), select(source_health.c.well_id))
+    with engine().connect() as conn:
+        wells = {row[0] for row in conn.execute(query).all()}
+    return sorted(wells | set(settings.configured_well_ids))
 
 
 def save_history(well_id: str, requested_batch_id: str | None,
                  work_history: list[WorkHistoryItem], failure_history: list[FailureHistoryItem],
                  source_id: str | None = None) -> dict:
+    """Store work and failure events; an event already stored for the source is skipped."""
     batch_id = requested_batch_id or str(uuid.uuid4())
     if not isinstance(source_id, str) or not source_id.strip() or len(source_id) > 128:
         source_id = _UNSPECIFIED_SOURCE
@@ -377,22 +485,19 @@ def save_history(well_id: str, requested_batch_id: str | None,
         for index, record in enumerate(records):
             event_date = getattr(record, date_field)
             payload = record.model_dump(mode="json")
-            event = {"event_type": event_type, "record_index": index,
-                     "source_id": source_id, "event_date": event_date,
-                     "payload_json": payload}
-            event["event_fingerprint"] = _json_hash({
-                "event_type": event_type, "event_date": event_date.isoformat(), "payload": payload,
-            })
-            encoded.append(event)
+            encoded.append({"event_type": event_type, "record_index": index, "source_id": source_id,
+                            "event_date": event_date, "payload_json": payload,
+                            "event_fingerprint": _json_hash({"event_type": event_type,
+                                                             "event_date": event_date.isoformat(),
+                                                             "payload": payload})})
     digest = _json_hash([{**item, "event_date": item["event_date"].isoformat()} for item in encoded])
-    inserted_counts = {"work": 0, "failure": 0}
+    stored = {"work": 0, "failure": 0}
     with engine().begin() as conn:
-        inserted = conn.execute(pg_insert(history_batches).values(
-            batch_id=batch_id, well_id=well_id, work_count=len(work_history),
-            failure_count=len(failure_history), payload_sha256=digest,
-            created_at=datetime.now(timezone.utc),
-        ).on_conflict_do_nothing(index_elements=[history_batches.c.batch_id]))
-        if inserted.rowcount == 0:
+        inserted = _merge(conn, history_batches, [{
+            "batch_id": batch_id, "well_id": well_id, "work_count": len(work_history),
+            "failure_count": len(failure_history), "payload_sha256": digest,
+            "created_at": datetime.now(timezone.utc)}], ("batch_id",))
+        if not inserted:
             existing = conn.execute(select(history_batches).where(
                 history_batches.c.batch_id == batch_id)).mappings().one()
             if existing["well_id"] != well_id or existing["payload_sha256"] != digest:
@@ -401,22 +506,17 @@ def save_history(well_id: str, requested_batch_id: str | None,
                     "work_records_received": len(work_history), "failure_records_received": len(failure_history),
                     "work_records_stored": existing["work_count"],
                     "failure_records_stored": existing["failure_count"], "idempotent_replay": True}
-        if encoded:
-            for event_type in ("work", "failure"):
-                event_rows = [{"batch_id": batch_id, "well_id": well_id, **item}
-                              for item in encoded if item["event_type"] == event_type]
-                for chunk in _chunks(event_rows):
-                    # rowcount is not reliable for multi-row INSERT ... ON CONFLICT DO NOTHING
-                    # with this driver, so count the rows actually inserted via RETURNING.
-                    statement = pg_insert(history_events).values(chunk).on_conflict_do_nothing(
-                        index_elements=[history_events.c.well_id, history_events.c.source_id,
-                                        history_events.c.event_type, history_events.c.event_fingerprint]
-                    ).returning(history_events.c.id)
-                    inserted_counts[event_type] += len(conn.execute(statement).all())
+        for event_type in ("work", "failure"):
+            event_rows = [{"batch_id": batch_id, "well_id": well_id, **item}
+                          for item in encoded if item["event_type"] == event_type]
+            if event_rows:
+                stored[event_type] = len(_merge(conn, history_events, event_rows,
+                                                ("well_id", "source_id", "event_type", "event_fingerprint"),
+                                                output="id"))
     return {"batch_id": batch_id, "well_id": well_id,
             "work_records_received": len(work_history), "failure_records_received": len(failure_history),
-            "work_records_stored": inserted_counts["work"],
-            "failure_records_stored": inserted_counts["failure"], "idempotent_replay": False}
+            "work_records_stored": stored["work"], "failure_records_stored": stored["failure"],
+            "idempotent_replay": False}
 
 
 def load_history_events(well_id: str) -> list[dict]:
@@ -432,149 +532,65 @@ def load_history_events(well_id: str) -> list[dict]:
 
 
 def load_history(well_id: str) -> dict[str, list]:
-    with engine().connect() as conn:
-        rows = conn.execute(select(history_events.c.event_type, history_events.c.payload_json)
-                            .where(history_events.c.well_id == well_id)
-                            .order_by(history_events.c.event_date, history_events.c.id)).all()
     work: list[WorkHistoryItem] = []
     failures: list[FailureHistoryItem] = []
-    for event_type, payload in rows:
-        (work if event_type == "work" else failures).append(
-            WorkHistoryItem.model_validate(payload) if event_type == "work"
-            else FailureHistoryItem.model_validate(payload))
+    for event in load_history_events(well_id):
+        if event["event_type"] == "work":
+            work.append(WorkHistoryItem.model_validate(event["payload"]))
+        else:
+            failures.append(FailureHistoryItem.model_validate(event["payload"]))
     return {"work_history": work, "failure_history": failures}
 
 
-def save_analysis_run(result: PipelineResult | dict, request_id: str | None = None,
-                      horizon_days: int | None = None) -> dict:
-    payload = result.model_dump(mode="json") if isinstance(result, PipelineResult) else result
-    analysis_id = payload["analysis_id"]
-    if horizon_days is None:
-        horizon_days = payload.get("horizon_days") or next(
-            (item.get("horizon_days") for item in payload.get("model_predictions", [])), None)
-    model_versions = {item["model_id"]: item["model_version"]
-                      for item in payload.get("model_predictions", [])}
-    created_at = datetime.now(timezone.utc)
+def record_source_status(source_id: str, well_id: str, status: str, message: str | None = None,
+                         record_count: int | None = None, origin: str = "api_refresh") -> dict:
+    row = {"source_id": source_id, "well_id": well_id,
+           "origin": origin if origin in _SOURCE_ORIGINS else "api_refresh", "status": status,
+           "message": message, "record_count": record_count, "retrieved_at": datetime.now(timezone.utc)}
     with engine().begin() as conn:
-        conn.execute(analysis_runs.insert().values(
-            analysis_id=analysis_id, well_id=payload["well_id"], request_id=request_id,
-            created_at=created_at, status=payload["status"], model_versions_json=model_versions,
-            result_json=payload, horizon_days=horizon_days,
-        ))
-    return {"analysis_id": analysis_id, "well_id": payload["well_id"],
-            "created_at": created_at.isoformat(), "status": payload["status"],
-            "model_versions": model_versions, "request_id": request_id, "horizon_days": horizon_days}
-
-
-def save_agent_result(analysis_id: str, well_id: str, agent_status: str,
-                      agent_response: dict | None, external_data: dict | None) -> bool:
-    """Store the AI report on its run and on sibling horizon runs from the same request.
-
-    A scheduled monitor run analyses each well on several horizons under one request_id but
-    requests a single AI report per well; the sibling runs get the same report so every
-    horizon row on the dashboard shows it, without paying for one LLM call per horizon.
-    """
-    values = dict(agent_status=agent_status, agent_updated_at=datetime.now(timezone.utc),
-                  agent_response_json=agent_response, external_data_json=external_data)
-    with engine().begin() as conn:
-        result = conn.execute(analysis_runs.update().where(
-            analysis_runs.c.analysis_id == analysis_id,
-            analysis_runs.c.well_id == well_id,
-        ).values(**values))
-        if result.rowcount != 1:
-            return False
-        request_id = conn.execute(select(analysis_runs.c.request_id).where(
-            analysis_runs.c.analysis_id == analysis_id)).scalar()
-        if request_id:
-            conn.execute(analysis_runs.update().where(
-                analysis_runs.c.well_id == well_id,
-                analysis_runs.c.request_id == request_id,
-                analysis_runs.c.analysis_id != analysis_id,
-                analysis_runs.c.agent_status.is_(None),
-            ).values(**values))
-        return True
-
-
-def get_analysis_run(analysis_id: str) -> dict | None:
-    with engine().connect() as conn:
-        row = conn.execute(select(analysis_runs).where(
-            analysis_runs.c.analysis_id == analysis_id)).mappings().first()
-    if row is None:
-        return None
-    return {"analysis_id": row["analysis_id"], "well_id": row["well_id"],
-            "request_id": row["request_id"], "created_at": row["created_at"].isoformat(),
-            "status": row["status"], "model_versions": row["model_versions_json"],
-            "analysis": row["result_json"], "agent_status": row["agent_status"],
-            "agent_updated_at": row["agent_updated_at"].isoformat() if row["agent_updated_at"] else None,
-            "agent_response": row["agent_response_json"], "external_data": row["external_data_json"]}
-
-
-def record_source_status(
-    source_id: str,
-    well_id: str,
-    status: str,
-    message: str | None = None,
-    record_count: int | None = None,
-    origin: str = "api_refresh",
-) -> dict:
-    origin = _normalize_origin(origin)
-    retrieved_at = datetime.now(timezone.utc)
-
-    statement = pg_insert(source_health).values(
-        source_id=source_id,
-        well_id=well_id,
-        origin=origin,
-        status=status,
-        message=message,
-        record_count=record_count,
-        retrieved_at=retrieved_at,
-    ).on_conflict_do_update(
-        index_elements=[
-            source_health.c.source_id,
-            source_health.c.well_id,
-            source_health.c.origin,
-        ],
-        set_={
-            "status": status,
-            "message": message,
-            "record_count": record_count,
-            "retrieved_at": retrieved_at,
-        },
-    )
-
-    with engine().begin() as conn:
-        conn.execute(statement)
-
-    return {
-        "source_id": source_id,
-        "well_id": well_id,
-        "origin": origin,
-        "status": status,
-        "message": message,
-        "record_count": record_count,
-        "retrieved_at": retrieved_at,
-    }
+        _merge(conn, source_health, [row], ("source_id", "well_id", "origin"),
+               update=("status", "message", "record_count", "retrieved_at"))
+    return row
 
 
 def list_source_statuses(well_id: str | None = None) -> list[dict]:
-    query = select(source_health)
+    query = select(source_health).order_by(source_health.c.source_id, source_health.c.well_id)
     if well_id is not None:
         query = query.where(source_health.c.well_id == well_id)
     with engine().connect() as conn:
-        return [dict(row) for row in conn.execute(query.order_by(source_health.c.source_id,
-                                                                 source_health.c.well_id)).mappings().all()]
+        return [dict(row) for row in conn.execute(query).mappings().all()]
+
+
+def effective_source_statuses(well_id: str | None = None) -> list[dict]:
+    """One status per (source, well): the latest from an API (push, pull, adapter, system) other than
+    not_configured, else the latest manual upload, else the latest row."""
+    grouped: dict[tuple[str, str], list[dict]] = {}
+    for row in list_source_statuses(well_id):
+        grouped.setdefault((str(row["source_id"]), str(row["well_id"])), []).append(row)
+    effective = []
+    for key in sorted(grouped):
+        items = sorted(grouped[key], key=lambda row: row["retrieved_at"], reverse=True)
+        live = next((row for row in items if row["origin"] in {"api_push", "api_refresh", "adapter", "system"}
+                     and row["status"] != "not_configured"), None)
+        manual = next((row for row in items if row["origin"] == "manual_upload"
+                       and row["status"] != "not_configured"), None)
+        if live is not None:
+            chosen = dict(live)
+        elif manual is not None:
+            chosen = dict(manual)
+            note = "Ручная загрузка активна; внешний источник не настроен."
+            chosen["message"] = f"{str(chosen.get('message') or '').strip()} {note}".strip()
+        else:
+            chosen = dict(items[0])
+        effective.append(chosen)
+    return effective
 
 
 def save_source_payload(source_id: str, well_id: str, payload: dict) -> None:
-    statement = pg_insert(source_documents).values(
-        source_id=source_id, well_id=well_id, payload_json=payload,
-        updated_at=datetime.now(timezone.utc),
-    ).on_conflict_do_update(
-        index_elements=[source_documents.c.source_id, source_documents.c.well_id],
-        set_={"payload_json": payload, "updated_at": datetime.now(timezone.utc)},
-    )
     with engine().begin() as conn:
-        conn.execute(statement)
+        _merge(conn, source_documents, [{"source_id": source_id, "well_id": well_id, "payload_json": payload,
+                                         "updated_at": datetime.now(timezone.utc)}],
+               ("source_id", "well_id"), update=("payload_json", "updated_at"))
 
 
 def load_source_payloads(well_id: str) -> dict[str, dict]:
@@ -584,134 +600,45 @@ def load_source_payloads(well_id: str) -> dict[str, dict]:
     return {source_id: payload for source_id, payload in rows}
 
 
-def latest_analysis_runs() -> list[dict]:
-    """Latest run for every (well_id, horizon_days) pair, read with one indexed query."""
-    query = (
-        select(analysis_runs)
-        .distinct(analysis_runs.c.well_id, analysis_runs.c.horizon_days)
-        .order_by(analysis_runs.c.well_id, analysis_runs.c.horizon_days,
-                  analysis_runs.c.created_at.desc())
-    )
+def load_extra_measurements(well_id: str) -> list[dict]:
+    """Rows with additional indicators (pH, hardness…) of a well, oldest first."""
+    extras = func.json_query(telemetry.c.payload_json, "$.extra_measurements")
+    query = (select(telemetry.c.source_id, telemetry.c.timestamp, extras.label("extras"))
+             .where(telemetry.c.well_id == well_id, func.left(extras, 1) == literal_column("'{'"))
+             .order_by(telemetry.c.timestamp, telemetry.c.id))
     with engine().connect() as conn:
         rows = conn.execute(query).mappings().all()
-    return [{
-        "analysis_id": row["analysis_id"], "well_id": row["well_id"],
-        "horizon_days": row["horizon_days"],
-        "created_at": row["created_at"].isoformat(), "status": row["status"],
-        "analysis": row["result_json"], "agent_response": row["agent_response_json"],
-        "agent_status": row["agent_status"],
-        "agent_updated_at": row["agent_updated_at"].isoformat() if row["agent_updated_at"] else None,
-    } for row in rows]
+    return [{"source_id": None if row["source_id"] == _UNSPECIFIED_SOURCE else row["source_id"],
+             "timestamp": row["timestamp"],
+             "extras": json.loads(row["extras"]) if isinstance(row["extras"], str) else row["extras"]}
+            for row in rows]
 
 
-def prune_analysis_runs(retention_days: int) -> int:
-    """Delete runs older than the retention window, always keeping the latest run per
-    (well_id, horizon_days) so the dashboard never loses a well. Returns rows deleted."""
-    if retention_days <= 0:
-        return 0
-    statement = text("""
-        DELETE FROM analysis_runs a
-        WHERE a.created_at < now() - make_interval(days => :days)
-          AND a.analysis_id NOT IN (
-              SELECT DISTINCT ON (well_id, horizon_days) analysis_id
-              FROM analysis_runs
-              ORDER BY well_id, horizon_days, created_at DESC
-          )
-    """)
-    with engine().begin() as conn:
-        return conn.execute(statement, {"days": retention_days}).rowcount or 0
-
-def effective_source_statuses(well_id: str | None = None) -> list[dict]:
-    rows = list_source_statuses(well_id)
-
-    grouped: dict[tuple[str, str], list[dict]] = {}
-    for row in rows:
-        key = (
-            str(row.get("source_id") or ""),
-            str(row.get("well_id") or ""),
-        )
-        grouped.setdefault(key, []).append(row)
-
-    effective: list[dict] = []
-    epoch = datetime.min.replace(tzinfo=timezone.utc)
-
-    def sort_key(row: dict):
-        value = row.get("retrieved_at")
-        if value is None:
-            return epoch
-        if value.tzinfo is None:
-            return value.replace(tzinfo=timezone.utc)
-        return value
-
-    for _, items in grouped.items():
-        items.sort(key=sort_key, reverse=True)
-
-        live = next(
-            (
-                row
-                for row in items
-                  if row.get("origin") in {"api_push", "api_refresh", "adapter", "system"}
-                and row.get("status") != "not_configured"
-            ),
-            None,
-        )
-
-        manual = next(
-            (
-                row
-                for row in items
-                if row.get("origin") == "manual_upload"
-                and row.get("status") != "not_configured"
-            ),
-            None,
-        )
-
-        if live is not None:
-            chosen = dict(live)
-        elif manual is not None:
-            chosen = dict(manual)
-            message = str(chosen.get("message") or "").strip()
-            note = "Ручная загрузка активна; внешний источник не настроен."
-            chosen["message"] = f"{message} {note}".strip() if message else note
-        else:
-            chosen = dict(items[0])
-
-        effective.append(chosen)
-
-    effective.sort(
-        key=lambda row: (
-            str(row.get("source_id") or ""),
-            str(row.get("well_id") or ""),
-        )
-    )
-
-    return effective
-
-
-# Arbitrary application-wide key for pg_try_advisory_lock: at most one monitor run at a time
-# across all API workers and replicas sharing the database.
-MONITOR_LOCK_KEY = 0x4D41494D4F4E  # "MAIMON"
-
-
-@contextmanager
-def advisory_lock(key: int) -> Iterator[bool]:
-    """Try to take a session-level advisory lock; yields whether it was acquired."""
+def well_has_data(well_id: str) -> bool:
+    """Whether any source data of the well remain: telemetry, history events or source documents."""
     with engine().connect() as conn:
-        acquired = bool(conn.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": key}).scalar())
-        conn.commit()
-        try:
-            yield acquired
-        finally:
-            if acquired:
-                conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": key})
-                conn.commit()
+        for table in (telemetry, history_events, source_documents):
+            if conn.execute(select(table.c.well_id).where(table.c.well_id == well_id).limit(1)).first():
+                return True
+    return False
 
 
-def create_monitor_job(job_id: str, horizon_days: int) -> dict:
-    row = {"job_id": job_id, "status": "queued", "horizon_days": horizon_days,
-           "created_at": datetime.now(timezone.utc)}
+def forget_well(well_id: str) -> None:
+    """Remove what was derived for a well that has no data left (its rating row and source
+    statuses), e.g. a well a deleted document had created."""
     with engine().begin() as conn:
-        conn.execute(monitor_jobs.insert().values(**row))
+        for table in (well_rating, source_health):
+            conn.execute(delete(table).where(table.c.well_id == well_id))
+
+
+# --------------------------------------------------------------------------- daily cycle jobs
+def _iso(value) -> str | None:
+    return value.isoformat() if value is not None else None
+
+
+def create_monitor_job(job_id: str) -> dict:
+    with engine().begin() as conn:
+        conn.execute(monitor_jobs.insert().values(job_id=job_id, status="queued", created_at=datetime.now(timezone.utc)))
     return get_monitor_job(job_id)
 
 
@@ -725,11 +652,9 @@ def get_monitor_job(job_id: str) -> dict | None:
         row = conn.execute(select(monitor_jobs).where(monitor_jobs.c.job_id == job_id)).mappings().first()
     if row is None:
         return None
-    iso = lambda value: value.isoformat() if value else None  # noqa: E731
-    return {"job_id": row["job_id"], "status": row["status"], "horizon_days": row["horizon_days"],
-            "created_at": iso(row["created_at"]), "started_at": iso(row["started_at"]),
-            "completed_at": iso(row["completed_at"]), "result": row["result_json"],
-            "error": row["error"]}
+    return {"job_id": row["job_id"], "status": row["status"], "created_at": _iso(row["created_at"]),
+            "started_at": _iso(row["started_at"]), "completed_at": _iso(row["completed_at"]),
+            "result": row["result_json"], "error": row["error"]}
 
 
 # --------------------------------------------------------------------------- well rating
@@ -737,25 +662,21 @@ def get_monitor_job(job_id: str) -> dict | None:
 COMPUTED_RATING_FIELDS = (
     "field", "equipment", "in_operation", "sampling", "corrosive_environment", "tonnage_t",
     "noo_days", "demount_act", "demount_corrosion", "base_act", "base_corrosion", "category",
-    "model_ntc", "model_math", "model_ntc_raw", "protection",
-    "installed_at", "liquid_rate_m3_day", "oil_pct", "data_gaps",
+    "model_ntc", "model_ntc_raw", "protection", "installed_at", "liquid_rate_m3_day", "oil_pct", "data_gaps",
 )
-# Edited by the operator on the dashboard; a recomputation never touches them.
+# Edited by the operator; a recomputation never touches them.
 OPERATOR_RATING_FIELDS = ("plan_date", "promine_status", "comment")
 
 
 def _rating_row(row) -> dict:
     data = dict(row)
-    for key in ("assessed_at", "updated_at", "measure_since", "computed_at", "installed_at", "ai_proposal_at"):
-        if data.get(key) is not None:
-            data[key] = data[key].isoformat()
-    if data.get("plan_date") is not None:
-        data["plan_date"] = data["plan_date"].isoformat()
+    for key in ("assessed_at", "updated_at", "measure_since", "computed_at", "installed_at", "ai_proposal_at",
+                "plan_date"):
+        data[key] = _iso(data.get(key))
     return data
 
 
-def save_computed_rating(well_id: str, values: dict, *, measure: str | None, provenance: dict,
-                         skip_reason: str | None, analysis_id: str | None) -> dict:
+def save_computed_rating(well_id: str, values: dict, *, measure: str | None, provenance: dict) -> dict:
     """Store a well's computed rating, keeping the operator fields.
 
     measure_since (the start of the measure deadline) moves only when the measure changes, so
@@ -763,8 +684,7 @@ def save_computed_rating(well_id: str, values: dict, *, measure: str | None, pro
     """
     now = datetime.now(timezone.utc)
     computed = {key: values.get(key) for key in COMPUTED_RATING_FIELDS}
-    computed.update(measure=measure, provenance=provenance, skip_reason=skip_reason,
-                    analysis_id=analysis_id, computed_at=now, assessed_at=now, updated_at=now,
+    computed.update(measure=measure, provenance=provenance, computed_at=now, assessed_at=now, updated_at=now,
                     source="computed")
     with engine().begin() as conn:
         old = conn.execute(select(well_rating.c.measure, well_rating.c.measure_since)
@@ -792,11 +712,10 @@ def get_rating_row(well_id: str) -> dict | None:
     return _rating_row(row) if row else None
 
 
-def rating_scores() -> list[tuple[str, float | None, float | None]]:
-    """(well_id, model_ntc, model_math) of every well: enough to rank one well without loading all rows."""
+def rating_scores() -> list[float | None]:
+    """The НТЦ score of every well: enough to rank one well without loading all rows."""
     with engine().connect() as conn:
-        return [tuple(row) for row in conn.execute(
-            select(well_rating.c.well_id, well_rating.c.model_ntc, well_rating.c.model_math)).all()]
+        return [row[0] for row in conn.execute(select(well_rating.c.model_ntc)).all()]
 
 
 def update_rating_row(well_id: str, values: dict) -> bool:
@@ -808,61 +727,11 @@ def update_rating_row(well_id: str, values: dict) -> bool:
         return result.rowcount == 1
 
 
-# --------------------------------------------------------------------------- ERA proposals
-def _proposal_row(row) -> dict:
-    data = dict(row)
-    for key in ("created_at", "sent_at"):
-        if data.get(key) is not None:
-            data[key] = data[key].isoformat()
-    if data.get("proposed_date") is not None:
-        data["proposed_date"] = data["proposed_date"].isoformat()
-    return data
-
-
-def create_era_proposal(values: dict) -> dict:
+def save_ai_proposal(well_id: str, proposal: dict) -> bool:
     with engine().begin() as conn:
-        conn.execute(era_proposals.insert().values(**values))
-    return get_era_proposal(values["proposal_id"])
-
-
-def update_era_proposal(proposal_id: str, **values) -> None:
-    with engine().begin() as conn:
-        conn.execute(era_proposals.update().where(era_proposals.c.proposal_id == proposal_id).values(**values))
-
-
-def get_era_proposal(proposal_id: str) -> dict | None:
-    with engine().connect() as conn:
-        row = conn.execute(select(era_proposals).where(
-            era_proposals.c.proposal_id == proposal_id)).mappings().first()
-    return _proposal_row(row) if row else None
-
-
-def list_era_proposals(well_id: str | None = None, limit: int = 100) -> list[dict]:
-    query = select(era_proposals).order_by(era_proposals.c.created_at.desc()).limit(limit)
-    if well_id is not None:
-        query = query.where(era_proposals.c.well_id == well_id)
-    with engine().connect() as conn:
-        return [_proposal_row(row) for row in conn.execute(query).mappings().all()]
-
-
-def latest_era_proposal(well_id: str) -> dict | None:
-    """The well's most recent proposal, with the same fields as latest_era_proposals()."""
-    query = (select(era_proposals.c.well_id, era_proposals.c.proposal_id, era_proposals.c.status,
-                    era_proposals.c.change_type, era_proposals.c.created_at)
-             .where(era_proposals.c.well_id == well_id).order_by(era_proposals.c.created_at.desc()).limit(1))
-    with engine().connect() as conn:
-        row = conn.execute(query).mappings().first()
-    return _proposal_row(row) if row else None
-
-
-def latest_era_proposals() -> dict[str, dict]:
-    """Most recent proposal per well, for the rating table."""
-    query = (select(era_proposals.c.well_id, era_proposals.c.proposal_id, era_proposals.c.status,
-                    era_proposals.c.change_type, era_proposals.c.created_at)
-             .distinct(era_proposals.c.well_id)
-             .order_by(era_proposals.c.well_id, era_proposals.c.created_at.desc()))
-    with engine().connect() as conn:
-        return {row["well_id"]: _proposal_row(row) for row in conn.execute(query).mappings().all()}
+        result = conn.execute(well_rating.update().where(well_rating.c.well_id == well_id).values(
+            ai_proposal=proposal, ai_proposal_at=datetime.now(timezone.utc)))
+        return result.rowcount == 1
 
 
 # --------------------------------------------------------------------------- documents
@@ -873,11 +742,8 @@ DOCUMENT_SUMMARY_COLUMNS = [column for column in DOCUMENT_LIST_COLUMNS if column
 
 def _document_row(row, with_text: bool = False) -> dict:
     data = dict(row)
-    for key in ("created_at", "started_at", "processed_at"):
-        if data.get(key) is not None:
-            data[key] = data[key].isoformat()
-    if data.get("doc_date") is not None:
-        data["doc_date"] = data["doc_date"].isoformat()
+    for key in ("created_at", "started_at", "processed_at", "doc_date"):
+        data[key] = _iso(data.get(key))
     if not with_text:
         data.pop("text", None)
     return data
@@ -888,11 +754,10 @@ def create_document(values: dict) -> tuple[dict, bool]:
 
     Returns (row, created)."""
     with engine().begin() as conn:
-        inserted = conn.execute(pg_insert(documents).values(**values).on_conflict_do_nothing(
-            index_elements=[documents.c.sha256]).returning(documents.c.document_id)).first()
+        created = bool(_merge(conn, documents, [values], ("sha256",), output="document_id"))
         row = conn.execute(select(*DOCUMENT_LIST_COLUMNS).where(
             documents.c.sha256 == values["sha256"])).mappings().one()
-    return _document_row(row), inserted is not None
+    return _document_row(row), created
 
 
 def get_document(document_id: str, with_text: bool = False) -> dict | None:
@@ -907,14 +772,16 @@ def list_documents(*, well_id: str | None = None, status: str | None = None, lim
     if status:
         query = query.where(documents.c.status == status)
     if well_id:
-        query = query.where(documents.c.well_ids.cast(JSONB).contains([well_id]))
+        query = query.where(text(
+            f"EXISTS (SELECT 1 FROM OPENJSON(documents.well_ids) "
+            f"WHERE [value] COLLATE {BINARY_COLLATION} = :mai_well_id)").bindparams(mai_well_id=well_id))
     with engine().connect() as conn:
         return [_document_row(row) for row in conn.execute(query).mappings().all()]
 
 
 def document_status_counts() -> dict[str, int]:
     with engine().connect() as conn:
-        rows = conn.execute(text("SELECT status, COUNT(*) FROM documents GROUP BY status")).all()
+        rows = conn.execute(select(documents.c.status, func.count()).group_by(documents.c.status)).all()
     return {status: count for status, count in rows}
 
 
@@ -927,31 +794,32 @@ def claim_next_document(document_id: str | None = None) -> dict | None:
     """Mark the oldest queued document (or the given one) as processing and return it; safe
     across workers. A document returned to the queue after a failed attempt waits
     MAI_DOCS_RETRY_MINUTES before the next automatic attempt."""
-    statement = text("""
-        UPDATE documents SET status = 'processing', started_at = :now, attempts = attempts + 1
-        WHERE document_id = (
-            SELECT document_id FROM documents
-            WHERE status = 'queued'
-              AND (CAST(:document_id AS varchar) IS NULL OR document_id = :document_id)
-              AND (CAST(:document_id AS varchar) IS NOT NULL OR started_at IS NULL
-                   OR started_at < :now - make_interval(mins => :retry))
-            ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1)
-        RETURNING document_id
-    """)
+    now = datetime.now(timezone.utc)
+    if document_id is not None:
+        condition, params = "document_id = :document_id", {"document_id": document_id}
+    else:
+        condition = "(started_at IS NULL OR started_at < :retry_before)"
+        params = {"retry_before": now - timedelta(minutes=settings.docs_retry_minutes)}
+    # READPAST skips a row another worker holds; UPDLOCK keeps the chosen one for this update.
+    statement = text(
+        f"WITH next AS (SELECT TOP (1) document_id, status, started_at, attempts "
+        f"FROM {qualified('documents')} WITH (UPDLOCK, READPAST, ROWLOCK) "
+        f"WHERE status = 'queued' AND {condition} ORDER BY created_at) "
+        f"UPDATE next SET status = 'processing', started_at = :now, attempts = attempts + 1 "
+        f"OUTPUT inserted.document_id;"
+    ).bindparams(bindparam("now", type_=UTCDateTime()), *(
+        [bindparam("retry_before", type_=UTCDateTime())] if "retry_before" in params else []))
     with engine().begin() as conn:
-        row = conn.execute(statement, {"now": datetime.now(timezone.utc), "document_id": document_id,
-                                       "retry": settings.docs_retry_minutes}).first()
+        row = conn.execute(statement, {"now": now, **params}).first()
     return get_document(row[0]) if row else None
 
 
 def requeue_stale_documents(older_than_minutes: int = 30) -> int:
     """Documents left in processing by a stopped worker go back to the queue."""
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=older_than_minutes)
     with engine().begin() as conn:
-        result = conn.execute(text("""
-            UPDATE documents SET status = 'queued'
-            WHERE status = 'processing' AND started_at < now() - make_interval(mins => :mins)
-        """), {"mins": older_than_minutes})
-    return result.rowcount or 0
+        return conn.execute(update(documents).where(documents.c.status == "processing", documents.c.started_at < cutoff)
+                            .values(status="queued")).rowcount or 0
 
 
 def delete_document_data(document_id: str, extra_batch_ids: Iterable[str] = ()) -> None:
@@ -965,62 +833,10 @@ def delete_document_data(document_id: str, extra_batch_ids: Iterable[str] = ()) 
         if extra:
             conn.execute(delete(ingestion_batches).where(ingestion_batches.c.batch_id.in_(extra)))
             conn.execute(delete(history_batches).where(history_batches.c.batch_id.in_(extra)))
-        conn.execute(text("""
-            DELETE FROM source_documents
-            WHERE (CAST(payload_json AS jsonb) ->> 'document_id') = :document_id
-        """), {"document_id": document_id})
+        conn.execute(delete(source_documents).where(
+            func.json_value(source_documents.c.payload_json, "$.document_id") == document_id))
 
 
 def delete_document_row(document_id: str) -> None:
     with engine().begin() as conn:
         conn.execute(delete(documents).where(documents.c.document_id == document_id))
-
-
-def load_extra_measurements(well_id: str) -> list[dict]:
-    """Rows with additional indicators (pH, hardness…) of a well, oldest first."""
-    query = text("""
-        SELECT source_id, timestamp, CAST(payload_json AS jsonb) -> 'extra_measurements' AS extras
-        FROM telemetry
-        WHERE well_id = :well_id
-          AND jsonb_typeof(CAST(payload_json AS jsonb) -> 'extra_measurements') = 'object'
-        ORDER BY timestamp, id
-    """)
-    with engine().connect() as conn:
-        rows = conn.execute(query, {"well_id": well_id}).mappings().all()
-    return [{"source_id": None if row["source_id"] == _UNSPECIFIED_SOURCE else row["source_id"],
-             "timestamp": row["timestamp"], "extras": row["extras"]} for row in rows]
-
-
-def well_has_data(well_id: str) -> bool:
-    """Whether any source data of the well remain: telemetry, history events or source documents."""
-    with engine().connect() as conn:
-        for table in (telemetry, history_events, source_documents):
-            if conn.execute(select(table.c.well_id).where(table.c.well_id == well_id).limit(1)).first():
-                return True
-    return False
-
-
-def forget_well(well_id: str) -> None:
-    """Remove what was derived for a well that has no data left (its rating row, analyses and
-    source statuses), e.g. a well a deleted document had created."""
-    with engine().begin() as conn:
-        for table in (well_rating, analysis_runs, source_health):
-            conn.execute(delete(table).where(table.c.well_id == well_id))
-
-
-def known_well_ids() -> list[str]:
-    """Wells the system knows from any source, the rating or MAI_WELL_IDS."""
-    query = text("""
-        SELECT well_id FROM telemetry UNION SELECT well_id FROM history_events
-        UNION SELECT well_id FROM well_rating UNION SELECT well_id FROM source_health
-    """)
-    with engine().connect() as conn:
-        wells = {row[0] for row in conn.execute(query).all()}
-    return sorted(wells | set(settings.configured_well_ids))
-
-
-def save_ai_proposal(well_id: str, proposal: dict) -> bool:
-    with engine().begin() as conn:
-        result = conn.execute(well_rating.update().where(well_rating.c.well_id == well_id).values(
-            ai_proposal=proposal, ai_proposal_at=datetime.now(timezone.utc)))
-        return result.rowcount == 1

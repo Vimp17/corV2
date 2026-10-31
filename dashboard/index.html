@@ -173,7 +173,6 @@
     .barline { display:grid; grid-template-columns:28px minmax(0,1fr) 30px; align-items:center; gap:6px; font-size:11px; color:var(--muted) }
     .bar { height:6px; background:#E5EAF0; border-radius:3px; overflow:hidden }
     .bar span { display:block; height:100%; background:var(--navy-3); border-radius:3px }
-    .bar.m span { background:var(--blue) }
     .num { font-variant-numeric:tabular-nums; text-align:right }
     .chip { display:inline-flex; align-items:center; padding:3px 9px; border-radius:12px; font-size:12px; font-weight:600; line-height:1.3 }
     .chip.repair { background:var(--repair-bg); color:var(--repair) } .chip.engineer { background:var(--engineer-bg); color:var(--engineer) } .chip.ud { background:var(--ud-bg); color:var(--ud) } .chip.none { background:var(--none-bg); color:var(--none) } .chip.unscored { background:#EEF1F4; color:var(--muted) }
@@ -181,8 +180,6 @@
     .cat.corrosive { color:var(--repair); border-color:#F3B8B3; background:#FFF7F6 } .cat.medium { color:var(--ud); border-color:#EBCF8F; background:#FFFBEF } .cat.noncorrosive { color:var(--none); border-color:#B7DDB9; background:#F6FBF6 } .cat.unknown { color:var(--muted); border-color:var(--line); background:#fff }
     .ev { display:inline-flex; justify-content:center; min-width:52px; padding:2px 6px; border-radius:4px; font-size:12px; font-weight:600 }
     .ev.bad { background:var(--repair-bg); color:var(--repair) } .ev.ok { background:var(--none-bg); color:var(--none) } .ev.na { background:#EEF1F4; color:var(--muted) }
-    .doc { font-size:12px; font-weight:600 }
-    .doc.not_created { color:var(--repair) } .doc.created { color:var(--ud) } .doc.sent { color:var(--none) }
 
     /* ППР schedule and well card */
     .split { display:flex; flex-wrap:wrap; gap:20px; align-items:flex-start }
@@ -199,10 +196,6 @@
     .drawer-idx strong.repair { color:var(--repair) } .drawer-idx strong.engineer { color:var(--engineer) } .drawer-idx strong.ud { color:var(--ud) } .drawer-idx strong.none { color:var(--none) }
     .iconbtn { flex:0 0 auto; width:36px; height:36px; border:1px solid var(--line); border-radius:4px; background:#fff; color:var(--navy); font-size:16px; line-height:1; cursor:pointer }
     .iconbtn:hover { background:var(--sky) } .iconbtn:disabled { opacity:.4; cursor:default }
-    .tabs { display:flex; gap:2px; overflow-x:auto; margin:0 -6px }
-    .tab { border:0; background:transparent; padding:10px 10px; font-weight:600; font-size:13px; color:var(--muted); border-bottom:2px solid transparent; cursor:pointer; white-space:nowrap }
-    .tab[aria-selected="true"] { color:var(--navy); border-bottom-color:var(--blue) }
-    .tabs[hidden] { display:none }
     .drawer-body { flex:1; overflow-y:auto; padding:16px 18px 28px; display:flex; flex-direction:column; gap:16px }
     @media (max-width: 900px) { .drawer { top:0; width:100vw; z-index:60 } }
     @media (prefers-reduced-motion: reduce) { .drawer, .drawer.open { transition:none } }
@@ -252,10 +245,6 @@
     .field.wide { grid-column:1 / -1 }
     .hint { font-size:12px; color:var(--muted) }
     .hint.warn { color:var(--ud) }
-    .proposal-list { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:8px }
-    .proposal-list li { font-size:12px; border-top:1px solid var(--line-2); padding-top:8px; display:flex; flex-direction:column; gap:4px }
-    .pstatus { font-weight:700 } .pstatus.sent { color:var(--none) } .pstatus.failed { color:var(--repair) } .pstatus.not_configured, .pstatus.queued { color:var(--ud) }
-    details.ai summary { cursor:pointer; color:var(--blue); font-size:13px; font-weight:600 }
 
     /* Data upload */
     /* Documents: upload, list with status, extracted fields with quotes */
@@ -381,7 +370,7 @@
       <div class="page-head">
         <div>
           <h1>Рейтинг скважин</h1>
-          <div class="sub" id="ratingSub">Индекс коррозии на НКТ 0–100 — более высокая из оценок моделей НТЦ и математической. По индексу рейтинг предлагает мероприятие.</div>
+          <div class="sub" id="ratingSub">Индекс коррозии на НКТ 0–100 — прогноз НТЦ × 100. По индексу рейтинг предлагает мероприятие.</div>
           <div class="datastate" id="dataState"></div>
         </div>
       </div>
@@ -402,7 +391,7 @@
         <div class="toolbar">
           <label>Поиск скважины <input id="search" type="search" placeholder="номер" autocomplete="off"></label>
           <label>Месторождение <select id="fieldFilter"><option value="">Все</option></select></label>
-          <label class="check" title="Скважины, по которым модели не рассчитаны (мало данных). В фильтрах «Нет данных» они видны всегда."><input id="showUnscored" type="checkbox"> Показывать без оценки <b id="unscoredCount"></b></label>
+          <label class="check" title="Скважины без индекса (мало данных для прогноза). В фильтрах «Нет данных» они видны всегда."><input id="showUnscored" type="checkbox"> Показывать без оценки <b id="unscoredCount"></b></label>
           <span class="sub" id="updated">Загрузка…</span>
           <span class="spacer-x"></span>
           <button class="btn secondary small" id="export" type="button">Скачать рейтинг (Excel)</button>
@@ -410,7 +399,7 @@
         <div class="table-box"><div class="table-inner">
           <div class="thead-wrap">
             <div class="grid-row thead" role="row">
-              <div>Место</div><div>Скважина</div><div>Индекс корро&shy;зии на НКТ</div><div>Прогноз НТЦ / Мат.</div><div>Мероприятие и предложение</div><div>Категория фонда</div>
+              <div>Место</div><div>Скважина</div><div>Индекс корро&shy;зии на НКТ</div><div>Прогноз НТЦ</div><div>Мероприятие и предложение</div><div>Категория фонда</div>
               <div>Среда</div><div title="Последний акт из истории ремонтов (ЭРА ремонта, документы) — исторические данные, а не текущее состояние скважины">Демонтаж<span class="hsub">исторические данные</span></div><div title="Последний акт из истории ремонтов (ЭРА ремонта, документы) — исторические данные, а не текущее состояние скважины">Разбор на базе<span class="hsub">исторические данные</span></div><div>Оборудование и защита</div>
               <div>Нара&shy;ботка, сут</div><div>Жидкость, м³ / нефть, л (%)</div><div>Полнота данных</div>
             </div>
@@ -506,14 +495,8 @@
         <button class="iconbtn" id="cardNext" type="button" aria-label="Следующая скважина в рейтинге" title="Следующая (↓)">↓</button>
         <button class="iconbtn" id="cardClose" type="button" aria-label="Закрыть карточку" title="Закрыть (Esc)">✕</button>
       </div>
-      <!-- «План и Промайн» и «Телеметрия и ИИ» временно скрыты: в карточке пока только обзор. -->
-      <div class="tabs" role="tablist" aria-label="Разделы карточки" hidden>
-        <button class="tab" role="tab" type="button" id="tab-overview" aria-controls="cardBody" data-tab="overview">Обзор</button>
-        <button class="tab" role="tab" type="button" id="tab-plan" aria-controls="cardBody" data-tab="plan">План и Промайн</button>
-        <button class="tab" role="tab" type="button" id="tab-telemetry" aria-controls="cardBody" data-tab="telemetry">Телеметрия и ИИ</button>
-      </div>
     </div>
-    <div class="drawer-body" id="cardBody" role="tabpanel"></div>
+    <div class="drawer-body" id="cardBody"></div>
   </aside>
 
   <script>
@@ -521,13 +504,8 @@
     const DAY = 86400000;
     const AUTO_REFRESH_SECONDS = 60;
     const TABLE_PAGE = 100;
-    const CHANGE_LABELS_FALLBACK = { include: 'Включить скважину в ЭРА ремонта', exclude: 'Исключить скважину из ЭРА ремонта', reschedule: 'Перенести сроки ремонта', scope: 'Изменить состав работ', other: 'Другое изменение ЭРА ремонта' };
-    const PROPOSAL_STATUS = { sent: 'отправлено', failed: 'ошибка отправки', not_configured: 'сохранено, отправка не настроена', queued: 'в очереди' };
-    const DOC_NEXT = { not_created: 'created', created: 'sent' };
-    const DOC_ACTION = { not_created: 'Отметить: документ сформирован', created: 'Отметить: направлен в ЭРА' };
-    const RISK_RU = { CRITICAL: 'критический', HIGH: 'высокий', MEDIUM: 'средний', LOW: 'низкий', UNKNOWN: 'нет оценки', DATA_ISSUE: 'не хватает данных', NOT_ANALYZED: 'не рассчитано' };
 
-    const state = { rating: null, telemetry: {}, filter: 'all', selected: null, busy: false, cardLocked: false, sources: null, cardTab: 'overview', drawerOpen: false, opener: null, tableLimit: 100, showUnscored: false };
+    const state = { rating: null, filter: 'all', selected: null, busy: false, sources: null, drawerOpen: false, opener: null, tableLimit: 100, showUnscored: false };
 
     // ---------------------------------------------------------------- helpers
     function el(tag, props = {}, ...children) {
@@ -575,18 +553,7 @@
       if (state.busy && options.auto) return;
       $('refresh').disabled = true;
       try {
-        // The analysis runs feed only the «Телеметрия и ИИ» tab: not requested while it is hidden.
-        const [rating, telemetry] = await Promise.all([
-          api('/api/v1/rating'),
-          CARD_TABS.includes('telemetry') ? api('/api/v1/dashboard/risk-ranking').catch(() => null) : null,
-        ]);
-        state.rating = rating;
-        state.telemetry = {};
-        for (const row of telemetry?.ranking || []) {
-          const current = state.telemetry[row.well_id];
-          // Prefer the 90-day horizon, else any analysed row.
-          if (!current || row.horizon_days === 90 || (current.horizon_days !== 90 && row.analysis_id && !current.analysis_id)) state.telemetry[row.well_id] = row;
-        }
+        state.rating = await api('/api/v1/rating');
         render();
         if (!state.hashChecked) { state.hashChecked = true; const fromLink = hashWell(); if (fromLink) openWell(fromLink); }
         if (!options.keepNotice) notice('');
@@ -599,8 +566,6 @@
     function render() {
       const { counts, settings, wells } = state.rating;
       renderAlerts(counts, settings);
-      const combine = settings.combine === 'mean' ? 'среднее оценок' : 'более высокая из оценок';
-      $('ratingSub').textContent = `Индекс коррозии на НКТ 0–100 — ${combine} моделей НТЦ и математической. По индексу рейтинг предлагает мероприятие.`;
       $('updated').textContent = `Обновлено ${fmtTime(state.rating.generated_at)}`;
       renderDataState(state.rating.data);
       renderTiles(settings.measures, counts);
@@ -608,7 +573,7 @@
       renderFieldFilter(wells);
       renderTable();
       renderGantt();
-      if (!state.cardLocked) renderCard();
+      renderCard();
     }
 
     const SOURCE_MODE = { api: 'API', adapter: 'API (адаптер)', adapter_missing: 'адаптер не установлен', upload: 'загрузка файлов' };
@@ -621,7 +586,7 @@
     }
 
     // «Полнота данных» by column of the table (the backend sends the same labels in settings.gap_labels).
-    const GAP_FALLBACK = { well: 'Скважина: месторождение, статус', forecast: 'Индекс и прогноз моделей', category: 'Категория фонда',
+    const GAP_FALLBACK = { well: 'Скважина: месторождение, статус', forecast: 'Индекс и прогноз НТЦ', category: 'Категория фонда',
       environment: 'Среда', sampling: 'Отбор проб', acts: 'Демонтаж и разбор', protection: 'Оборудование и защита', run_days: 'Наработка',
       liquid: 'Жидкость / нефть' };
     const GAP_SHORT = { well: 'Скважина', forecast: 'Прогноз', category: 'Категория', environment: 'Среда', sampling: 'Проба', acts: 'Акты',
@@ -766,7 +731,7 @@
       $('unscoredCount').textContent = unscored ? `(${unscored})` : '';
       if (!state.rating.wells.length) { $('rows').replaceChildren(emptyRating(state.rating.data || {})); return; }
       const showHidden = hidden ? el('button', { class: 'btn secondary small', type: 'button', text: `Показать без оценки (${hidden})`, onClick: () => setShowUnscored(true) }) : null;
-      if (!rows.length) { $('rows').replaceChildren(el('div', { class: 'empty' }, el('div', { text: hidden ? `Рассчитанных скважин нет; без оценки моделей — ${hidden}.` : 'Нет скважин с выбранными условиями.' }), showHidden ? el('div', { class: 'row', style: 'justify-content:center; margin-top:8px' }, showHidden) : null)); return; }
+      if (!rows.length) { $('rows').replaceChildren(el('div', { class: 'empty' }, el('div', { text: hidden ? `Рассчитанных скважин нет; без оценки — ${hidden}.` : 'Нет скважин с выбранными условиями.' }), showHidden ? el('div', { class: 'row', style: 'justify-content:center; margin-top:8px' }, showHidden) : null)); return; }
       // Long ratings are shown in pages: the table is redrawn on every automatic refresh.
       const shown = rows.slice(0, state.tableLimit);
       const more = rows.length - shown.length;
@@ -774,7 +739,7 @@
         more ? el('span', { text: `Показаны ${shown.length} из ${rows.length}.` }) : null,
         more ? el('button', { class: 'btn secondary small', type: 'button', text: `Показать ещё ${Math.min(TABLE_PAGE, more)}`, onClick: () => { state.tableLimit += TABLE_PAGE; renderTable(); } }) : null,
         more > TABLE_PAGE ? el('button', { class: 'btn secondary small', type: 'button', text: 'Показать все', onClick: () => { state.tableLimit = Infinity; renderTable(); } }) : null,
-        hidden ? el('span', { text: `Скрыто без оценки моделей: ${hidden}.` }) : null, showHidden) : null;
+        hidden ? el('span', { text: `Скрыто без оценки: ${hidden}.` }) : null, showHidden) : null;
       $('rows').replaceChildren(...shown.map(w => {
         const key = measureKey(w);
         return el('div', { class: `grid-row trow${state.selected === w.well_id && state.drawerOpen ? ' sel' : ''}${key === 'none' ? ' muted' : ''}`, role: 'row', 'data-well': w.well_id, style: 'cursor:pointer', onClick: (event) => openWell(w.well_id, event.target.closest('button') || event.currentTarget) },
@@ -785,7 +750,7 @@
           el('div', { style: 'display:flex; flex-direction:column' },
             el('strong', { class: `idxnum ${key}`, style: 'font-size:18px; line-height:1.1; font-variant-numeric:tabular-nums', text: w.index ?? '—' }),
             w.protection_adjusted ? el('span', { class: 'sub', style: 'font-size:10px; line-height:1.2', title: `Без учёта защиты: ${w.index_raw}`, text: `было ${w.index_raw}` }) : null),
-          el('div', { 'data-label': 'Прогноз НТЦ / Мат.' }, el('div', { class: 'fc' }, barLine('НТЦ', w.model_ntc, ''), barLine('Мат.', w.model_math, 'm'))),
+          el('div', { 'data-label': 'Прогноз НТЦ' }, el('div', { class: 'fc' }, barLine('НТЦ', w.model_ntc, ''))),
           el('div', { 'data-label': 'Мероприятие' }, el('div', { style: 'display:flex; flex-direction:column; align-items:flex-start; gap:2px' },
             el('span', { class: `mchip ${key}`, text: w.measure ? (w.measure === 'none' ? 'Не требуются' : w.measure_code) : 'Нет оценки' }),
             el('span', { style: 'font-size:11px', text: w.action || '' }))),
@@ -889,11 +854,8 @@
     }
     function openWell(wellId, opener) {
       if (!state.rating?.wells.some(w => w.well_id === wellId)) return;
-      const switching = state.drawerOpen && state.selected !== wellId;
       if (!state.drawerOpen) state.opener = opener || document.activeElement;
-      if (switching && state.cardLocked && !confirm('Несохранённые изменения в карточке будут потеряны. Открыть другую скважину?')) return;
       state.selected = wellId;
-      state.cardLocked = false;
       state.drawerOpen = true;
       const drawer = $('wellDrawer');
       drawer.classList.add('open');
@@ -908,7 +870,6 @@
     function closeWell() {
       if (!state.drawerOpen) return;
       state.drawerOpen = false;
-      state.cardLocked = false;
       const drawer = $('wellDrawer');
       drawer.classList.remove('open');
       drawer.setAttribute('aria-hidden', 'true');
@@ -929,13 +890,6 @@
       const next = list[index + delta];
       if (next) openWell(next.well_id);
     }
-    function setCardTab(tab) {
-      if (state.cardLocked && tab !== state.cardTab && !confirm('Несохранённые изменения будут потеряны. Перейти на другую вкладку?')) return;
-      state.cardTab = tab;
-      state.cardLocked = false;
-      renderCard();
-    }
-
     // Where a rating value came from: "ДАРС · 14.10.2026", plus the note, as a small line.
     function provLine(w, key) {
       const p = (w.provenance || {})[key];
@@ -951,20 +905,6 @@
           el('dd', { class: cls || (v === '—' ? 'na' : '') }, v, w && key ? provLine(w, key) : null)])));
     }
 
-    function proposalText(w) {
-      const deadline = w.deadline ? fmtIso(w.deadline) : '';
-      switch (w.measure) {
-        case 'repair': return `Плановый комплекс мероприятий по ремонту до ${deadline}. Скважина включается в ЭРА ремонта: Промайн формирует документ на включение.`;
-        case 'engineer': return `Индекс ${w.index} выше порога УД, но ниже порога планового комплекса по ремонту. Мероприятие назначает инженер до ${deadline}.`;
-        case 'ud': return `УДР до ${deadline}.`;
-        case 'none': return 'Мероприятия не требуются.';
-        default: return w.skip_reason
-          ? `Модели не рассчитаны: ${w.skip_reason}`
-          : 'Модели ещё не рассчитаны: нажмите «Пересчитать скважину» или выполните дневной цикл.';
-      }
-    }
-
-    const CARD_TABS = ['overview'];
     function renderCard() {
       if (!state.drawerOpen) return;
       const w = state.rating?.wells.find(item => item.well_id === state.selected);
@@ -978,20 +918,13 @@
       const position = order.findIndex(item => item.well_id === w.well_id);
       $('cardPrev').disabled = position <= 0;
       $('cardNext').disabled = position < 0 || position >= order.length - 1;
-      document.querySelectorAll('#wellDrawer .tab').forEach(tab => tab.setAttribute('aria-selected', String(tab.dataset.tab === state.cardTab)));
-      $('cardBody').setAttribute('aria-labelledby', `tab-${state.cardTab}`);
-      // Only the overview for now; the other tabs are hidden (CARD_TABS) to keep the card light.
-      const tab = CARD_TABS.includes(state.cardTab) ? state.cardTab : 'overview';
-      const body = tab === 'plan' ? planTab(w) : tab === 'telemetry' ? [telemetryBox(w)] : overviewTab(w, key);
-      $('cardBody').replaceChildren(...body);
+      $('cardBody').replaceChildren(...overviewTab(w, key));
     }
 
     function overviewTab(w, key) {
       const body = [];
-      body.push(el('div', { class: 'bars' }, barLine('Модель НТЦ', w.model_ntc, '', true), provLine(w, 'model_ntc'),
-        barLine('Мат. модель', w.model_math, 'm', true), provLine(w, 'model_math')));
-      const prop = el('div', { class: `prop ${key}` }, el('h3', { text: `Предложение рейтинга: ${w.measure_label}` }), el('div', { style: 'font-size:13px', text: w.action || proposalText(w) }));
-      if (w.skip_reason && !w.measure) prop.append(el('div', { style: 'font-size:12px', text: w.skip_reason }));
+      body.push(el('div', { class: 'bars' }, barLine('Прогноз НТЦ', w.model_ntc, '', true), provLine(w, 'model_ntc')));
+      const prop = el('div', { class: `prop ${key}` }, el('h3', { text: `Предложение рейтинга: ${w.measure_label}` }), el('div', { style: 'font-size:13px', text: w.action }));
       if (w.protection_adjusted) prop.append(el('div', { style: 'font-size:13px', text: `С учётом подтверждённой защиты индекс снижен с ${w.index_raw} до ${w.index}.` }));
       body.push(prop);
       const [aiBox, docsBox, extrasBox] = aiBoxes(w);
@@ -1035,141 +968,19 @@
         ['Рейтинг рассчитан', w.computed_at ? fmtTime(w.computed_at) : 'ещё не рассчитан']], w));
       body.push(el('div', { style: 'display:flex; flex-wrap:wrap; gap:8px; align-items:center' },
         el('button', { class: 'btn secondary small', type: 'button', text: 'Пересчитать скважину', onClick: (event) => recomputeWell(w.well_id, event.currentTarget) }),
-        el('span', { class: 'hint', text: 'Запрос данных из настроенных API, расчёт риска и рейтинга.' })));
+        el('span', { class: 'hint', text: 'Запрос данных из настроенных API и пересчёт рейтинга.' })));
       return body;
-    }
-
-    function planTab(w) {
-      const body = [];
-      if (w.era_required || w.promine_status) {
-        const status = w.promine_status || 'not_created';
-        const box = el('div', { class: 'box' }, el('h3', { text: 'Документ Промайн на включение в ЭРА ремонта' }),
-          el('div', { style: 'font-size:13px' }, 'Статус: ', el('span', { class: `doc ${status}`, text: (w.promine_status_label || 'Не сформирован').toLowerCase().replace('эра', 'ЭРА') })));
-        if (DOC_NEXT[status]) box.append(el('div', {}, el('button', { class: 'btn', type: 'button', onClick: (event) => patchWell(w.well_id, { promine_status: DOC_NEXT[status] }, event.currentTarget, 'Статус документа обновлён.'), text: DOC_ACTION[status] })));
-        body.push(box);
-      }
-      body.push(planBox(w));
-      body.push(proposalBox(w));
-      return body;
-    }
-
-    function planBox(w) {
-      const dateInput = el('input', { type: 'date', value: w.plan_date || '', id: 'planDate' });
-      const comment = el('textarea', { id: 'planComment', maxlength: '2000', rows: '2' });
-      comment.value = w.comment || '';
-      const lock = () => { state.cardLocked = true; };
-      dateInput.addEventListener('input', lock); comment.addEventListener('input', lock);
-      const statusCls = w.plan_status === 'late' ? 'bad' : w.plan_status === 'on_time' ? 'ok' : (w.plan_status === 'not_planned' ? 'bad' : '');
-      const save = el('button', { class: 'btn secondary small', type: 'submit', text: 'Сохранить план и комментарий' });
-      return el('div', { style: 'display:flex; flex-direction:column; gap:6px' },
-        dlGroup('График ППР (ДДО)', [['Крайний срок', w.deadline ? fmtIso(w.deadline) : '—'], ['Статус плана', w.plan_status_label || '—', statusCls]]),
-        el('form', { class: 'form-grid', onSubmit: (event) => { event.preventDefault(); patchWell(w.well_id, { plan_date: dateInput.value || null, comment: comment.value.trim() || null }, save, 'План и комментарий сохранены.'); } },
-          el('label', { class: 'field' }, 'План ППР (ДДО)', dateInput),
-          el('label', { class: 'field wide' }, 'Комментарий', comment),
-          el('div', {}, save)));
-    }
-
-    function proposalBox(w) {
-      const promine = state.rating.settings.promine;
-      const changeTypes = state.rating.settings.change_types?.length ? state.rating.settings.change_types : Object.entries(CHANGE_LABELS_FALLBACK).map(([key, label]) => ({ key, label }));
-      const defaultType = w.era_required && w.promine_status !== 'sent' ? 'include' : (w.measure === 'none' && w.promine_status ? 'exclude' : 'reschedule');
-      const type = el('select', { id: 'pType' }, changeTypes.map(t => el('option', { value: t.key, text: t.label, selected: t.key === defaultType })));
-      const date = el('input', { type: 'date', id: 'pDate', value: w.plan_date || '' });
-      const reason = el('textarea', { id: 'pReason', required: true, minlength: '10', maxlength: '4000', placeholder: 'Почему нужно изменить ЭРА ремонта: факты осмотра, разбора, проб, риски.' });
-      let author; try { author = localStorage.getItem('maiAuthor') || ''; } catch { author = ''; }
-      const authorInput = el('input', { id: 'pAuthor', maxlength: '200', value: author, placeholder: 'ФИО, должность' });
-      [type, date, reason, authorInput].forEach(node => node.addEventListener('input', () => { state.cardLocked = true; }));
-      const submit = el('button', { class: 'btn', type: 'submit', text: promine.ready ? 'Отправить в Промайн' : 'Сохранить предложение' });
-      const list = el('ul', { class: 'proposal-list', id: 'proposalList' }, el('li', { class: 'sub', text: 'Загружаем отправленные предложения…' }));
-      const form = el('form', { class: 'form-grid', onSubmit: async (event) => {
-        event.preventDefault();
-        if (reason.value.trim().length < 10) { reason.focus(); notice('Опишите причину подробнее — не меньше 10 символов.', 'warning'); return; }
-        try { localStorage.setItem('maiAuthor', authorInput.value.trim()); } catch { /* storage may be unavailable */ }
-        submit.disabled = true;
-        try {
-          const result = await postJson('/api/v1/promine/era-proposals', { well_id: w.well_id, change_type: type.value, reason: reason.value.trim(), proposed_date: date.value || null, author: authorInput.value.trim() || null });
-          const message = result.status === 'sent' ? `Предложение по скважине ${w.well_id} отправлено в Промайн.`
-            : result.status === 'not_configured' ? `Предложение сохранено, но не отправлено: ${result.error}`
-            : `Предложение сохранено, отправка не удалась: ${result.error || 'см. журнал'}. Можно отправить повторно.`;
-          notice(message, result.status === 'sent' ? '' : 'warning');
-          reason.value = '';
-          state.cardLocked = false;
-          await refresh({ keepNotice: true });
-        } catch (error) { notice(error.message, 'error'); }
-        finally { submit.disabled = false; }
-      } },
-        el('label', { class: 'field' }, 'Что изменить', type),
-        el('label', { class: 'field' }, 'Желаемая дата', date),
-        el('label', { class: 'field wide' }, 'Причина (обязательно)', reason),
-        el('label', { class: 'field wide' }, 'Автор', authorInput),
-        el('div', { class: 'field wide' }, el('div', { class: `hint${promine.ready ? '' : ' warn'}`, text: promine.message }), el('div', {}, submit)));
-      const box = el('div', { class: 'box' }, el('h3', { text: 'Предложение по изменению ЭРА ремонта' }),
-        el('div', { class: 'hint', text: 'Письмо уйдёт в Промайн с данными рейтинга по скважине и указанной причиной.' }), form,
-        el('div', { style: 'display:flex; flex-direction:column; gap:6px' }, el('h3', { class: 'group-title', text: 'Отправленные предложения' }), list));
-      loadProposals(w.well_id, list);
-      return box;
-    }
-
-    async function loadProposals(wellId, list) {
-      try {
-        const { proposals } = await api(`/api/v1/promine/era-proposals?well_id=${encodeURIComponent(wellId)}&limit=10`);
-        if (!proposals.length) { list.replaceChildren(el('li', { class: 'sub', text: 'Предложений пока нет.' })); return; }
-        list.replaceChildren(...proposals.map(p => el('li', {},
-          el('div', {}, el('span', { class: `pstatus ${p.status}`, text: PROPOSAL_STATUS[p.status] || p.status }), ` · ${fmtTime(p.created_at)} · ${(state.rating.settings.change_types || []).find(t => t.key === p.change_type)?.label || p.change_type}`),
-          el('div', { text: p.reason }),
-          el('div', { class: 'sub', text: [p.author ? `Автор: ${p.author}` : null, p.proposed_date ? `Желаемая дата: ${fmtIso(p.proposed_date)}` : null, p.error && p.status !== 'sent' ? p.error : null].filter(Boolean).join(' · ') || null }),
-          p.status !== 'sent' ? el('div', {}, el('button', { class: 'btn secondary small', type: 'button', text: 'Отправить повторно', onClick: async (event) => {
-            const button = event.currentTarget; button.disabled = true;
-            try { const r = await api(`/api/v1/promine/era-proposals/${encodeURIComponent(p.proposal_id)}/resend`, { method: 'POST' }); notice(r.status === 'sent' ? 'Предложение отправлено в Промайн.' : `Не отправлено: ${r.error}`, r.status === 'sent' ? '' : 'warning'); await refresh({ keepNotice: true }); }
-            catch (error) { notice(error.message, 'error'); button.disabled = false; }
-          } })) : null)));
-      } catch (error) { list.replaceChildren(el('li', { class: 'sub', text: error.message })); }
-    }
-
-    function telemetryBox(w) {
-      const t = state.telemetry[w.well_id];
-      const box = el('div', { class: 'box' }, el('h3', { text: 'Расчёт по телеметрии' }));
-      const hasTelemetry = Boolean(t && t.telemetry_records > 0);
-      if (!t || !t.analysis_id) {
-        box.append(el('div', { class: 'hint', text: hasTelemetry ? 'Телеметрия загружена, расчёт ещё не выполнялся.' : 'Телеметрии по скважине нет. Загрузите DARS или ХИМИК в разделе «Загрузка данных».' }));
-      } else {
-        box.append(el('dl', { class: 'dl' },
-          el('dt', { text: 'Класс риска (правила)' }), el('dd', { class: ['CRITICAL', 'HIGH'].includes(t.risk_class) ? 'bad' : '', text: `${RISK_RU[t.risk_class] || t.risk_class}${t.risk_points !== null && t.risk_points !== undefined ? ', ' + t.risk_points + ' баллов' : ''}` }),
-          el('dt', { text: 'Горизонт / расчёт' }), el('dd', { text: `${t.horizon_days ? t.horizon_days + ' дн.' : '—'} · ${fmtTime(t.updated_at)}` })));
-        if (t.ai_report) {
-          box.append(el('details', { class: 'ai' }, el('summary', { text: `Справка ИИ (${(t.ai_report.recommended_actions || []).length} действий)` }),
-            el('p', { style: 'margin:8px 0 0; font-size:13px', text: t.ai_report.executive_summary || '' }),
-            el('ul', { style: 'margin:6px 0 0; padding-left:18px; font-size:12px' }, (t.ai_report.recommended_actions || []).map(a => el('li', { text: `${a.priority || '—'}: ${a.title || ''} — ${a.instruction || ''}` })))));
-        } else {
-          box.append(el('div', { class: 'hint', text: 'Справки ИИ по последнему расчёту нет.' }));
-        }
-      }
-      if (hasTelemetry) {
-        box.append(el('div', {}, el('button', { class: 'btn secondary small', type: 'button', text: 'Пересчитать и запросить справку ИИ', onClick: (event) => analyzeWell(w.well_id, event.currentTarget) })));
-      }
-      return box;
-    }
-
-    async function patchWell(wellId, values, button, message) {
-      if (button) button.disabled = true;
-      try { await postJson(`/api/v1/rating/wells/${encodeURIComponent(wellId)}`, values, 'PATCH'); state.cardLocked = false; notice(message); await refresh({ keepNotice: true }); }
-      catch (error) { notice(error.message, 'error'); if (button) button.disabled = false; }
-    }
-
-    async function createReport(analysisId, wellId) {
-      const [run, external] = await Promise.all([api(`/api/v1/analysis/runs/${encodeURIComponent(analysisId)}`), api(`/api/v1/monitor/wells/${encodeURIComponent(wellId)}/external-data`)]);
-      return postJson('/api/v1/agent/well', { analysis_id: analysisId, context: run.analysis.context, external_data: external });
     }
 
     async function recomputeWell(wellId, button) {
       button.disabled = true; state.busy = true; notice(`Пересчитывается скважина ${wellId}…`);
       try {
-        const result = await postJson(`/api/v1/monitor/wells/${encodeURIComponent(wellId)}/analyze`, { horizon_days: state.rating.settings.horizon_days || 90 });
-        notice(result.status === 'skipped_insufficient_data'
-          ? `Рейтинг скважины ${wellId} обновлён без оценок моделей: ${result.operator_message}`
-          : `Рейтинг скважины ${wellId} пересчитан.`, result.status === 'skipped_insufficient_data' ? 'warning' : '');
+        const w = await api(`/api/v1/monitor/wells/${encodeURIComponent(wellId)}/analyze`, { method: 'POST' });
+        const scored = w.index !== null && w.index !== undefined;
+        notice(scored ? `Рейтинг скважины ${wellId} пересчитан.`
+          : `Рейтинг скважины ${wellId} обновлён без индекса: мало данных для прогноза (подробности в карточке).`, scored ? '' : 'warning');
       } catch (error) { notice(error.message, 'error'); }
-      finally { state.busy = false; state.cardLocked = false; await refresh({ keepNotice: true }); }
+      finally { state.busy = false; await refresh({ keepNotice: true }); }
     }
 
     async function exportRating(button) {
@@ -1186,20 +997,7 @@
       finally { button.disabled = false; }
     }
 
-    async function analyzeWell(wellId, button) {
-      button.disabled = true; state.busy = true; notice(`Пересчитывается скважина ${wellId}…`);
-      try {
-        const result = await postJson(`/api/v1/monitor/wells/${encodeURIComponent(wellId)}/analyze`, { horizon_days: 90 });
-        if (result.status === 'skipped_insufficient_data') notice(`${result.operator_message}\n${(result.requested_data || []).map(item => '• ' + item).join('\n')}`, 'warning');
-        else {
-          try { await createReport(result.analysis_id, result.well_id); notice(`Риск по телеметрии рассчитан, справка ИИ сохранена для ${wellId}.`); }
-          catch (error) { notice(`Риск рассчитан, справка ИИ не получена: ${error.message}`, 'warning'); }
-        }
-      } catch (error) { notice(error.message, 'error'); }
-      finally { state.busy = false; await refresh({ keepNotice: true }); }
-    }
-
-    // ---------------------------------------------------------------- daily cycle (telemetry monitor)
+    // ---------------------------------------------------------------- daily cycle
     async function waitForJob(jobId) {
       const started = Date.now();
       for (;;) {
@@ -1207,18 +1005,25 @@
         const job = await api(`/api/v1/monitor/jobs/${encodeURIComponent(jobId)}`);
         if (job.status === 'completed') return job.result;
         if (job.status === 'failed' || job.status === 'rejected') throw new Error(job.error || 'Расчёт не выполнен; подробности в журнале backend.');
-        notice(`Запрашиваются данные из источников, рассчитываются риск и рейтинг… прошло ${Math.round((Date.now() - started) / 1000)} с.`);
+        notice(`Запрашиваются данные из источников, пересчитывается рейтинг… прошло ${Math.round((Date.now() - started) / 1000)} с.`);
       }
     }
+    // As the daily n8n workflow: the cycle, then an AI proposal for every well awaiting a decision.
     async function runNow() {
-      state.busy = true; $('run').disabled = true; notice('Запрашиваются данные из источников, рассчитываются риск и рейтинг…');
+      state.busy = true; $('run').disabled = true; notice('Запрашиваются данные из источников, пересчитывается рейтинг…');
       try {
-        const job = await postJson('/api/v1/monitor/run?background=true', { horizon_days: 90 });
+        const job = await api('/api/v1/monitor/run?background=true', { method: 'POST' });
         const result = await waitForJob(job.job_id);
-        let reports = 0, errors = 0;
-        for (const alert of result.alerts || []) { try { await createReport(alert.analysis_id, alert.well_id); reports++; } catch { errors++; } }
-        const head = `${result.message} Рейтинг пересчитан.`;
-        notice((result.alerts || []).length ? `${head} Справки ИИ: ${reports}/${result.alerts.length}${errors ? `, ошибок: ${errors}` : ''}.` : `${head} Рискованных скважин по телеметрии нет.`, errors ? 'warning' : '');
+        const alerts = result.alerts || [];
+        const ai = Boolean(state.rating?.settings?.ai_agent_configured);
+        let done = 0, errors = 0;
+        for (const alert of ai ? alerts : []) {
+          notice(`${result.message} ИИ-агент готовит предложения: ${done + errors + 1} из ${alerts.length}…`);
+          try { await api(`/api/v1/rating/wells/${encodeURIComponent(alert.well_id)}/ai-proposal`, { method: 'POST' }); done++; } catch { errors++; }
+        }
+        const tail = !alerts.length ? '' : ai ? ` Предложения ИИ: ${done} из ${alerts.length}${errors ? `, ошибок: ${errors}` : ''}.`
+          : ' ИИ-агент не настроен — предложения не готовились.';
+        notice(`${result.message} Рейтинг пересчитан.${tail}`, errors ? 'warning' : '');
       } catch (error) { notice(error.message, 'error'); }
       finally { $('run').disabled = false; state.busy = false; await refresh({ keepNotice: true }); }
     }
@@ -1595,7 +1400,7 @@
       const parts = [el('div', { style: 'display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:space-between' }, el('h3', { text: 'Предложение ИИ-агента' }), button)];
       if (!detail.ai_agent_configured) parts.push(el('div', { class: 'hint warn', text: 'ИИ-агент не настроен: задайте MAI_LLM_API_URL и MAI_LLM_MODEL.' }));
       if (!p) {
-        parts.push(el('div', { class: 'hint', text: 'Агент учтёт рейтинг и прогнозы моделей, акты, химию, защиту, документы, расписание бригад и примеры мер реагирования. Чего нет в данных — укажет отдельно.' }));
+        parts.push(el('div', { class: 'hint', text: 'Агент учтёт рейтинг и прогноз НТЦ, акты, химию, защиту, документы, расписание бригад и примеры мер реагирования. Чего нет в данных — укажет отдельно.' }));
         box.replaceChildren(...parts);
         return;
       }
@@ -1690,12 +1495,11 @@
     try { state.showUnscored = localStorage.getItem('maiShowUnscored') === '1'; } catch { /* storage may be unavailable */ }
     $('showUnscored').checked = state.showUnscored;
     $('showUnscored').addEventListener('change', () => setShowUnscored($('showUnscored').checked));
-    $('refresh').addEventListener('click', () => { state.cardLocked = false; refresh(); loadSources(); loadDocuments(); });
+    $('refresh').addEventListener('click', () => { refresh(); loadSources(); loadDocuments(); });
     $('run').addEventListener('click', runNow);
     $('cardClose').addEventListener('click', closeWell);
     $('cardPrev').addEventListener('click', () => stepWell(-1));
     $('cardNext').addEventListener('click', () => stepWell(1));
-    document.querySelectorAll('#wellDrawer .tab').forEach(tab => tab.addEventListener('click', () => setCardTab(tab.dataset.tab)));
     document.addEventListener('keydown', (event) => {
       if (!state.drawerOpen) return;
       const typing = event.target.closest('input, textarea, select, [contenteditable]');
@@ -1705,7 +1509,6 @@
     // A click outside the card closes it, except on another well (that switches the card).
     document.addEventListener('pointerdown', (event) => {
       if (!state.drawerOpen || $('wellDrawer').contains(event.target) || event.target.closest('[data-well], .notice')) return;
-      if (state.cardLocked) return;
       closeWell();
     });
     window.addEventListener('hashchange', () => { const id = hashWell(); if (id && id !== state.selected) openWell(id); else if (!id && state.drawerOpen && location.hash === '') closeWell(); });

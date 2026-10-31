@@ -8,7 +8,7 @@ import tests.conftest  # noqa: F401  (settings environment)
 
 from app.core.features import build_features
 from app.core.normalization import normalize_records
-from app.core.readiness import assess_readiness
+from app.core.readiness import assess
 from app.schemas import TelemetryPoint
 
 NOW = datetime.now(timezone.utc).replace(microsecond=0)
@@ -26,21 +26,18 @@ def test_lab_value_is_carried_for_the_sampling_window():
     records = sorted(_daily() + [_point(10, "KHIMIK", chlorides_mg_l=60000),
                                  _point(10, "DARS_OLD", inhibitor_efficiency=0.9)],
                      key=lambda point: point.timestamp)
-    normalized, report = normalize_records(records, 7, sample_fill_days=30, sample_sources={"KHIMIK"})
-    current = build_features("W", normalized).current_values
+    current = build_features(normalize_records(records, 7, sample_fill_days=30,
+                                               sample_sources={"KHIMIK"})).current_values
     assert current["chlorides_mg_l"] == 60000          # sample 10 days old still counts (30-day window)
     assert current["inhibitor_efficiency"] is None     # telemetry value 10 days old has expired (7 days)
-    assert report.sample_fill_limit_days == 30
     # Without the sample sources the old behaviour stays: 7 days for every value.
-    normalized, _ = normalize_records(records, 7)
-    assert build_features("W", normalized).current_values["chlorides_mg_l"] is None
+    assert build_features(normalize_records(records, 7)).current_values["chlorides_mg_l"] is None
 
 
 def test_registry_snapshot_is_not_a_measurement():
     records = _daily() + [_point(-0.1, "DOC_NKT", water_cut_pct=95, chlorides_mg_l=30000)]
-    normalized, _ = normalize_records(records, 7, sample_fill_days=30, sample_sources={"DOC_NKT"},
-                                      snapshot_sources={"DOC_NKT"})
-    features = build_features("W", normalized)
+    features = build_features(normalize_records(records, 7, sample_fill_days=30, sample_sources={"DOC_NKT"},
+                                                snapshot_sources={"DOC_NKT"}))
     assert features.latest_timestamp == NOW                   # the snapshot does not move «latest»
     assert features.observation_count == 13
     assert features.current_values["water_cut_pct"] == 95     # but its newer values are current
@@ -49,9 +46,9 @@ def test_registry_snapshot_is_not_a_measurement():
 
 def test_readiness_ignores_registry_rows():
     only_registry = [_point(day, "DOC_NKT", water_cut_pct=90, co2_pct=1.0) for day in range(10)]
-    skipped = assess_readiness("W", only_registry, [])
-    assert skipped is not None and skipped.telemetry_records == 0
-    assert assess_readiness("W", _daily(), []) is None
+    readiness = assess(only_registry)
+    assert not readiness.ready and readiness.unique_timestamps == 0
+    assert assess(_daily()).ready
 
 
 def test_deadline_counts_from_the_local_day():
