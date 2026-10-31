@@ -2,116 +2,62 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from app.core.quality import AUXILIARY_RANGES, MEASUREMENTS, RANGE_LIMITS
 from app.core.source_kinds import is_snapshot, point_sources
-from app.schemas import NormalizationReport, TelemetryPoint
+from app.schemas import TelemetryPoint
+
+# Physical sanity bounds inherited from the V3.0 demonstration notebook: a value outside them is not
+# used. They are data-quality bounds, not corrosion intervention limits.
+RANGE_LIMITS: dict[str, tuple[float, float]] = {
+    "water_cut_pct": (0.0, 100.0),
+    "co2_pct": (0.0, 8.0),
+    "chlorides_mg_l": (0.0, 80000.0),
+    "inhibitor_efficiency": (0.0, 1.2),
+    "injection_deviation_pct": (0.0, 60.0),
+    "corrosion_rate_mm_year": (0.0, 1.5),
+    "wall_thickness_mm": (0.8, 14.0),
+    "initial_wall_thickness_mm": (0.8, 14.0),
+    "metal_loss_mm": (0.0, 14.0),
+    "corrosion_load": (0.02, 3.0),
+}
 
 
-def _as_utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+def as_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
 
 def normalize_records(records: list[TelemetryPoint], max_forward_fill_days: int,
                       sample_fill_days: int | None = None, sample_sources: set[str] | None = None,
-                      snapshot_sources: set[str] | None = None) -> tuple[list[dict], NormalizationReport]:
-    """Sort, range-check and forward-fill the records.
+                      snapshot_sources: set[str] | None = None) -> list[dict]:
+    """The records in time order, range-checked, with each field's last valid value carried forward.
 
-    A value is carried forward max_forward_fill_days; a value that came from a laboratory sample
-    or a snapshot (sample_sources) is carried sample_fill_days, the window in which the sample
-    counts. Rows from snapshot_sources only (a registry without its own measurement time) are
-    marked "snapshot": they give values but are not observations (app.core.source_kinds)."""
-    indexed = list(enumerate(records))
-    ordered = sorted(indexed, key=lambda pair: (_as_utc(pair[1].timestamp), pair[0]))
-    output: list[dict] = []
-    # field -> (time, value, carried for how many days)
-    last_valid: dict[str, tuple[datetime, float, int]] = {}
-    imputed = 0
+    A value is carried max_forward_fill_days; a value that came from a laboratory sample or a snapshot
+    (sample_sources) is carried sample_fill_days, the window in which the sample counts. Rows from
+    snapshot_sources only (a registry without its own measurement time) are marked "snapshot": they
+    give values but are not observations (app.core.source_kinds). A row: timestamp (UTC), calculated
+    (the value of each field, None when there is none), imputed_fields (carried values), snapshot."""
     sample_sources = sample_sources or set()
     snapshot_sources = snapshot_sources or set()
     long_fill = max(sample_fill_days or 0, max_forward_fill_days)
-
-    for original_index, point in ordered:
-        raw = point.model_dump(mode="json", exclude_none=False)
-        timestamp = _as_utc(point.timestamp)
-        normalized: dict = {
-            "source_record_index": original_index,
-            "timestamp": timestamp.isoformat().replace("+00:00", "Z"),
-            "raw": raw,
-            "calculated": {},
-            "imputed_fields": [],
-            "invalid_fields": [],
-            "snapshot": is_snapshot(point, snapshot_sources),
-        }
+    # field -> (time, value, carried for how many days)
+    last_valid: dict[str, tuple[datetime, float, int]] = {}
+    rows: list[dict] = []
+    for point in sorted(records, key=lambda item: as_utc(item.timestamp)):
+        timestamp = as_utc(point.timestamp)
         fill_days = long_fill if point_sources(point) & sample_sources else max_forward_fill_days
-        ranges = [(field, RANGE_LIMITS[field]) for field in MEASUREMENTS] + list(AUXILIARY_RANGES.items())
-        for field, (low, high) in ranges:
+        row = {"timestamp": timestamp, "calculated": {}, "imputed_fields": [],
+               "snapshot": is_snapshot(point, snapshot_sources)}
+        for field, (low, high) in RANGE_LIMITS.items():
             value = getattr(point, field)
-            valid = value is not None and low <= value <= high
-            if valid:
-                normalized["calculated"][field] = float(value)
+            if value is not None and low <= value <= high:
+                row["calculated"][field] = float(value)
                 last_valid[field] = (timestamp, float(value), fill_days)
+                continue
+            previous = last_valid.get(field)
+            if previous and (timestamp - previous[0]).total_seconds() <= previous[2] * 86400:
+                row["calculated"][field] = previous[1]
+                row["imputed_fields"].append(field)
             else:
-                normalized["calculated"][field] = None
-                if value is not None:
-                    normalized["invalid_fields"].append(field)
-                previous = last_valid.get(field)
-                if previous and (timestamp - previous[0]).total_seconds() <= previous[2] * 86400:
-                    normalized["calculated"][field] = previous[1]
-                    normalized["imputed_fields"].append(field)
-                    imputed += 1
-        normalized["calculated"]["water_compatibility_issue"] = point.water_compatibility_issue
-
-        # Preserve supplied values; derive missing load/loss as separate calculated features.
-        load_origin = (
-            "forward_fill" if "corrosion_load" in normalized["imputed_fields"] else
-            "observed" if normalized["calculated"]["corrosion_load"] is not None else "unavailable"
-        )
-        if normalized["calculated"]["corrosion_load"] is None:
-            calc = normalized["calculated"]
-            source_fields = ("water_cut_pct", "co2_pct", "chlorides_mg_l", "inhibitor_efficiency", "injection_deviation_pct")
-            if all(calc.get(field) is not None for field in source_fields) and point.water_compatibility_issue is not None:
-                water = calc["water_cut_pct"] / 100.0
-                co2 = max(0.0, min(calc["co2_pct"] / 5.0, 2.0))
-                chlorides = max(0.0, min(calc["chlorides_mg_l"] / 50000.0, 2.0))
-                protection = max(0.05, min(1.15 - calc["inhibitor_efficiency"], 1.15))
-                technology = max(0.0, min(calc["injection_deviation_pct"] / 30.0, 2.0))
-                load = (0.12 + 0.28 * water + 0.26 * co2 + 0.20 * chlorides
-                        + 0.28 * protection + 0.16 * technology
-                        + 0.22 * bool(point.water_compatibility_issue))
-                calc["corrosion_load"] = max(0.02, min(load, 3.0))
-                load_origin = "derived_v3_demo_formula"
-        loss_origin = (
-            "forward_fill" if "metal_loss_mm" in normalized["imputed_fields"] else
-            "observed" if normalized["calculated"]["metal_loss_mm"] is not None else "unavailable"
-        )
-        if normalized["calculated"]["metal_loss_mm"] is None:
-            initial = normalized["calculated"].get("initial_wall_thickness_mm")
-            wall = normalized["calculated"].get("wall_thickness_mm")
-            if initial is not None and wall is not None:
-                normalized["calculated"]["metal_loss_mm"] = max(0.0, initial - wall)
-                loss_origin = "derived_from_wall_thickness"
-        normalized["feature_sources"] = {
-            "corrosion_load": load_origin,
-            "metal_loss_mm": loss_origin,
-            "initial_wall_thickness_mm": (
-                "forward_fill" if "initial_wall_thickness_mm" in normalized["imputed_fields"] else
-                "observed" if normalized["calculated"]["initial_wall_thickness_mm"] is not None else "unavailable"
-            ),
-        }
-        output.append(normalized)
-
-    report = NormalizationReport(
-        records_total=len(records),
-        records_sorted=ordered == indexed,
-        raw_values_preserved=True,
-        calculated_values_added=True,
-        imputed_values=imputed,
-        forward_fill_limit_days=max_forward_fill_days,
-        sample_fill_limit_days=long_fill if sample_sources else None,
-        note=("Raw значения сохранены отдельно. Значения вне DQ-диапазона не используются; "
-              "короткие пропуски ограниченно заполняются. Расчёт corrosion_load использует "
-              "демонстрационную формулу notebook и помечен в provenance."),
-    )
-    return output, report
+                row["calculated"][field] = None
+        row["calculated"]["water_compatibility_issue"] = point.water_compatibility_issue
+        rows.append(row)
+    return rows

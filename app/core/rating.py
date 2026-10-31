@@ -1,4 +1,4 @@
-"""Well rating: priority index from the НТЦ and math model scores and the measure it implies.
+"""Well rating: priority index from the НТЦ score and the measure it implies.
 
 The rules mirror the approved Excel rating (sheet «Параметры»):
   index >= repair_from          -> planned repair package, well goes to the ERA repair plan
@@ -35,7 +35,7 @@ CATEGORY_SHORT = {"corrosive": "Корр.", "medium": "Среднекорр.", "
 # (app.core.rating_builder._data_gaps names the fields and the dates of outdated values).
 GAP_LABELS = {
     "well": "Скважина: месторождение, статус",
-    "forecast": "Индекс и прогноз моделей",
+    "forecast": "Индекс и прогноз НТЦ",
     "category": "Категория фонда",
     "environment": "Среда",
     "sampling": "Отбор проб",
@@ -92,13 +92,9 @@ def measures_catalog() -> list[dict[str, Any]]:
             for key in (MEASURE_REPAIR, MEASURE_ENGINEER, MEASURE_UD, MEASURE_NONE)]
 
 
-def priority_index(model_ntc: float | None, model_math: float | None) -> int | None:
-    scores = [value for value in (model_ntc, model_math) if value is not None]
-    if not scores:
-        return None
-    combined = max(scores) if settings.rating_combine == "max" else sum(scores) / len(scores)
-    # Round half up like Excel's ROUND, not Python's banker's rounding.
-    return int(combined * 100 + 0.5 + 1e-9)
+def priority_index(model_ntc: float | None) -> int | None:
+    """The НТЦ score (0–1) as the index 0–100, rounded half up like Excel's ROUND (not banker's)."""
+    return None if model_ntc is None else int(model_ntc * 100 + 0.5 + 1e-9)
 
 
 def measure_for(index: int | None) -> str | None:
@@ -150,9 +146,9 @@ def _as_date(value: Any) -> date | None:
 
 def evaluate(row: dict[str, Any]) -> dict[str, Any]:
     """Add the computed rating fields to one stored well_rating row."""
-    index = priority_index(row.get("model_ntc"), row.get("model_math"))
+    index = priority_index(row.get("model_ntc"))
     raw_ntc = row.get("model_ntc_raw")
-    index_raw = priority_index(raw_ntc if raw_ntc is not None else row.get("model_ntc"), row.get("model_math"))
+    index_raw = priority_index(raw_ntc if raw_ntc is not None else row.get("model_ntc"))
     measure = measure_for(index)
     # The deadline runs from the day the current measure was first assigned, so a daily
     # recomputation does not keep pushing it forward.
@@ -172,7 +168,7 @@ def evaluate(row: dict[str, Any]) -> dict[str, Any]:
         "protection_adjusted": index is not None and index_raw is not None and index_raw != index,
         "protection_label": PROTECTION_LABELS.get(row.get("protection") or "", ""),
         "measure": measure,
-        "measure_label": MEASURE_LABELS.get(measure or "", "Нет оценок моделей"),
+        "measure_label": MEASURE_LABELS.get(measure or "", "Нет оценки"),
         "measure_code": MEASURE_CODES.get(measure or "", ""),
         "era_required": measure == MEASURE_REPAIR,
         "deadline": deadline.isoformat() if deadline else None,
@@ -192,7 +188,7 @@ def evaluate(row: dict[str, Any]) -> dict[str, Any]:
         "data_gap_labels": [GAP_LABELS.get(item["key"], item["key"]) for item in gaps],
         # A well with a measure and no decision yet (no planned date).
         "awaiting_decision": measure in MEASURES_WITH_ACTION and plan is None,
-        "action": action_text(measure, deadline, plan, status, row, index, index_raw),
+        "action": action_text(measure, deadline, plan, status, index, index_raw),
     }
 
 
@@ -201,11 +197,10 @@ def _ddmm(value: date | None) -> str:
 
 
 def action_text(measure: str | None, deadline: date | None, plan: date | None, status: str | None,
-                row: dict[str, Any], index: int | None, index_raw: int | None) -> str:
+                index: int | None, index_raw: int | None) -> str:
     """One line for the table: what to do, by when, and what has been decided."""
     if measure is None:
-        return ("Нет оценки: мало данных для моделей (подробности в карточке)." if row.get("skip_reason")
-                else "Нет оценки: модели ещё не рассчитаны.")
+        return "Нет оценки: мало данных для прогноза (подробности в карточке)."
     if measure == MEASURE_NONE:
         return "Мероприятия не требуются."
     # The table shows the measure code beside this text, so the text does not repeat it.

@@ -89,7 +89,7 @@ async def upload_documents(request: Request, files: list[UploadFile] = File(...)
     if wait:
         for index, row in enumerate(results):
             if row.get("document_id") and row.get("status") == "queued":
-                processed = await run_in_threadpool(pipeline.process_now, row["document_id"], request.app.state)
+                processed = await run_in_threadpool(pipeline.process_now, row["document_id"])
                 if processed:
                     results[index] = {**processed, "duplicate": row.get("duplicate", False),
                                       "requeued": row.get("requeued", False)}
@@ -104,9 +104,8 @@ async def upload_documents(request: Request, files: list[UploadFile] = File(...)
 
 
 @router.delete("")
-def clear_documents(request: Request,
-                    status: str | None = Query(default=None, max_length=200,
-                                               description="Статусы через запятую, например failed,not_recognized"),
+def clear_documents(status: str | None = Query(default=None, max_length=200,
+                                              description="Статусы через запятую, например failed,not_recognized"),
                     all_documents: bool = Query(default=False, alias="all")) -> dict:
     """Clear the document list: by status, or every document (?all=true). Data loaded from the
     deleted documents is deleted too and the rating of their wells is recomputed. Documents in
@@ -118,7 +117,7 @@ def clear_documents(request: Request,
         unknown = statuses - set(pipeline.STATUS_LABELS)
         if not statuses or unknown:
             raise HTTPException(status_code=422, detail="Укажите status (например failed,not_recognized) или all=true.")
-    return pipeline.delete_documents(statuses, request.app.state)
+    return pipeline.delete_documents(statuses)
 
 
 @router.post("/inbox/scan")
@@ -132,10 +131,10 @@ def scan_inbox(request: Request) -> dict:
 
 
 @router.post("/process-queue")
-def process_queue(request: Request, limit: int = Query(default=20, ge=1, le=200)) -> dict:
+def process_queue(limit: int = Query(default=20, ge=1, le=200)) -> dict:
     """Process queued documents synchronously (for n8n, or when MAI_DOCS_WORKER=false)."""
     titles = pipeline.type_titles()
-    return {"documents": [pipeline.decorate(row, titles) for row in pipeline.process_queue(request.app.state, limit)]}
+    return {"documents": [pipeline.decorate(row, titles) for row in pipeline.process_queue(limit)]}
 
 
 @router.get("/{document_id}")
@@ -174,7 +173,7 @@ async def reprocess_document(document_id: str, request: Request, wait: bool = Qu
     if row is None:
         raise HTTPException(status_code=404, detail="Документ не найден")
     if wait:
-        processed = await run_in_threadpool(pipeline.process_now, document_id, request.app.state)
+        processed = await run_in_threadpool(pipeline.process_now, document_id)
         row = processed or row
     else:
         _wake(request)
@@ -182,9 +181,9 @@ async def reprocess_document(document_id: str, request: Request, wait: bool = Qu
 
 
 @router.delete("/{document_id}")
-def delete_document(document_id: str, request: Request) -> dict:
+def delete_document(document_id: str) -> dict:
     """Delete the document and the data loaded from it; the rating of its wells is recomputed."""
-    row = pipeline.delete_document(document_id, request.app.state)
+    row = pipeline.delete_document(document_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Документ не найден")
     return {"deleted": document_id, "wells": (row.get("loaded") or {}).get("wells") or []}

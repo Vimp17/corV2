@@ -15,12 +15,11 @@ CREW_STATUS = {"available": "свободна", "busy": "занята", "unknown
 NOTE_NAMES = {"category": "категория фонда", "corrosive_environment": "среда", "protection": "защита",
               "demount_act": "акт демонтажа", "demount_corrosion": "коррозия при демонтаже",
               "base_act": "акт разбора на базе", "base_corrosion": "коррозия по акту разбора",
-              "model_ntc": "модель НТЦ", "model_math": "математическая модель", "sampling": "отбор проб"}
+              "model_ntc": "модель НТЦ", "sampling": "отбор проб"}
 # Service words of the input and common English terms the model may still write: → Russian.
 GLOSSARY = {
     "measure_code": "код мероприятия", "index_before_protection": "индекс без учёта защиты",
-    "forecast_ntc": "прогноз модели НТЦ", "forecast_math": "прогноз математической модели",
-    "model_ntc": "модель НТЦ", "model_math": "математическая модель", "plan_date": "плановая дата",
+    "forecast_ntc": "прогноз модели НТЦ", "model_ntc": "модель НТЦ", "plan_date": "плановая дата",
     "corrosive_environment": "коррозионная среда", "protection_means": "средства защиты",
     "in_operation": "в работе", "run_days": "наработка", "liquid_m3_day": "дебит жидкости", "oil_pct": "доля нефти",
     "demount_act_recent": "акт демонтажа", "demount_act": "акт демонтажа", "demount_corrosion": "коррозия при демонтаже",
@@ -110,7 +109,6 @@ def for_model(context: dict, known_gaps: list[str], examples: list[dict], act_da
             "крайний срок": rating.get("deadline"),
             "плановая дата ППР": rating.get("plan_date"),
             "прогноз модели НТЦ (0–1)": rating.get("forecast_ntc"),
-            "прогноз математической модели (0–1)": rating.get("forecast_math"),
             "категория фонда": rating.get("category"),
             "коррозионная среда": _yes_no(rating.get("corrosive_environment")),
             "защита от коррозии": rating.get("protection"),

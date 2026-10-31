@@ -10,14 +10,11 @@ from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 
 from app import db
-from app.api.routes.analysis import router as analysis_router
 from app.api.routes.documents import router as documents_router
 from app.api.routes.ingestion import router as ingestion_router
 from app.api.routes.monitoring import router as monitoring_router
 from app.api.routes.rating import router as rating_router
 from app.config import settings
-from app.core.cox import load_optional_model
-from app.core.model_registry import ModelRegistry
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("mai_api")
@@ -26,17 +23,11 @@ logger = logging.getLogger("mai_api")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
-    app.state.cox_model, app.state.cox_model_error = load_optional_model(settings.cox_model_path)
-    app.state.risk_model_registry = ModelRegistry.with_builtins(
-        app.state.cox_model, app.state.cox_model_error
-    )
-    if app.state.cox_model_error:
-        logger.warning("Cox inference status: %s", app.state.cox_model_error)
     app.state.document_worker = None
     if settings.docs_worker_enabled:
         from app.core.documents.pipeline import DocumentWorker
 
-        app.state.document_worker = DocumentWorker(app.state)
+        app.state.document_worker = DocumentWorker()
         app.state.document_worker.start()
     try:
         yield
@@ -54,8 +45,8 @@ def require_api_key(x_api_key: str | None = Header(default=None, alias="X-API-Ke
 app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
-    description=("Модульное вычислительное ядро контроля коррозии. Правила и пороги в этой версии "
-                 "унаследованы из демонстрационного синтетического pipeline и требуют полевой калибровки."),
+    description=("Рейтинг скважин по коррозии НКТ: данные источников и документов, правила НТЦ, "
+                 "предложения ИИ-агента. Пороги правил демонстрационные и требуют полевой калибровки."),
     lifespan=lifespan,
 )
 
@@ -95,9 +86,6 @@ def ready():
     return {
         # "postgresql"; "mssql" in the standalone build (standalone/mssql_compat.py).
         "status": "ready", "storage": db.engine().dialect.name, "database_connected": True,
-        "cox_model": "loaded" if app.state.cox_model else "unavailable",
-        "cox_model_detail": app.state.cox_model_error,
-        "risk_models_registered": len(app.state.risk_model_registry.models),
         "llm_agent": "configured" if settings.llm_api_url and settings.llm_model else "not_configured",
         "ocr_model": "configured" if settings.ocr_url and settings.ocr_model else "not_configured",
         "documents_inbox": "configured" if settings.docs_inbox_dir else "not_configured",
@@ -113,7 +101,6 @@ def dashboard():
 
 v1 = APIRouter(prefix="/api/v1", dependencies=[Depends(require_api_key)])
 v1.include_router(ingestion_router)
-v1.include_router(analysis_router)
 v1.include_router(monitoring_router)
 v1.include_router(rating_router)
 v1.include_router(documents_router)

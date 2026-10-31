@@ -1,26 +1,21 @@
-"""Entry point of the standalone demo build (no Docker): the regular application with four additions.
+"""Entry point of the standalone build (no Docker): the regular application with three additions.
 
-1. Nothing goes to data sources or Промайн. Before the application reads its settings, the pull
-   addresses of every source profile (MAI_SOURCE_<ID>_URL / _TOKEN) are cleared and
-   MAI_PROMINE_TRANSPORT is set to "none", whatever .env says. Data are loaded by hand: the
-   dashboard («Загрузка данных», «Документы») or the inbox folder. The only outgoing calls left
-   are those to the language model (LiteLLM).
-2. Archive data. With MAI_STANDALONE_DATA_DATE (the date of the latest data in the loaded files)
+1. Archive data. With MAI_STANDALONE_DATA_DATE (the date of the latest data in the loaded files)
    the freshness, sample and act windows are widened at every start by the days passed since
    then, so a past export is not shown as «устарела», «нет пробы», «нет акта».
-3. A dashboard link with the API key. With MAI_API_KEY set, opening /dashboard?key=<key> keeps the
+2. A dashboard link with the API key. With MAI_API_KEY set, opening /dashboard?key=<key> keeps the
    key in a cookie of this site and returns to /dashboard; a request with the cookie and without
    an X-API-Key header is let through as if it had the header. n8n and scripts send the header.
-4. SQL Server. The build keeps its tables in Microsoft SQL Server (MAI_DATABASE_URL, a
-   mssql+pyodbc or mssql+pymssql address): standalone/mssql_compat.py adapts app.db before the
-   application uses it.
+3. SQL Server. The tables are in Microsoft SQL Server (MAI_DATABASE_URL, a mssql+pyodbc or
+   mssql+pymssql address, written by "mai.cmd setup"); without it the start stops with a hint.
+Data sources are pulled only from the addresses set in .env (MAI_SOURCE_<ID>_URL); without them
+data are loaded by hand (dashboard, inbox folder) or pushed to the API.
 
 The application itself (app/) is not changed. Run: python -m uvicorn standalone.asgi:app
 (standalone/manage.py does it).
 """
 from __future__ import annotations
 
-import json
 import os
 import secrets
 from datetime import date, datetime
@@ -36,42 +31,6 @@ KEY_COOKIE_SECONDS = 30 * 86400
 # Settings limits of app/config.py: windows wider than these are cut to them.
 MAX_TELEMETRY_AGE_HOURS = 8760
 MAX_WINDOW_DAYS = 3650
-
-
-def _env_name(source_id: str) -> str:
-    """MAI_SOURCE_<ID>_… name of a source, by the rule of app.core.source_connectors.source_env."""
-    safe = "".join(char if char.isalnum() else "_" for char in source_id.upper())
-    return "_".join(part for part in safe.split("_") if part)
-
-
-def _profile_ids(file_values: dict[str, str]) -> set[str]:
-    paths = {ROOT / "config" / "source_profiles.json"}
-    configured = os.environ.get("MAI_SOURCE_PROFILES_PATH") or file_values.get("MAI_SOURCE_PROFILES_PATH")
-    if configured:
-        path = Path(configured).expanduser()
-        paths.add(path if path.is_absolute() else (ROOT / path))
-    ids: set[str] = set()
-    for path in paths:
-        try:
-            profiles = json.loads(path.read_text(encoding="utf-8")).get("profiles") or {}
-        except (OSError, ValueError):
-            continue
-        for profile_id, profile in profiles.items():
-            if isinstance(profile, dict):
-                ids.add(str(profile.get("source_id", profile_id)))
-    return ids
-
-
-def disable_outbound(file_values: dict[str, str]) -> list[str]:
-    """Clear the source pull addresses and switch Промайн delivery off for this process."""
-    names = {f"MAI_SOURCE_{_env_name(source_id)}_{suffix}"
-             for source_id in _profile_ids(file_values) for suffix in ("URL", "TOKEN")}
-    names |= {name for name in [*os.environ, *file_values]
-              if name.startswith("MAI_SOURCE_") and name.endswith(("_URL", "_TOKEN"))}
-    for name in sorted(names):
-        os.environ[name] = ""
-    os.environ["MAI_PROMINE_TRANSPORT"] = "none"
-    return sorted(names)
 
 
 def _data_date(value: str) -> date | None:
@@ -102,7 +61,6 @@ def prepare_environment() -> dict:
     env_path = ROOT / ".env"
     envfile.normalize(env_path)
     file_values = envfile.read(env_path)
-    cleared = disable_outbound(file_values)
     when = _data_date(os.environ.get("MAI_STANDALONE_DATA_DATE") or file_values.get("MAI_STANDALONE_DATA_DATE", ""))
     windows = archive_windows(when)
     os.environ.update(windows)
@@ -110,11 +68,7 @@ def prepare_environment() -> dict:
     if not url.startswith("mssql"):
         raise SystemExit("MAI_DATABASE_URL is not a SQL Server address (mssql+pyodbc:// or mssql+pymssql://): "
                          "run mai.cmd setup")
-    from standalone import mssql_compat
-
-    mssql_compat.install(url, os.environ.get("MAI_STANDALONE_MSSQL_SCHEMA")
-                         or file_values.get("MAI_STANDALONE_MSSQL_SCHEMA", ""))
-    return {"cleared": cleared, "windows": windows}
+    return {"windows": windows}
 
 
 PREPARED = prepare_environment()

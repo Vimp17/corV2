@@ -1,5 +1,5 @@
-# Windows (x86_64, Python 3.12) packages of the standalone demo build, resolved by
-# standalone/build/build.sh --relock from standalone/requirements.txt with the versions of
+# Windows (x86_64, Python 3.12) packages of the standalone build, resolved by
+# standalone/build/build.sh --relock from requirements.txt with the versions of
 # the tested Docker image. Edit by relocking, not by hand.
 annotated-doc==0.0.5
 annotated-types==0.8.0
