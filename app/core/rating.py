@@ -31,11 +31,18 @@ MEASURE_LABELS = {
 MEASURE_CODES = {MEASURE_REPAIR: "ППР", MEASURE_ENGINEER: "РИ", MEASURE_UD: "УДР", MEASURE_NONE: "—"}
 # Short category names for the table ("Категория фонда").
 CATEGORY_SHORT = {"corrosive": "Корр.", "medium": "Среднекорр.", "noncorrosive": "Некорр."}
-# Data completeness is judged on three sections only: telemetry, chemistry, acts.
+# «Полнота данных»: the columns of the rating table whose values the well lacks, in table order
+# (app.core.rating_builder._data_gaps names the fields and the dates of outdated values).
 GAP_LABELS = {
-    "telemetry": "Телеметрия (ДАРС)",
-    "samples": "Химия (пробы ХИМИК)",
-    "base_act": "Акты (разбор на базе)",
+    "well": "Скважина: месторождение, статус",
+    "forecast": "Индекс и прогноз моделей",
+    "category": "Категория фонда",
+    "environment": "Среда",
+    "sampling": "Отбор проб",
+    "acts": "Демонтаж и разбор",
+    "protection": "Оборудование и защита",
+    "run_days": "Наработка",
+    "liquid": "Жидкость / нефть",
 }
 MEASURES_WITH_ACTION = (MEASURE_REPAIR, MEASURE_ENGINEER, MEASURE_UD)
 
@@ -180,9 +187,6 @@ def evaluate(row: dict[str, Any]) -> dict[str, Any]:
         "oil_l_day": (round(row["liquid_rate_m3_day"] * row["oil_pct"] * 10)
                       if row.get("liquid_rate_m3_day") is not None and row.get("oil_pct") is not None else None),
         "data_gaps": gaps,
-        # Fields the classification has no current value for (rating_builder._missing_fields).
-        "missing_fields": next((list(item.get("items") or []) for item in row.get("data_gaps") or []
-                                if isinstance(item, dict) and item.get("key") == "fields"), []),
         # Protection means present (inhibitor, coated tubing), whatever their effect.
         "protection_means": list(protection_prov.get("means") or []),
         "data_gap_labels": [GAP_LABELS.get(item["key"], item["key"]) for item in gaps],
