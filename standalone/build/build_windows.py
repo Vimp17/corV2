@@ -222,7 +222,7 @@ def copy_project(root: Path) -> None:
         shutil.copy2(SRC / "standalone" / item, root / "standalone" / item)
     shutil.copy2(SRC / "standalone" / "mai.cmd", root / "mai.cmd")
     shutil.copy2(SRC / "standalone" / "README.md", root / "README-DEMO.md")
-    for folder in ("data/documents", "inbox", "logs", "run", "pgdata"):
+    for folder in ("data/documents", "inbox", "logs", "run"):
         (root / folder).mkdir(parents=True, exist_ok=True)
     for path in [root / "mai.cmd", root / "README-DEMO.md", root / "standalone" / "env.template"]:
         data = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
