@@ -57,3 +57,20 @@ def test_deadline_counts_from_the_local_day():
     # 01:30 Moscow time on 21.10 is still 20.10 in UTC: the measure counts from 21.10.
     assert str(rating._as_date("2026-10-20T22:30:00+00:00")) == "2026-10-21"
     assert str(rating._as_date("2026-10-20")) == "2026-10-20"
+
+
+def test_every_rule_is_reported_fired_or_not():
+    from app.core.rules import evaluate_rules
+
+    records = [_point(day, "DARS", water_cut_pct=92, co2_pct=1.0, chlorides_mg_l=35000) for day in range(12, -1, -1)]
+    normalized = normalize_records(records, 7)
+    checks = evaluate_rules(build_features(normalized), normalized)
+    assert len(checks) == 17
+    fired = {check.title: check.points for check in checks if check.points}
+    assert fired == {"Обводнённость": 7, "Обводнённость держится выше порога": 1, "Хлориды": 4,
+                     "Хлориды держатся выше порога": 1}
+    passed = {check.title: check.value for check in checks if not check.points and check.value is not None}
+    assert passed["Уровень CO₂"] == "1 %" and passed["Рост обводнённости"].endswith("% в сутки")
+    no_data = {check.title for check in checks if check.value is None}
+    assert {"Эффективность ингибитора", "Скорость коррозии", "Толщина стенки НКТ", "Несовместимость вод"} <= no_data
+    assert {check.group for check in checks} == {"Среда", "Защита", "Технология", "Коррозия"}

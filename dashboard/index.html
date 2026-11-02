@@ -226,6 +226,14 @@
     .box { border:1px solid var(--line); border-radius:var(--radius); padding:12px 14px; display:flex; flex-direction:column; gap:10px }
     .box h3 { margin:0; font-size:14px; color:var(--navy) }
     .hint { font-size:12px; color:var(--muted) }
+    .rules-box summary { cursor:pointer; color:var(--blue); font-size:13px; font-weight:600; margin-top:4px }
+    .rules { width:100%; border-collapse:collapse; font-size:12px; margin-top:6px }
+    .rules th { text-align:left; font-size:11px; color:var(--muted); font-weight:600; padding:4px 6px; border-bottom:1px solid var(--line) }
+    .rules td { padding:4px 6px; border-bottom:1px solid var(--line-2); vertical-align:top }
+    .rules td.pts { text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums }
+    .rules tr.grp td { font-weight:700; color:var(--navy-2); background:var(--bg); padding-top:6px }
+    .rules tr.fired td:first-child, .rules tr.fired td.pts { color:var(--repair); font-weight:600 }
+    .rules tr.nodata td { color:var(--muted) }
     .hint.warn { color:var(--ud) }
 
     /* Data upload */
@@ -878,7 +886,8 @@
 
     function overviewTab(w, key) {
       const body = [];
-      body.push(el('div', { class: 'bars' }, barLine('Прогноз НТЦ', w.model_ntc, '', true), provLine(w, 'model_ntc')));
+      const blocks = cardBlocks(w);
+      body.push(el('div', { class: 'bars' }, barLine('Прогноз НТЦ', w.model_ntc, '', true), provLine(w, 'model_ntc'), blocks.rules));
       const prop = el('div', { class: `prop ${key}` }, el('h3', { text: `Предложение рейтинга: ${w.measure_label}` }), el('div', { style: 'font-size:13px', text: w.action }));
       if (w.protection_adjusted) prop.append(el('div', { style: 'font-size:13px', text: `С учётом подтверждённой защиты индекс снижен с ${w.index_raw} до ${w.index}.` }));
       // No index: what the forecast lacks — counts of measurements and the fields by name.
@@ -886,8 +895,7 @@
       if (forecastGap?.items?.length) prop.append(el('div', { style: 'font-size:13px' }, el('b', { text: 'Для индекса не хватает:' }),
         el('ul', { style: 'margin:4px 0 0; padding-left:18px' }, forecastGap.items.map(i => el('li', { text: i.field })))));
       body.push(prop);
-      const [aiBox, docsBox, extrasBox] = aiBoxes(w);
-      body.push(aiBox);
+      body.push(blocks.ai);
       body.push(dlGroup('Скважина', [
         ['Месторождение', w.field || '—', '', 'field'],
         ['Спущенное оборудование', w.equipment || '—', '', 'equipment'],
@@ -908,7 +916,7 @@
         ['Среда', yesNo(w.corrosive_environment, 'Коррозионная', 'Некоррозионная'), w.corrosive_environment ? 'bad' : (w.corrosive_environment === false ? 'ok' : ''), 'corrosive_environment'],
         ['Тоннаж, т', w.tonnage_t === null || w.tonnage_t === undefined ? '—' : w.tonnage_t.toFixed(1), '', 'tonnage_t'],
         ['НОО, сут', w.noo_days === null || w.noo_days === undefined ? '—' : String(Math.round(w.noo_days)), '', 'noo_days']], w));
-      body.push(extrasBox);
+      body.push(blocks.registry, blocks.extras);
       const protCls = { effective: 'ok', insufficient: 'bad', unconfirmed: '' }[w.protection] ?? 'na';
       body.push(dlGroup('Защита от коррозии', [
         ['Средства защиты', (w.protection_means || []).length ? `Есть: ${w.protection_means.join(', ')}` : 'Нет защиты от коррозии', (w.protection_means || []).length ? 'ok' : 'na'],
@@ -920,7 +928,7 @@
         ['Акт разбора на базе', yesNo(w.base_act, 'Есть', 'Нет'), '', 'base_act'],
         ['Результат разбора', yesNo(w.base_corrosion, 'Есть коррозия', 'Коррозии нет'), w.base_corrosion ? 'bad' : (w.base_corrosion === false ? 'ok' : ''), 'base_corrosion']], w,
         'Последние акты из истории ремонтов (ЭРА ремонта, документы), а не текущее состояние скважины.'));
-      body.push(docsBox);
+      body.push(blocks.docs);
       body.push(dlGroup('Оценка', [
         ['Категория скважины', w.category_label || '—', w.category === 'corrosive' ? 'bad' : '', 'category'],
         ['Мероприятие назначено', w.measure_since ? fmtIso(w.measure_since) : '—'],
@@ -1243,13 +1251,42 @@
     }
 
     // ---------------------------------------------------------------- well card: AI proposal and documents
-    function aiBoxes(w) {
+    // Blocks of the card filled from GET /rating/wells/{id} (loadWellExtras).
+    function cardBlocks(w) {
       const ai = el('div', { class: 'aibox', id: 'aiBox' }, el('h3', { text: 'Предложение ИИ-агента' }), el('div', { class: 'sub', text: 'Загружаем…' }));
       const docs = el('div', { class: 'box', id: 'wellDocs' }, el('h3', { text: 'Документы скважины' }), el('div', { class: 'sub', text: 'Загружаем…' }));
       const extras = el('div', { id: 'wellExtras', hidden: true });
       const registry = el('div', { id: 'wellRegistry', hidden: true });
+      const rules = el('div', { id: 'wellRules', hidden: true });
       loadWellExtras(w.well_id);
-      return [ai, docs, registry, extras];
+      return { ai, docs, extras, registry, rules };
+    }
+
+    // How the НТЦ forecast was counted: every rule, fired or not (app/core/rules.py).
+    function renderRules(detail) {
+      const box = $('wellRules');
+      if (!box) return;
+      const rules = detail.provenance?.model_ntc?.rules || [];
+      box.hidden = !rules.length;
+      if (!rules.length) { box.replaceChildren(); return; }
+      const fired = rules.filter(rule => rule.points);
+      const total = fired.reduce((sum, rule) => sum + rule.points, 0);
+      const rows = [];
+      let group = null;
+      for (const rule of rules) {
+        if (rule.group !== group) { group = rule.group; rows.push(el('tr', { class: 'grp' }, el('td', { colspan: '3', text: group }))); }
+        const none = rule.value === null || rule.value === undefined;
+        rows.push(el('tr', { class: rule.points ? 'fired' : none ? 'nodata' : '' },
+          el('td', {}, rule.title, el('div', { class: 'hint', text: rule.points && rule.reason ? `${rule.reason.replace(/\.$/, '')}. Условие: ${rule.condition}` : rule.condition })),
+          el('td', { text: none ? rule.missing || 'нет данных' : rule.value }),
+          el('td', { class: 'pts', text: rule.points ? `+${rule.points}` : none ? '—' : '0' })));
+      }
+      box.replaceChildren(el('details', { class: 'rules-box' },
+        el('summary', { text: `Как посчитан прогноз: сработало правил — ${fired.length} из ${rules.length}, баллов — ${total} из 14` }),
+        el('table', { class: 'rules' },
+          el('thead', {}, el('tr', {}, el('th', { text: 'Правило и условие' }), el('th', { text: 'Значение' }), el('th', { text: 'Баллы' }))),
+          el('tbody', {}, rows)),
+        el('div', { class: 'hint', text: 'Прогноз НТЦ = баллы / 14, не больше 1; индекс = прогноз × 100. При подтверждённой защите баллы среды учитываются с коэффициентом — см. строку над таблицей. Пороги демонстрационные.' })));
     }
 
     async function loadWellExtras(wellId) {
@@ -1257,6 +1294,7 @@
         const detail = await api(`/api/v1/rating/wells/${encodeURIComponent(wellId)}`);
         if (state.selected !== wellId) return;
         renderAiBox(detail);
+        renderRules(detail);
         renderWellDocs(detail);
         renderExtraMeasurements(detail);
         renderRegistry(detail);

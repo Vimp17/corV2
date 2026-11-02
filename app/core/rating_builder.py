@@ -24,7 +24,7 @@ from app.core import rating, readiness
 from app.core.excel_ingestion import load_profiles
 from app.core.features import Features, build_features
 from app.core.normalization import normalize_records
-from app.core.rules import ENVIRONMENT_PREFIX, THRESHOLDS, Finding, evaluate_rules, score
+from app.core.rules import CRITICAL_POINTS, ENVIRONMENT_PREFIX, THRESHOLDS, Check, evaluate_rules, score
 from app.core.source_kinds import lab_source_ids, snapshot_source_ids
 from app.schemas import TelemetryPoint
 
@@ -291,18 +291,19 @@ def _data_gaps(values: dict, records: list[TelemetryPoint], current: dict, ready
     return gaps
 
 
-def _ntc_score(findings: list[Finding] | None, when: datetime, sources: _Sources,
+def _ntc_score(checks: list[Check] | None, when: datetime, sources: _Sources,
                protection: str | None) -> tuple[dict, dict]:
     """The НТЦ score from the rule points. With confirmed effective protection (and
     MAI_RATING_PROTECTION_MODE = adjust) the environment rule points count with
-    MAI_RATING_PROTECTION_FACTOR; points for measured damage are never reduced."""
+    MAI_RATING_PROTECTION_FACTOR; points for measured damage are never reduced. Every rule, fired or
+    not, is kept in the provenance ("rules") for the well card."""
     values = {"model_ntc": None, "model_ntc_raw": None}
-    if findings is None:
+    if checks is None:
         return values, {"model_ntc": _prov(sources, None, when, "Недостаточно данных для правил НТЦ.")}
-    points = sum(item.points for item in findings)
-    env_points = sum(item.points for item in findings if item.rule_id.startswith(ENVIRONMENT_PREFIX))
+    points = sum(check.points for check in checks)
+    env_points = sum(check.points for check in checks if check.rule_id.startswith(ENVIRONMENT_PREFIX))
     values["model_ntc"] = values["model_ntc_raw"] = score(points)
-    note = f"Правила НТЦ: {points} баллов из 14."
+    note = f"Правила НТЦ: {points} баллов из {CRITICAL_POINTS}."
     if protection == "effective" and env_points:
         factor = settings.rating_protection_factor
         adjusted_points = points - env_points * (1 - factor)
@@ -313,7 +314,9 @@ def _ntc_score(findings: list[Finding] | None, when: datetime, sources: _Sources
         else:
             note += (f" Защита эффективна; с её учётом было бы {adjusted_points:g} баллов "
                      "(режим MAI_RATING_PROTECTION_MODE=info, индекс не корректируется).")
-    return values, {"model_ntc": _prov(sources, None, when, note)}
+    rules = [{"group": check.group, "title": check.title, "value": check.value, "condition": check.condition,
+              "points": check.points, "reason": check.reason, "missing": check.missing} for check in checks]
+    return values, {"model_ntc": {**_prov(sources, None, when, note), "rules": rules}}
 
 
 def extra_measurements(well_id: str) -> list[dict]:

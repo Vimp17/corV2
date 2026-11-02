@@ -28,8 +28,9 @@ router = APIRouter(tags=["rating"])
 def _rated_wells() -> list[dict]:
     wells = rating.build_rating(db.list_rating_rows())
     for well in wells:
-        # The full AI proposal is served with the well card only.
+        # The full AI proposal and the rule-by-rule НТЦ score are served with the well card only.
         well.pop("ai_proposal", None)
+        (well.get("provenance") or {}).get("model_ntc", {}).pop("rules", None)
     return wells
 
 
