@@ -11,3 +11,4 @@ __pycache__/
 inbox/*
 !inbox/.gitkeep
 data/documents/
+data/sample_*.xlsx
