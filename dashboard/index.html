@@ -711,8 +711,9 @@
     }
     function equipCell(w) {
       const means = w.protection_means || [];
+      // Two lines: the equipment run in, then the protection means — say which one has no data.
       return el('div', { style: 'display:flex; flex-direction:column' },
-        el('span', { text: w.equipment || 'Нет данных' }),
+        el('span', { style: w.equipment ? null : 'color:var(--muted)', text: w.equipment || 'Оборудование: нет данных' }),
         el('span', { class: `protline ${means.length ? 'yes' : 'no'}`,
           text: means.length ? `Есть защита от коррозии: ${means.join(', ')}` : 'Нет защиты от коррозии' }));
     }
