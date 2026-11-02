@@ -1,7 +1,8 @@
 """Text of a document: Excel cells, the PDF text layer, or OCR of page images via LiteLLM.
 
-OCR uses the vision Chat Completions interface: each page is sent as an image in a user
-message to MAI_OCR_MODEL, which returns the page text (tables as Markdown).
+OCR uses the vision Chat Completions interface: one JSON request per page to MAI_OCR_MODEL with
+the page as one PNG data URL ("data:image/png;base64,…") in the user message — not a file upload
+or multipart form. The model returns the page text (tables as Markdown).
 """
 from __future__ import annotations
 
@@ -40,6 +41,7 @@ def ocr_configured() -> bool:
 
 
 def _data_url(image) -> str:
+    """The page as a PNG data URL, its longer side at most MAI_OCR_MAX_SIDE_PX."""
     from PIL import Image
 
     image = image.convert("RGB")
@@ -47,8 +49,8 @@ def _data_url(image) -> str:
     if max(image.size) > limit:
         image.thumbnail((limit, limit), Image.LANCZOS)
     buffer = BytesIO()
-    image.save(buffer, format="JPEG", quality=90)
-    return "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+    image.save(buffer, format="PNG", optimize=True)
+    return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
 def ocr_image(image, label: str) -> str:

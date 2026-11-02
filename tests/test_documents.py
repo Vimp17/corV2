@@ -108,6 +108,32 @@ def test_keywords_classify_demo_texts():
     assert extract.classify_by_keywords("\n".join(memo_lines(TODAY)), types) is None
 
 
+def test_ocr_request_is_one_png_data_url_in_json(monkeypatch):
+    import base64
+
+    from PIL import Image
+
+    from app.core import llm
+    from app.core.documents import text
+
+    sent = {}
+
+    def chat(messages, **options):
+        sent.update(messages=messages, **options)
+        return "MAI 4721"
+
+    monkeypatch.setattr(llm, "chat", chat)
+    assert text.ocr_image(Image.new("RGBA", (3000, 1000), "white"), "Страница 1") == "MAI 4721"
+    images = [part for message in sent["messages"] if isinstance(message["content"], list)
+              for part in message["content"] if part["type"] == "image_url"]
+    assert len(images) == 1                       # one image per request
+    url = images[0]["image_url"]["url"]
+    assert url.startswith("data:image/png;base64,")
+    png = base64.b64decode(url.split(",", 1)[1], validate=True)
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+    assert max(Image.open(BytesIO(png)).size) == 2000   # MAI_OCR_MAX_SIDE_PX
+
+
 def test_file_kinds():
     assert intake.detect_kind(b"%PDF-1.7 ...", "a.pdf") == "pdf"
     assert intake.detect_kind(b"\x89PNG\r\n\x1a\n....", "scan.png") == "image"
