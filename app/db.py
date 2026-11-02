@@ -3,8 +3,10 @@
 MAI_DATABASE_URL connects through pyodbc and an installed "ODBC Driver 17/18 for SQL Server"
 (mssql+pyodbc://…?driver=…) or through pymssql, which needs no ODBC driver (mssql+pymssql://…);
 MAI_DATABASE_SCHEMA names the schema of the tables (empty: the default schema of the login, usually
-dbo). At start (init_db) the tables are created from the definitions below, columns a later version
-defines are added to existing tables, and tables and columns of earlier versions are dropped.
+dbo). At start (init_db) the tables are checked against the definitions below: missing tables are
+created, columns a later version defines are added, tables and columns of earlier versions are
+dropped, and the check is repeated. With everything in place nothing is changed, so a login with
+read and write rights only is enough.
 
 Text is NVARCHAR with a binary collation, so keys compare exactly whatever the collation of the
 database (DEMO-1 and demo-1 stay two wells); moments are DATETIME2 in UTC, read back with tzinfo=UTC;
@@ -14,6 +16,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import re
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -24,6 +28,7 @@ from sqlalchemy import (BigInteger, Boolean, Column, Date, Float, ForeignKey, In
                         literal_column, select, text, union, update)
 from sqlalchemy.dialects.mssql import DATETIME2
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.schema import CreateColumn
 from sqlalchemy.sql.base import Executable
@@ -32,6 +37,8 @@ from sqlalchemy.types import TypeDecorator
 
 from app.config import settings
 from app.schemas import FailureHistoryItem, TelemetryPoint, WorkHistoryItem
+
+logger = logging.getLogger(__name__)
 
 # Exact comparison and ordering of text, independent of the collation of the database.
 BINARY_COLLATION = "Latin1_General_100_BIN2"
@@ -239,9 +246,61 @@ def _lock_name(key: str) -> str:
     return f"mai:{settings.database_schema or 'default'}:{key}"
 
 
-def init_db() -> None:
-    """Create the schema and the tables; add the columns new versions define, drop obsolete ones.
-    An application lock makes processes starting at once wait for one another."""
+def schema_changes(conn) -> dict[str, list[str]]:
+    """What the database lacks or holds in excess against the tables above: tables to create, columns
+    to add ("table.column"), tables and columns of earlier versions to drop."""
+    schema = settings.database_schema or None
+    inspector = inspect(conn)
+    present = {name.lower() for name in inspector.get_table_names(schema=schema)}
+    changes: dict[str, list[str]] = {"create": [], "add": [], "drop": []}
+    for table in metadata.sorted_tables:
+        if table.name not in present:
+            changes["create"].append(table.name)
+            continue
+        existing = {column["name"].lower() for column in inspector.get_columns(table.name, schema=schema)}
+        changes["add"] += [f"{table.name}.{column.name}" for column in table.columns
+                           if column.name.lower() not in existing]
+        changes["drop"] += [f"{table.name}.{name}" for name in OBSOLETE_COLUMNS.get(table.name, ()) if name in existing]
+    changes["drop"] += [name for name in OBSOLETE_TABLES if name in present]
+    return changes
+
+
+_CHANGE_WORDS = {"create": ("созданы таблицы", "создать таблицы"), "add": ("добавлены столбцы", "добавить столбцы"),
+                 "drop": ("удалены таблицы и столбцы прежних версий", "удалить таблицы и столбцы прежних версий")}
+
+
+def describe_changes(changes: dict[str, list[str]], done: bool = True) -> str:
+    return "; ".join(f"{_CHANGE_WORDS[key][0 if done else 1]}: {', '.join(names)}"
+                     for key, names in changes.items() if names)
+
+
+def _server_message(exc: DBAPIError) -> str:
+    """The server's words from a driver error, without pymssql's DB-Lib trailer or pyodbc's [..] prefixes."""
+    args = getattr(exc.orig, "args", ())
+    message = args[1] if len(args) > 1 else str(exc.orig or exc)
+    if isinstance(message, bytes):
+        message = message.decode("utf-8", "replace")
+    message = re.sub(r"^(\[[^\]]*\]\s*)+", "", str(message)).split("DB-Lib error message")[0]
+    return " ".join(message.split())[:300] or str(exc)[:300]
+
+
+def _apply_changes(conn, changes: dict[str, list[str]]) -> None:
+    quote = conn.dialect.identifier_preparer.quote
+    if changes["create"]:
+        metadata.create_all(conn, tables=[metadata.tables[name] for name in changes["create"]])
+    for item in changes["add"]:
+        table, column = item.split(".", 1)
+        ddl = CreateColumn(metadata.tables[table].c[column]).compile(dialect=conn.dialect)
+        conn.execute(text(f"ALTER TABLE {qualified(table)} ADD {ddl}"))
+    for item in changes["drop"]:
+        table, _, column = item.partition(".")
+        conn.execute(text(f"ALTER TABLE {qualified(table)} DROP COLUMN {quote(column)}" if column
+                          else f"DROP TABLE {qualified(table)}"))
+
+
+def init_db() -> dict[str, list[str]]:
+    """Check the tables at start: create what is missing, drop what earlier versions left, check again.
+    Processes starting at once wait for one another (an application lock). Returns what was changed."""
     schema = settings.database_schema
     with engine().connect() as conn:
         if schema:
@@ -253,22 +312,24 @@ def init_db() -> None:
             raise RuntimeError("Таблицы создаёт другой процесс; повторите позже.")
         conn.commit()
         try:
-            metadata.create_all(conn)
-            inspector = inspect(conn)
-            quote = conn.dialect.identifier_preparer.quote
-            for name in OBSOLETE_TABLES:
-                if inspector.has_table(name, schema=schema or None):
-                    conn.execute(text(f"DROP TABLE {qualified(name)}"))
-            for table in metadata.sorted_tables:
-                existing = {column["name"].lower() for column in inspector.get_columns(table.name, schema=schema or None)}
-                for column in table.columns:
-                    if column.name.lower() not in existing:
-                        ddl = CreateColumn(column).compile(dialect=conn.dialect)
-                        conn.execute(text(f"ALTER TABLE {qualified(table.name)} ADD {ddl}"))
-                for name in OBSOLETE_COLUMNS.get(table.name, ()):
-                    if name in existing:
-                        conn.execute(text(f"ALTER TABLE {qualified(table.name)} DROP COLUMN {quote(name)}"))
-            conn.commit()
+            changes = schema_changes(conn)
+            if not any(changes.values()):
+                logger.info("Таблицы базы данных на месте: %d из %d.", len(metadata.tables), len(metadata.tables))
+                return changes
+            try:
+                _apply_changes(conn, changes)
+                conn.commit()
+            except DBAPIError as exc:
+                conn.rollback()
+                raise RuntimeError(f"Не удалось {describe_changes(changes, done=False)} — {_server_message(exc)} "
+                                   "Нужны права CREATE TABLE и ALTER на схему; без них таблицы один раз создаёт "
+                                   "администратор.") from exc
+            left = schema_changes(conn)
+            if left["create"] or left["add"]:
+                raise RuntimeError("После создания в базе нет таблиц и столбцов: "
+                                   + ", ".join(left["create"] + left["add"]))
+            logger.info("Таблицы базы данных: %s.", describe_changes(changes))
+            return changes
         finally:
             _release(conn, resource)
             conn.commit()

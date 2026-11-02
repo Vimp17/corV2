@@ -80,6 +80,50 @@ def test_document_queue_takes_the_oldest_once(db):
         db.delete_document_row(document_id)
 
 
+def test_start_checks_the_tables_and_creates_only_the_missing_ones(db):
+    from sqlalchemy import text
+
+    assert not any(db.init_db().values())                 # everything in place: nothing is changed
+    with db.engine().begin() as conn:
+        conn.execute(text(f"DROP TABLE {db.qualified('source_health')}"))
+    assert db.init_db() == {"create": ["source_health"], "add": [], "drop": []}
+    assert not any(db.init_db().values())
+
+
+def test_a_login_that_only_reads_and_writes_starts_when_the_tables_exist(db, monkeypatch):
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.engine import make_url
+    from sqlalchemy.pool import NullPool
+
+    from app.config import settings
+
+    login, password = f"mai_rw_{uuid.uuid4().hex[:8]}", f"Rw-{uuid.uuid4().hex}"
+    schema = settings.database_schema or "dbo"
+    admin = db.engine().execution_options(isolation_level="AUTOCOMMIT")
+    with admin.connect() as conn:
+        conn.execute(text(f"CREATE LOGIN [{login}] WITH PASSWORD = '{password}', CHECK_POLICY = OFF"))
+        conn.execute(text(f"CREATE USER [{login}] FOR LOGIN [{login}] WITH DEFAULT_SCHEMA = [{schema}]"))
+        conn.execute(text(f"GRANT SELECT, INSERT, UPDATE, DELETE ON SCHEMA::[{schema}] TO [{login}]"))
+    url = make_url(settings.database_url).set(username=login, password=password)
+    restricted = create_engine(url, poolclass=NullPool, connect_args=db.connect_args(settings.database_url))
+    if settings.database_schema:
+        restricted = restricted.execution_options(schema_translate_map={None: settings.database_schema})
+    monkeypatch.setattr(db, "_engine", restricted)
+    try:
+        assert not any(db.init_db().values())             # nothing to create: no right to create is needed
+        with admin.connect() as conn:
+            conn.execute(text(f"DROP TABLE {db.qualified('source_health')}"))
+        with pytest.raises(RuntimeError, match="создать таблицы: source_health — ") as error:
+            db.init_db()                                  # a table it cannot create is named
+        assert "DB-Lib" not in str(error.value)           # the server's words, not the driver's wrapping
+    finally:
+        monkeypatch.undo()
+        db.init_db()
+        with admin.connect() as conn:
+            conn.execute(text(f"DROP USER [{login}]"))
+            conn.execute(text(f"DROP LOGIN [{login}]"))
+
+
 def test_a_column_added_by_a_new_version_is_created(db):
     from sqlalchemy import inspect, text
 

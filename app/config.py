@@ -128,8 +128,10 @@ class Settings:
     docs_max_pages: int = _int_env("MAI_DOCS_MAX_PAGES", "30", 1, 500)
     # A PDF page with fewer characters in its text layer is treated as a scan and sent to OCR.
     docs_min_page_chars: int = _int_env("MAI_DOCS_MIN_PAGE_CHARS", "40", 0, 10000)
-    # Characters of document text sent to the extraction model.
+    # Characters of document text sent to the extraction model, in parts of at most docs_chunk_chars
+    # characters each (one request per part: lower it for a model with a small context window).
     docs_max_text_chars: int = _int_env("MAI_DOCS_MAX_TEXT_CHARS", "60000", 1000, 1000000)
+    docs_chunk_chars: int = _int_env("MAI_DOCS_CHUNK_CHARS", "6000", 1000, 1000000)
     # Model that classifies documents and extracts fields (LiteLLM chat completions); empty =
     # MAI_LLM_MODEL. The OCR model reads page images through the same LiteLLM (vision messages).
     docs_llm_model: str = os.getenv("MAI_DOCS_LLM_MODEL", "").strip()

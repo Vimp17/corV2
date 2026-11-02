@@ -3,12 +3,14 @@ extraction and the OCR model.
 
 One call = one POST to the configured /v1/chat/completions URL with retries on transient
 statuses, a response size limit, and no credentials in the URL. Errors are raised as
-LLMError so callers can decide whether a failure blocks the work or only leaves a gap.
+LLMError so callers can decide whether a failure blocks the work or only leaves a gap; a
+request longer than the model's context window as ContextTooLong, so it can be sent in parts.
 """
 from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from typing import Any
 from urllib.parse import urlparse
@@ -20,10 +22,16 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 MAX_RESPONSE_BYTES = 2_000_000
+# How servers (LiteLLM, vLLM, llama.cpp, TGI, OpenAI) refuse a request beyond the context window.
+_CONTEXT_OVERFLOW = re.compile(r"context|too long|maximum.{0,40}length|exceed", re.IGNORECASE)
 
 
 class LLMError(RuntimeError):
     pass
+
+
+class ContextTooLong(LLMError):
+    """The request does not fit into the model's context window: a shorter one may."""
 
 
 def validate_url(url: str, variable: str = "MAI_LLM_API_URL") -> None:
@@ -103,6 +111,10 @@ def chat(messages: list[dict], *, model: str, url: str | None = None, api_key: s
                 if response.status_code in {429, 500, 502, 503, 504} and attempt < max_retries:
                     time.sleep(min(2 ** attempt, 4))
                     continue
+                if response.status_code in {400, 413, 422}:
+                    detail = next(response.iter_content(chunk_size=8192), b"").decode("utf-8", "replace")
+                    if _CONTEXT_OVERFLOW.search(detail):
+                        raise ContextTooLong("Запрос не помещается в контекстное окно модели.")
                 response.raise_for_status()
                 chunks: list[bytes] = []
                 total = 0
