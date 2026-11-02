@@ -332,13 +332,11 @@ def extra_measurements(well_id: str) -> list[dict]:
 
 
 def well_passports(well_id: str) -> list[tuple[str, dict, datetime | None]]:
-    """Passport fields taken from documents: (source_id, fields, passport date)."""
-    from app.core.documents.types import passport_source_ids
-
-    ids = passport_source_ids()
+    """Well attributes taken from documents (a passport, or the field named in another document):
+    (source_id, fields, date)."""
     result = []
     for source_id, payload in db.load_source_payloads(well_id).items():
-        if source_id in ids and isinstance(payload.get("passport"), dict):
+        if isinstance(payload.get("passport"), dict):
             fields = payload["passport"]
             when = None
             if fields.get("passport_date"):

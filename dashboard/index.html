@@ -1254,16 +1254,22 @@
         if (box) { box.append(el('summary', { class: `rec-title${record.accepted ? '' : ' bad'}`, text: title })); parts.push(box); }
         else parts.push(el('div', { class: `rec-title${record.accepted ? '' : ' bad'}`, text: title }));
         if (record.issues?.length) add(el('div', { class: 'hint warn', text: record.issues.join(' ') }));
-        add(el('dl', { class: 'fields' }, Object.entries(record.fields).map(([name, field]) => [
+        // Every document is searched for all the card fields: show what was found (and the well), list the rest.
+        const shown = Object.entries(record.fields).filter(([name, field]) => field.status !== 'missing' || name === 'well_id');
+        const absent = Object.entries(record.fields).filter(([name, field]) => field.status === 'missing' && name !== 'well_id');
+        add(el('dl', { class: 'fields' }, shown.map(([name, field]) => [
           el('dt', { text: labels[name] || name }),
           el('dd', {}, field.status === 'ok' ? fmtValue(field.value) : el('span', { class: 'na', text: '—' }),
             field.status !== 'ok' && field.status !== 'missing' ? el('span', { class: 'rej', text: field.note || FIELD_STATUS_NOTE[field.status] }) : null,
             field.quote ? el('span', { class: 'q', text: `«${field.quote}»` }) : null,
             Array.isArray(field.value) ? [...new Set(field.value.map(item => item.quote))].map(quote => el('span', { class: 'q', text: `«${quote}»` })) : null)])));
+        if (absent.length) add(el('div', { class: 'hint', text: `Нет в документе: ${absent.map(([name]) => labels[name] || name).join('; ')}.` }));
       });
       const meta = [doc.text_method ? `Текст: ${{ text_layer: 'текстовый слой PDF', ocr: 'OCR', mixed: 'текстовый слой и OCR', image_ocr: 'OCR изображения', excel_table: 'таблица Excel', excel_form: 'форма Excel', excel_profile: 'импорт выгрузки', excel_registry: 'реестр Excel' }[doc.text_method] || doc.text_method}` : null,
         doc.pages ? `${doc.file_kind === 'xlsx' ? 'листов' : 'страниц'}: ${doc.pages}` : null,
-        extraction.type_method === 'rules' ? 'разобран без ИИ — по названиям столбцов и строк' : extraction.type_method ? `тип определён ${extraction.type_method === 'keywords' ? 'по ключевым словам' : 'языковой моделью'}` : null,
+        extraction.type_method === 'rules' ? 'разобран без ИИ — по названиям столбцов и строк'
+          : extraction.type_method === 'fallback' ? 'шаблон не подошёл — взяты все сведения для карточки скважины'
+          : extraction.type_method ? `тип определён ${extraction.type_method === 'keywords' ? 'по ключевым словам' : 'языковой моделью'}` : null,
         doc.attempts ? `попыток: ${doc.attempts}` : null].filter(Boolean).join(' · ');
       if (meta) parts.push(el('div', { class: 'hint', text: meta }));
       if (doc.text) {

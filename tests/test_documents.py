@@ -482,6 +482,70 @@ def test_scanned_pdf_and_source_table(client, generated, tmp_path):
     assert len(table["well_ids"]) >= 10
 
 
+# --------------------------------------------------------------------------- card fields of any document
+def _pdf(path, lines):
+    from scripts.build_demo_documents import _font_path, write_pdf
+
+    write_pdf(path, lines, _font_path())
+    return path
+
+
+@needs_db
+def test_protocol_pdf_keeps_tonnage_and_noo(client, tmp_path):
+    # A lab protocol has no tonnage field of its own: the card fields of every type keep it.
+    path = _pdf(tmp_path / "protokol.pdf", [
+        "ПРОТОКОЛ ХИМИЧЕСКОГО АНАЛИЗА № 7", "",
+        "Скважина | Дата отбора | Обводнённость, % | Хлориды, мг/л | Тоннаж, т | НОО, сут",
+        f"DEMO-012 | {TODAY:%d.%m.%Y} | 44 | 21500 | 7.5 | 41"])
+    document = _upload(client, path)
+    assert document["status"] == "loaded", document["status_message"]
+    assert document["doc_type"] == "lab_protocol"
+    well = _well(client, "DEMO-012")
+    assert well["tonnage_t"] == 7.5 and well["noo_days"] == 41
+    assert well["provenance"]["tonnage_t"]["source"] == "Протокол хим. анализа (документ)"
+
+
+@needs_db
+def test_document_without_template_fills_the_card(client, tmp_path, fake):
+    path = _pdf(tmp_path / "spravka.pdf", [
+        "СПРАВКА О РАБОТЕ СКВАЖИНЫ", "", "Скважина № DEMO-011", f"Дата замера: {TODAY:%d.%m.%Y}",
+        "Дебит жидкости: 63,5 м3/сут", "Тоннаж: 2,5 т"])
+    document = _upload(client, path)
+    assert document["status"] == "loaded", document["status_message"]
+    assert document["doc_type"] == "well_document"
+    assert any(call["kind"] == "classify" for call in fake.calls)       # no template matched
+    detail = client.get(f"/api/v1/documents/{document['document_id']}").json()
+    assert detail["extraction"]["type_method"] == "fallback"
+    well = _well(client, "DEMO-011")
+    assert well["liquid_rate_m3_day"] == 63.5 and well["tonnage_t"] == 2.5
+    assert well["provenance"]["tonnage_t"]["source"] == "Документ по скважине (документ)"
+
+
+def test_a_place_name_alone_is_no_measurement():
+    from app.core.documents import load
+
+    assert load._point({"field": "Южное"}, "2026-10-01", "DOC_DEMOUNT") is None
+    point = load._point({"field": "Южное", "tonnage_t": 3.0}, "2026-10-01", "DOC_DEMOUNT")
+    assert point.tonnage_t == 3.0 and point.field == "Южное"
+
+
+@needs_db
+def test_source_import_recognises_a_column_by_its_name(client, tmp_path):
+    from openpyxl import Workbook
+
+    book = Workbook()
+    book.active.append(["Скважина", "Дата отбора", "CO2, %", "Тоннаж реагента, т", "Эффективность ингибитора, %", "pH"])
+    book.active.append(["DEMO-012", TODAY.strftime("%d.%m.%Y"), 1.4, 6.5, 85, 6.8])
+    book.save(tmp_path / "khimik.xlsx")
+    with open(tmp_path / "khimik.xlsx", "rb") as handle:
+        result = client.post("/api/v1/ingestion/excel", data={"profile_id": "khimik"},
+                             files={"file": ("khimik.xlsx", handle)}).json()
+    assert result["source_columns"]["tonnage_t"] == "Тоннаж реагента, т"
+    assert result["extra_columns"] == ["pH"]                # only what has no field stays additional
+    well = _well(client, "DEMO-012")
+    assert well["tonnage_t"] == 6.5
+
+
 # --------------------------------------------------------------------------- mixed chemistry tables
 def _chemistry_book(path, date_header="Дата", title=None, text_dates=True):
     from datetime import datetime as _dt
