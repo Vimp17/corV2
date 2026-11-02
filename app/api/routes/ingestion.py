@@ -5,7 +5,7 @@ from app import db
 from app.config import settings
 from app.core import rating_builder
 from app.core.excel_ingestion import ExcelImportError, load_profiles
-from app.core.source_connectors import ingest_excel_bytes
+from app.core.source_connectors import crew_rows, ingest_excel_bytes, save_crews
 from app.schemas import HistoryIngestionRequest, IngestionRequest
 
 router = APIRouter(prefix="/ingestion", tags=["ingestion"])
@@ -110,93 +110,32 @@ async def ingest_excel(background_tasks: BackgroundTasks,
 
 
 @router.post("/crew-schedule", status_code=201)
-def ingest_crew_schedule(
-    payload: dict,
-    well_id: str | None = Query(default=None, max_length=128),
-    all_wells: bool = Query(default=False),
-) -> dict:
-    """Accept crew availability JSON and store it per well or for all known wells."""
-    from app.schemas import CrewAvailability
-
+def ingest_crew_schedule(payload: dict, well_id: str | None = Query(default=None, max_length=128),
+                         all_wells: bool = Query(default=False)) -> dict:
+    """Accept crew availability JSON and store it per well or for all known wells; invalid rows are
+    reported and skipped."""
     source_id = "CREW_SCHEDULE"
-
-    crew_rows = (
-        payload.get("crew_availability")
-        if isinstance(payload.get("crew_availability"), list)
-        else payload.get("records")
-        if isinstance(payload.get("records"), list)
-        else None
-    )
-
-    if crew_rows is None:
-        raise HTTPException(
-            status_code=422,
-            detail="JSON must contain a 'crew_availability' array.",
-        )
-    if not crew_rows:
-        raise HTTPException(status_code=422, detail="crew_availability array is empty")
-    if len(crew_rows) > 5000:
-        raise HTTPException(status_code=422, detail="Maximum 5000 crew records per request")
-
-    canonical_rows = []
-    errors = []
-    for index, row in enumerate(crew_rows):
-        if not isinstance(row, dict):
-            errors.append({"row": index + 1, "message": "Each item must be a JSON object"})
-            continue
-        try:
-            item = CrewAvailability.model_validate({**row, "source_id": source_id})
-            canonical_rows.append(item.model_dump(mode="json"))
-        except Exception as exc:
-            errors.append({"row": index + 1, "message": str(exc)[:500]})
-
-    if not canonical_rows:
-        raise HTTPException(
-            status_code=422,
-            detail={"message": "No valid crew records", "errors": errors[:20]},
-        )
-
+    try:
+        crews, errors = crew_rows(payload, source_id)
+    except ExcelImportError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not crews:
+        raise HTTPException(status_code=422, detail={"message": "No valid crew records", "errors": errors[:20]})
     if all_wells:
         targets = [row["well_id"] for row in db.list_wells()]
     elif well_id and well_id.strip():
         targets = [well_id.strip()]
     else:
         raise HTTPException(status_code=422, detail="Specify well_id or all_wells=true")
-
     if not targets:
-        raise HTTPException(
-            status_code=422,
-            detail="No wells known yet; upload telemetry first or specify well_id",
-        )
-
-    status = "ok" if not errors else "partial"
-    message = f"{len(canonical_rows)} crew records accepted, {len(errors)} rejected."
+        raise HTTPException(status_code=422, detail="No wells known yet; upload telemetry first or specify well_id")
+    status = "partial" if errors else "ok"
+    message = f"{len(crews)} crew records accepted, {len(errors)} rejected."
     if errors:
-        message += " Examples: " + "; ".join(
-            f"row {e['row']}: {e['message']}" for e in errors[:3]
-        )
-    message = message[:2000]
-
-    statuses = []
-    for target in targets:
-        db.save_source_payload(source_id, target, {"crew_availability": canonical_rows})
-        statuses.append(
-            db.record_source_status(
-                source_id, target, status, message, len(canonical_rows),
-                origin="manual_upload",
-            )
-        )
-
-    return {
-        "status": status,
-        "source_id": source_id,
-        "targets": targets,
-        "rows_accepted": len(canonical_rows),
-        "rows_rejected": len(errors),
-        "errors": errors[:20],
-        "source_statuses": statuses,
-        "message": message,
-    }
+        message += " Examples: " + "; ".join(f"row {item['row']}: {item['message']}" for item in errors[:3])
+    statuses = save_crews(crews, source_id, targets, origin="manual_upload", status=status, message=message[:2000])
+    return {"status": status, "source_id": source_id, "targets": targets, "rows_accepted": len(crews),
+            "rows_rejected": len(errors), "errors": errors[:20], "source_statuses": statuses, "message": message[:2000]}
 
 
 @router.get("/wells/{well_id}/telemetry")
