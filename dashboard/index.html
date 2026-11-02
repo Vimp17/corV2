@@ -80,11 +80,8 @@
     .page-head { display:flex; flex-wrap:wrap; align-items:flex-end; justify-content:space-between; gap:8px 24px }
     .page-head h1 { margin:0; font-size:22px; color:var(--navy) }
     .sub { font-size:12px; color:var(--muted); line-height:1.35 }
-    .sub.late { color:var(--repair); font-weight:600 } .sub.noplan { color:var(--ud); font-weight:600 } .sub.ok { color:var(--none) }
+    .sub.late { color:var(--repair); font-weight:600 } .sub.ok { color:var(--none) }
     .alerts { display:flex; flex-wrap:wrap; gap:8px }
-    .alert { display:inline-flex; align-items:baseline; gap:6px; padding:6px 12px; border-radius:4px; background:#fff; border:1px solid var(--line); font-size:13px }
-    .alert b { font-variant-numeric:tabular-nums; color:var(--repair) }
-    .alert.warn b { color:var(--ud) }
 
     /* Measure tiles */
     .tiles { display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:12px }
@@ -148,7 +145,6 @@
     .gapmenu button { display:flex; width:100%; justify-content:space-between; gap:12px; border:0; background:transparent; padding:9px 10px; border-radius:4px; cursor:pointer; font-size:13px; color:var(--ink); text-align:left }
     .gapmenu button:hover, .gapmenu button:focus-visible { background:var(--bg) }
     .gapmenu button:disabled { color:var(--muted); cursor:default }
-    .gap { display:inline-flex; padding:1px 6px; border-radius:4px; font-size:11px; font-weight:600; background:var(--ud-bg); color:var(--ud); margin:1px 3px 1px 0 }
     .ev.warn { background:var(--ud-bg); color:var(--ud) }
     .mchip { display:inline-flex; padding:1px 7px; border-radius:10px; font-size:11px; font-weight:700 }
     .mchip.repair { background:var(--repair-bg); color:var(--repair) } .mchip.engineer { background:var(--engineer-bg); color:var(--engineer) } .mchip.ud { background:var(--ud-bg); color:var(--ud) } .mchip.none { background:var(--none-bg); color:var(--none) } .mchip.unscored { background:#EEF1F4; color:var(--muted) }
@@ -157,7 +153,6 @@
     .thead { background:var(--navy); color:#fff; font-size:11px; font-weight:600; line-height:1.25; min-height:40px }
     .thead > div { padding:6px 0 }
     .thead .hsub { display:block; font-size:10px; font-weight:500; color:#B9C6D6 }
-    .thead.group { min-height:24px; background:var(--navy-2); color:#B9C6D6; font-size:11px }
     .trow { min-height:52px; border-bottom:1px solid var(--line-2); font-size:12px; line-height:1.35 }
     .trow:hover { background:#F7F9FB }
     .trow.sel { background:var(--sky) }
@@ -165,10 +160,7 @@
     .empty { padding:28px 16px; color:var(--muted); text-align:center }
     .wellbtn { border:0; background:transparent; padding:0; color:var(--navy); font-weight:700; font-size:14px; cursor:pointer; text-align:left; text-decoration:underline; text-decoration-color:#B9C6D6; text-underline-offset:3px; min-height:24px }
     .wellbtn:hover { color:var(--blue); text-decoration-color:var(--blue) }
-    .idx { display:flex; align-items:center; gap:12px }
-    .idx strong { font-size:22px; font-variant-numeric:tabular-nums; min-width:30px }
     .idxnum.repair { color:var(--repair) } .idxnum.engineer { color:var(--engineer) } .idxnum.ud { color:var(--ud) } .idxnum.none { color:var(--none) } .idxnum.unscored { color:var(--muted) }
-    .idx strong.repair { color:var(--repair) } .idx strong.engineer { color:var(--engineer) } .idx strong.ud { color:var(--ud) } .idx strong.none { color:var(--none) }
     .bars { display:flex; flex-direction:column; gap:4px; flex:1; min-width:0 }
     .barline { display:grid; grid-template-columns:28px minmax(0,1fr) 30px; align-items:center; gap:6px; font-size:11px; color:var(--muted) }
     .bar { height:6px; background:#E5EAF0; border-radius:3px; overflow:hidden }
@@ -199,8 +191,6 @@
     .drawer-body { flex:1; overflow-y:auto; padding:16px 18px 28px; display:flex; flex-direction:column; gap:16px }
     @media (max-width: 900px) { .drawer { top:0; width:100vw; z-index:60 } }
     @media (prefers-reduced-motion: reduce) { .drawer, .drawer.open { transition:none } }
-    .prot { font-size:11px; font-weight:600; line-height:1.3 }
-    .prot.effective { color:var(--none) } .prot.unconfirmed { color:var(--ud) } .prot.insufficient { color:var(--repair) }
     .raw-idx { font-size:12px; color:var(--muted) }
     h2.section { margin:0; font-size:17px; color:var(--navy) }
     .legend { display:flex; flex-wrap:wrap; gap:14px }
@@ -223,13 +213,10 @@
     .glabel .wellbtn { font-size:13px }
     .grk { font-size:12px; color:var(--muted); width:20px; text-align:right; font-variant-numeric:tabular-nums }
 
-    .card-head { display:flex; justify-content:space-between; align-items:flex-start; gap:12px }
-    .card-head h2 { margin:0; font-size:20px; color:var(--navy) }
     .prop { border-radius:var(--radius); padding:14px 16px; display:flex; flex-direction:column; gap:8px }
     .prop.repair { background:var(--repair-bg) } .prop.engineer { background:var(--engineer-bg) } .prop.ud { background:var(--ud-bg) } .prop.none { background:var(--none-bg) } .prop.unscored { background:#EEF1F4 }
     .prop h3 { margin:0; font-size:14px }
     .prop.repair h3 { color:var(--repair) } .prop.engineer h3 { color:var(--engineer) } .prop.ud h3 { color:var(--ud) } .prop.none h3 { color:var(--none) }
-    .prop .sep { padding-top:8px; border-top:1px solid rgba(26,36,48,.12); display:flex; flex-direction:column; gap:8px }
     .group-title { margin:0; font-size:12px; font-weight:700; color:var(--navy-2) }
     .dl { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:4px 16px; margin:0 }
     .dl dt { font-size:12px; color:var(--muted); margin:0; padding-top:6px }
@@ -238,11 +225,6 @@
     .dl dd.bad { color:var(--repair) } .dl dd.ok { color:var(--none) } .dl dd.na { color:var(--muted); font-weight:400 }
     .box { border:1px solid var(--line); border-radius:var(--radius); padding:12px 14px; display:flex; flex-direction:column; gap:10px }
     .box h3 { margin:0; font-size:14px; color:var(--navy) }
-    .form-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:10px }
-    .field { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--muted); min-width:0 }
-    .field input, .field select, .field textarea { padding:8px 10px; border:1px solid #C9D2DC; border-radius:4px; background:#fff; color:var(--ink); font-size:13px; min-height:38px; width:100% }
-    .field textarea { min-height:86px; resize:vertical }
-    .field.wide { grid-column:1 / -1 }
     .hint { font-size:12px; color:var(--muted) }
     .hint.warn { color:var(--ud) }
 
@@ -316,13 +298,6 @@
       .fields { grid-template-columns:minmax(0, 1fr) }
       .fields dt { margin-top:6px }
     }
-    .uploads { display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:14px }
-    .src { padding:16px; display:flex; flex-direction:column; gap:10px }
-    .src h3 { margin:0; font-size:15px; color:var(--navy) }
-    .src form { display:flex; flex-direction:column; gap:10px }
-    .src .row { display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end }
-    .src .result { font-size:12px; color:var(--muted); white-space:pre-line; min-height:18px }
-    .src.future { border-style:dashed; background:#FAFBFC }
     .datastate { display:flex; flex-wrap:wrap; gap:6px 14px; font-size:12px; color:var(--muted) }
     .datastate b { color:var(--ink); font-weight:600 }
     .srcmode { display:inline-flex; gap:4px; align-items:baseline }
@@ -357,9 +332,6 @@
         <a href="#sec-ppr">График ППР (ДДО)</a>
         <div class="nav-sep" aria-hidden="true"></div>
         <a href="#sec-docs">Документы</a>
-        <a href="#sec-upload">Загрузка данных</a>
-        <a href="#sec-crew">Расписание бригад</a>
-        <a href="#sec-future">Другие источники</a>
         <div class="nav-summary" id="navSummary" role="group" aria-label="Сводка по мероприятиям"></div>
       </div>
     </nav>
@@ -435,7 +407,7 @@
       <section class="panel docs anchor" id="sec-docs" aria-labelledby="docsTitle">
         <div>
           <h2 class="section" id="docsTitle">Документы</h2>
-          <div class="sub">Акты демонтажа и разбора, протоколы хим. анализа, паспорта скважин, реестр коррозии НКТ — PDF, сканы, фото и Excel. Система распознаёт текст (сканы — OCR-моделью), определяет тип и извлекает данные с цитатой из документа. Подтверждённые данные попадают в рейтинг; нераспознанный документ не учитывается — данных по нему нет.</div>
+          <div class="sub">Выгрузки ДАРС, ХИМИК и ЭРА ремонта (Excel), акты демонтажа и разбора, протоколы хим. анализа, паспорта скважин, реестр коррозии НКТ и любые другие документы по скважинам — PDF, сканы, фото и Excel. Система распознаёт текст (сканы — OCR-моделью), определяет тип и извлекает данные с цитатой из документа. Подтверждённые данные попадают в рейтинг; нераспознанный документ не учитывается — данных по нему нет.</div>
         </div>
         <div class="dropzone" id="dropzone">
           <div class="grow-1">
@@ -470,15 +442,7 @@
         </div>
       </section>
 
-      <section class="anchor" id="sec-upload" aria-labelledby="uploadTitle" style="display:flex; flex-direction:column; gap:12px">
-        <div>
-          <h2 class="section" id="uploadTitle">Загрузка данных</h2>
-          <div class="sub">Одна карточка на источник из config/source_profiles.json. После загрузки рейтинг пересчитывается для скважин из файла. Если у источника настроен API, дневной цикл запрашивает данные сам.</div>
-        </div>
-        <div class="uploads" id="uploads"><div class="panel src"><div class="sub">Загружаем список источников…</div></div></div>
-      </section>
-
-      <footer>Рейтинг рассчитывается системой по данным ДАРС, ХИМИК и ЭРА ремонта: из API источников, если они настроены, иначе по загруженным файлам. Пороги и сроки — переменные MAI_RATING_*. Рекомендации требуют проверки инженером; предложения по ЭРА ремонта уходят в Промайн только после нажатия «Отправить».</footer>
+      <footer>Рейтинг рассчитывается системой по данным ДАРС, ХИМИК и ЭРА ремонта и по документам: из API источников, если они настроены, иначе по загруженным файлам. Пороги и сроки — переменные MAI_RATING_*. Предложения ИИ-агента требуют проверки инженером.</footer>
     </main>
   </div>
 
@@ -505,7 +469,7 @@
     const AUTO_REFRESH_SECONDS = 60;
     const TABLE_PAGE = 100;
 
-    const state = { rating: null, filter: 'all', selected: null, busy: false, sources: null, drawerOpen: false, opener: null, tableLimit: 100, showUnscored: false };
+    const state = { rating: null, filter: 'all', selected: null, busy: false, drawerOpen: false, opener: null, tableLimit: 100, showUnscored: false };
 
     // ---------------------------------------------------------------- helpers
     function el(tag, props = {}, ...children) {
@@ -537,7 +501,6 @@
       }
       return result;
     }
-    const postJson = (path, body, method = 'POST') => api(path, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     function notice(message, type = '') { const box = $('notice'); box.textContent = message || ''; box.className = `notice ${type}`; box.style.display = message ? 'block' : 'none'; }
     const isoDay = (iso) => { if (!iso) return null; const p = String(iso).slice(0, 10).split('-'); return Date.UTC(+p[0], +p[1] - 1, +p[2]); };
     const pad = (n) => (n < 10 ? '0' : '') + n;
@@ -685,10 +648,6 @@
       if (state.rating) renderTable();
     }
 
-    function evidence(value, badWhen, labels) {
-      if (value === null || value === undefined) return el('span', { class: 'ev na', text: labels.na });
-      return el('span', { class: `ev ${value === badWhen ? 'bad' : 'ok'}`, text: value === badWhen ? labels.bad : labels.ok });
-    }
 
     const ACT_WORDS = (act, corrosion, missing) => missing ? ['Нет акта разбора', 'warn']
       : act === null || act === undefined ? ['Нет данных', 'na']
@@ -763,7 +722,8 @@
           el('div', { class: 'num-cell', 'data-label': 'Наработка, сут', text: fmtNum(w.run_days) }),
           el('div', { class: 'num-cell', 'data-label': 'Жидкость / нефть' }, el('div', { style: 'display:flex; flex-direction:column' },
             el('span', { text: `${fmtNum(w.liquid_rate_m3_day, 1)} м³` }),
-            el('span', { class: 'sub', style: 'font-size:11px', text: w.oil_l_day === null || w.oil_l_day === undefined ? 'нефть —' : `${fmtNum(w.oil_l_day)} л нефти (${fmtNum(w.oil_pct)} %)` }))),
+            el('span', { class: 'sub', style: 'font-size:11px', text: w.oil_l_day !== null && w.oil_l_day !== undefined ? `${fmtNum(w.oil_l_day)} л нефти (${fmtNum(w.oil_pct)} %)`
+              : w.oil_pct !== null && w.oil_pct !== undefined ? `нефть ${fmtNum(w.oil_pct)} %` : 'нефть —' }))),
           el('div', { 'data-label': 'Полнота данных' }, gapsCell(w)));
       }), ...(footer ? [footer] : []));
     }
@@ -773,9 +733,9 @@
       if (!data.known_wells) {
         const how = data.api_configured
           ? 'API источников настроен: дневной цикл запросит данные и рассчитает рейтинг.'
-          : 'Загрузите файлы ДАРС, ХИМИК и ЭРА ремонта в разделе «Загрузка данных» — рейтинг рассчитается сразу. Чтобы данные запрашивались автоматически, задайте MAI_SOURCE_<ID>_URL и список скважин MAI_WELL_IDS.';
+          : 'Загрузите файлы ДАРС, ХИМИК и ЭРА ремонта в разделе «Документы» — рейтинг рассчитается сразу. Чтобы данные запрашивались автоматически, задайте MAI_SOURCE_<ID>_URL и список скважин MAI_WELL_IDS.';
         return el('div', { class: 'empty' }, el('div', { class: 'empty-title', text: 'Данных по скважинам пока нет' }), el('div', { text: how }),
-          el('div', { class: 'row' }, el('a', { class: 'btn secondary', href: '#sec-upload', text: 'К загрузке данных' }), data.api_configured ? run : null));
+          el('div', { class: 'row' }, el('a', { class: 'btn secondary', href: '#sec-docs', text: 'К документам' }), data.api_configured ? run : null));
       }
       return el('div', { class: 'empty' }, el('div', { class: 'empty-title', text: `Данные есть по ${data.known_wells} скв., рейтинг ещё не рассчитан` }),
         el('div', { text: 'Дневной цикл запросит данные из настроенных API, рассчитает риск и рейтинг по всем скважинам.' }), el('div', { class: 'row' }, run));
@@ -837,12 +797,6 @@
     }
 
     // ---------------------------------------------------------------- well card
-    const PROT_TEXT = { effective: 'защита эффективна', unconfirmed: 'защита не подтверждена', insufficient: 'защита недостаточна' };
-    function protLine(w) {
-      if (!w.protection) return null;
-      const text = PROT_TEXT[w.protection] + (w.protection_adjusted ? ` · индекс ${w.index_raw}→${w.index}` : '');
-      return el('span', { class: `prot ${w.protection}`, text });
-    }
 
     // ---------------------------------------------------------------- well card drawer
     function setHash(wellId) {
@@ -1031,97 +985,6 @@
         notice(`${result.message} Рейтинг пересчитан.${tail}`, errors ? 'warning' : '');
       } catch (error) { notice(error.message, 'error'); }
       finally { $('run').disabled = false; state.busy = false; await refresh({ keepNotice: true }); }
-    }
-
-    // ---------------------------------------------------------------- data upload
-    async function loadSources() {
-      try {
-        const data = await api('/api/v1/ingestion/sources');
-        state.sources = data;
-        renderUploads(data);
-      } catch (error) {
-        $('uploads').replaceChildren(el('div', { class: 'panel src' }, el('div', { class: 'sub', text: `${error.message} Если защита API включена, введите ключ и нажмите «Обновить».` })));
-      }
-    }
-
-    function lastStatusLine(sourceId, statuses) {
-      const rows = (statuses || []).filter(s => s.source_id === sourceId && s.status !== 'not_configured');
-      if (!rows.length) return 'Загрузок ещё не было.';
-      const last = rows.reduce((a, b) => (a.retrieved_at > b.retrieved_at ? a : b));
-      const wells = new Set(rows.map(r => r.well_id)).size;
-      return `Последняя загрузка: ${fmtTime(last.retrieved_at)}, статус ${last.status}. Скважин с данными: ${wells}.`;
-    }
-
-    function renderUploads(data) {
-      const order = { telemetry: 1, history: 2, json_schedule: 3 };
-      const sources = [...data.sources].sort((a, b) => (order[a.kind] ?? 9) - (order[b.kind] ?? 9));
-      const cards = sources.map(source => source.upload_format === 'json' ? crewCard(source, data) : excelCard(source, data));
-      cards.push(el('div', { class: 'panel src future', id: 'sec-future', style: 'scroll-margin-top:72px' },
-        el('h3', { text: 'Другие источники' }),
-        el('div', { class: 'sub', text: 'Новый источник подключается профилем в config/source_profiles.json: название, вид данных и соответствие колонок. После перезапуска API здесь появится его карточка загрузки. Источник с API подключается через SourceAdapter или POST-эндпоинты (docs/API_AND_MODELS_GUIDE.md).' })));
-      $('uploads').replaceChildren(...cards);
-    }
-
-    function excelCard(source, data) {
-      const file = el('input', { type: 'file', accept: '.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel', required: true });
-      const wellId = source.per_well ? el('input', { type: 'text', placeholder: 'если нет в файле', maxlength: '128' }) : null;
-      const button = el('button', { class: 'btn', type: 'submit', text: 'Загрузить файл' });
-      const result = el('div', { class: 'result', 'aria-live': 'polite', text: lastStatusLine(source.source_id, data.last_status) });
-      const form = el('form', { onSubmit: async (event) => {
-        event.preventDefault();
-        if (!file.files[0]) { notice('Выберите файл Excel (.xlsx или .xls).', 'warning'); return; }
-        button.disabled = true; state.busy = true; result.textContent = 'Файл загружается и проверяется…';
-        try {
-          const body = new FormData(); body.append('profile_id', source.profile_id); body.append('file', file.files[0]);
-          if (wellId && wellId.value.trim()) body.append('well_id', wellId.value.trim());
-          const r = await api('/api/v1/ingestion/excel', { method: 'POST', body });
-          const wells = new Set((r.imported_wells || []).map(item => item.well_id)).size;
-          result.textContent = `Статус: ${r.status}. Листы: ${(r.sheet_names || []).join(', ') || '—'}. Строк принято: ${r.rows_accepted}, отклонено: ${r.rows_rejected}. Скважин: ${wells}.`
-            + ((r.extra_columns || []).length ? `\nДополнительные показатели (в рейтинге не учитываются): ${r.extra_columns.join(', ')}.` : '')
-            + ((r.ignored_columns || []).filter(c => !(r.extra_columns || []).includes(c)).length ? `\nНе использованы: ${(r.ignored_columns || []).filter(c => !(r.extra_columns || []).includes(c)).join(', ')}.` : '')
-            + (r.errors?.length ? `\nПримеры ошибок: ${r.errors.slice(0, 3).map(e => `${e.sheet_name || ''} строка ${e.row}: ${e.message}`).join(' | ')}` : '');
-          const ratingNote = !r.rating || r.rating.mode === 'none' ? ''
-            : r.rating.mode === 'background' ? ` Рейтинг пересчитывается в фоне (${r.rating.wells} скв.), нажмите «Обновить» через минуту.`
-            : ` Рейтинг пересчитан (${r.rating.wells} скв.${r.rating.failed?.length ? `, ошибок: ${r.rating.failed.length}` : ''}).`;
-          notice(wells ? `${source.title}: загружено, скважин ${wells}.${ratingNote}` : (r.message || 'В файле не найдено строк для загрузки.'), wells ? '' : 'warning');
-          file.value = '';
-          await refresh({ keepNotice: true }); loadSources();
-        } catch (error) { result.textContent = error.message; notice(error.message, 'error'); }
-        finally { button.disabled = false; state.busy = false; }
-      } },
-        el('label', { class: 'field' }, 'Файл Excel', file),
-        wellId ? el('label', { class: 'field' }, 'ID скважины', wellId) : null,
-        el('div', { class: 'row' }, button));
-      return el('div', { class: 'panel src' },
-        el('h3', { text: source.title }), source.description ? el('div', { class: 'sub', text: source.description }) : null, form, result);
-    }
-
-    function crewCard(source, data) {
-      const file = el('input', { type: 'file', accept: '.json,application/json', required: true });
-      const wellId = el('input', { type: 'text', placeholder: 'например, 2215Б', maxlength: '128' });
-      const all = el('input', { type: 'checkbox', checked: true });
-      const button = el('button', { class: 'btn', type: 'submit', text: 'Загрузить расписание' });
-      const result = el('div', { class: 'result', 'aria-live': 'polite', text: lastStatusLine(source.source_id, data.last_status) });
-      const form = el('form', { onSubmit: async (event) => {
-        event.preventDefault();
-        if (!file.files[0]) { notice('Выберите файл .json с расписанием бригад.', 'warning'); return; }
-        if (!all.checked && !wellId.value.trim()) { notice('Укажите ID скважины или отметьте «применить ко всем скважинам».', 'warning'); return; }
-        button.disabled = true; state.busy = true; result.textContent = 'Файл расписания обрабатывается…';
-        try {
-          const payload = JSON.parse(await file.files[0].text());
-          const params = new URLSearchParams(); if (all.checked) params.set('all_wells', 'true'); if (wellId.value.trim()) params.set('well_id', wellId.value.trim());
-          const r = await postJson(`/api/v1/ingestion/crew-schedule?${params}`, payload);
-          result.textContent = `Статус: ${r.status}. Скважин: ${(r.targets || []).length}. Записей принято: ${r.rows_accepted}, отклонено: ${r.rows_rejected}.`;
-          notice('Расписание бригад загружено.'); file.value = ''; loadSources();
-        } catch (error) { result.textContent = error instanceof SyntaxError ? 'Файл не является корректным JSON.' : error.message; notice(result.textContent, 'error'); }
-        finally { button.disabled = false; state.busy = false; }
-      } },
-        el('label', { class: 'field' }, 'Файл JSON', file),
-        el('label', { class: 'field' }, 'ID скважины, если не ко всем', wellId),
-        el('label', { class: 'check' }, all, 'применить ко всем скважинам'),
-        el('div', { class: 'hint', text: 'Массив бригад или {"crew_availability": [...]}: crew_id, specialties, region, status (available / busy / unknown), available_from, available_to (ISO 8601).' }),
-        el('div', { class: 'row' }, button));
-      return el('div', { class: 'panel src', id: 'sec-crew', style: 'scroll-margin-top:72px' }, el('h3', { text: source.title }), source.description ? el('div', { class: 'sub', text: source.description }) : null, form, result);
     }
 
     // ---------------------------------------------------------------- documents
@@ -1495,18 +1358,18 @@
           links.forEach(link => link.setAttribute('aria-current', String(link.getAttribute('href') === '#' + entry.target.id)));
         }
       }, { rootMargin: '-80px 0px -60% 0px' });
-      ['sec-rating', 'sec-ppr', 'sec-docs', 'sec-upload'].forEach(id => { const node = $(id); if (node) observer.observe(node); });
+      ['sec-rating', 'sec-ppr', 'sec-docs'].forEach(id => { const node = $(id); if (node) observer.observe(node); });
     }
 
     // ---------------------------------------------------------------- start
     try { $('apiKey').value = sessionStorage.getItem('maiApiKey') || ''; } catch { /* storage may be unavailable */ }
-    $('apiKey').addEventListener('change', () => { try { sessionStorage.setItem('maiApiKey', $('apiKey').value.trim()); } catch { /* ignore */ } refresh(); loadSources(); loadDocuments(); });
+    $('apiKey').addEventListener('change', () => { try { sessionStorage.setItem('maiApiKey', $('apiKey').value.trim()); } catch { /* ignore */ } refresh(); loadDocuments(); });
     $('search').addEventListener('input', () => { state.tableLimit = TABLE_PAGE; if (state.rating) renderTable(); });
     $('fieldFilter').addEventListener('change', () => { state.tableLimit = TABLE_PAGE; if (state.rating) renderTable(); });
     try { state.showUnscored = localStorage.getItem('maiShowUnscored') === '1'; } catch { /* storage may be unavailable */ }
     $('showUnscored').checked = state.showUnscored;
     $('showUnscored').addEventListener('change', () => setShowUnscored($('showUnscored').checked));
-    $('refresh').addEventListener('click', () => { refresh(); loadSources(); loadDocuments(); });
+    $('refresh').addEventListener('click', () => { refresh(); loadDocuments(); });
     $('run').addEventListener('click', runNow);
     $('cardClose').addEventListener('click', closeWell);
     $('cardPrev').addEventListener('click', () => stepWell(-1));
@@ -1556,7 +1419,6 @@
     setInterval(() => { if (!document.hidden && !state.docTimer) loadDocuments(); }, AUTO_REFRESH_SECONDS * 1000);
     watchSections();
     refresh();
-    loadSources();
     loadDocuments();
   </script>
 </body>

@@ -372,9 +372,12 @@ def _json_hash(value: object) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
-def save_batch(well_id: str, requested_batch_id: str | None, records: Iterable[TelemetryPoint]) -> dict:
+def save_batch(well_id: str, requested_batch_id: str | None, records: Iterable[TelemetryPoint],
+               replace: bool = False) -> dict:
     """Store telemetry; a value at a moment already stored for the source replaces the old one.
-    A batch id used again with the same well and payload is an idempotent replay."""
+    A batch id used again with the same well and payload is an idempotent replay; with another
+    payload it is an error, or — replace, a file imported again after its reading changed — the
+    earlier rows of the batch give way to the new ones."""
     batch_id = requested_batch_id or str(uuid.uuid4())
     rows = list(records)
     persisted_fields = set(TelemetryPoint.model_fields) | {"source_id"}
@@ -394,17 +397,19 @@ def save_batch(well_id: str, requested_batch_id: str | None, records: Iterable[T
                                "source_occurrence": source_occurrence, "record_index": index,
                                "timestamp": point.timestamp, "payload_json": payload})
     digest = _json_hash(payloads)
+    batch = {"batch_id": batch_id, "well_id": well_id, "record_count": len(rows),
+             "created_at": datetime.now(timezone.utc), "payload_sha256": digest}
     with engine().begin() as conn:
-        inserted = _merge(conn, ingestion_batches, [{
-            "batch_id": batch_id, "well_id": well_id, "record_count": len(rows),
-            "created_at": datetime.now(timezone.utc), "payload_sha256": digest}], ("batch_id",))
-        if not inserted:
+        if not _merge(conn, ingestion_batches, [batch], ("batch_id",)):
             existing = conn.execute(select(ingestion_batches).where(
                 ingestion_batches.c.batch_id == batch_id)).mappings().one()
-            if existing["well_id"] != well_id or existing["payload_sha256"] != digest:
+            if existing["well_id"] == well_id and existing["payload_sha256"] == digest:
+                return {"batch_id": batch_id, "well_id": well_id, "records_received": len(rows),
+                        "records_stored": existing["record_count"], "idempotent_replay": True}
+            if not replace:
                 raise ValueError("batch_id has already been used with a different well or payload")
-            return {"batch_id": batch_id, "well_id": well_id, "records_received": len(rows),
-                    "records_stored": existing["record_count"], "idempotent_replay": True}
+            conn.execute(delete(ingestion_batches).where(ingestion_batches.c.batch_id == batch_id))  # its rows too
+            _merge(conn, ingestion_batches, [batch], ("batch_id",))
         if telemetry_rows:
             _merge(conn, telemetry, telemetry_rows, ("well_id", "source_id", "timestamp", "source_occurrence"),
                    update=("batch_id", "record_index", "payload_json"))
@@ -474,8 +479,9 @@ def known_well_ids() -> list[str]:
 
 def save_history(well_id: str, requested_batch_id: str | None,
                  work_history: list[WorkHistoryItem], failure_history: list[FailureHistoryItem],
-                 source_id: str | None = None) -> dict:
-    """Store work and failure events; an event already stored for the source is skipped."""
+                 source_id: str | None = None, replace: bool = False) -> dict:
+    """Store work and failure events; an event already stored for the source is skipped. A batch id
+    used again: as in save_batch."""
     batch_id = requested_batch_id or str(uuid.uuid4())
     if not isinstance(source_id, str) or not source_id.strip() or len(source_id) > 128:
         source_id = _UNSPECIFIED_SOURCE
@@ -492,20 +498,21 @@ def save_history(well_id: str, requested_batch_id: str | None,
                                                              "payload": payload})})
     digest = _json_hash([{**item, "event_date": item["event_date"].isoformat()} for item in encoded])
     stored = {"work": 0, "failure": 0}
+    batch = {"batch_id": batch_id, "well_id": well_id, "work_count": len(work_history),
+             "failure_count": len(failure_history), "payload_sha256": digest, "created_at": datetime.now(timezone.utc)}
     with engine().begin() as conn:
-        inserted = _merge(conn, history_batches, [{
-            "batch_id": batch_id, "well_id": well_id, "work_count": len(work_history),
-            "failure_count": len(failure_history), "payload_sha256": digest,
-            "created_at": datetime.now(timezone.utc)}], ("batch_id",))
-        if not inserted:
+        if not _merge(conn, history_batches, [batch], ("batch_id",)):
             existing = conn.execute(select(history_batches).where(
                 history_batches.c.batch_id == batch_id)).mappings().one()
-            if existing["well_id"] != well_id or existing["payload_sha256"] != digest:
+            if existing["well_id"] == well_id and existing["payload_sha256"] == digest:
+                return {"batch_id": batch_id, "well_id": well_id,
+                        "work_records_received": len(work_history), "failure_records_received": len(failure_history),
+                        "work_records_stored": existing["work_count"],
+                        "failure_records_stored": existing["failure_count"], "idempotent_replay": True}
+            if not replace:
                 raise ValueError("history batch_id has already been used with a different well or payload")
-            return {"batch_id": batch_id, "well_id": well_id,
-                    "work_records_received": len(work_history), "failure_records_received": len(failure_history),
-                    "work_records_stored": existing["work_count"],
-                    "failure_records_stored": existing["failure_count"], "idempotent_replay": True}
+            conn.execute(delete(history_batches).where(history_batches.c.batch_id == batch_id))  # its events too
+            _merge(conn, history_batches, [batch], ("batch_id",))
         for event_type in ("work", "failure"):
             event_rows = [{"batch_id": batch_id, "well_id": well_id, **item}
                           for item in encoded if item["event_type"] == event_type]

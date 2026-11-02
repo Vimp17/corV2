@@ -32,7 +32,7 @@ from openpyxl.utils import get_column_letter
 
 from app import db
 from app.config import settings
-from app.core.documents.excel_reader import DATE_TEXT, _cell, _moment, _norm, _number, _well_text
+from app.core.documents.excel_reader import DATE_TEXT, LIQUID_RATE, _cell, _moment, _norm, _number, _well_text
 from app.core.documents.extract import EARLIEST_DATE, resolve_well
 from app.schemas import TelemetryPoint
 
@@ -74,8 +74,7 @@ COLUMNS: list[tuple[str, str, str, str | None, str | None, str | None, str | Non
     ("reservoir_temp_c", "Температура пластовая, °C", "number", None,
      r"температур.*пласт|пластов\w*\s+температур", None, None),
     ("wellhead_pressure_atm", "Давление на устье, атм", "number", None, r"давлен.*усть", None, None),
-    ("liquid_rate_m3_day", "Средний дебит жидкости, м³/сут", "number", "liquid_rate_m3_day",
-     r"дебит\w*\s+жидк|^(средн\w*\s+)?дебит", None, None),
+    ("liquid_rate_m3_day", "Средний дебит жидкости, м³/сут", "number", "liquid_rate_m3_day", LIQUID_RATE, None, None),
     ("water_cut_pct", "Средняя обводнённость, %", "number", "water_cut_pct", r"обводн", None, None),
     ("water_density", "Плотность воды, кг/м³", "number", None, r"плотност", None, None),
     ("mineralization_mg_l", "Общая минерализация, мг/л", "number", None, r"минерализ", None, None),

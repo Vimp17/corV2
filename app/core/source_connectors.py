@@ -48,7 +48,8 @@ def _status_message(parsed: dict) -> str:
 
 def ingest_excel_bytes(content: bytes, filename: str, profile_id: str, well_id: str | None = None,
                        origin: str = "manual_upload", auto_header: bool = False) -> dict:
-    """Import a workbook by its source profile; one source status per well that received data."""
+    """Import a workbook by its source profile; one source status per well that received data. The same
+    file imported again replaces what it loaded before (its reading may have changed since)."""
     parsed = parse_excel(content, filename, profile_id, well_id, auto_header=auto_header)
     source_id = parsed["source_id"]
     imported: list[dict] = []
@@ -58,12 +59,12 @@ def ingest_excel_bytes(content: bytes, filename: str, profile_id: str, well_id: 
         if parsed["kind"] == "telemetry":
             if not group["records"]:
                 continue
-            stored, count = db.save_batch(target, batch, group["records"]), len(group["records"])
+            stored, count = db.save_batch(target, batch, group["records"], replace=True), len(group["records"])
         else:
             work, failures = group["work_history"], group["failure_history"]
             if not work and not failures:
                 continue
-            stored = db.save_history(target, batch, work, failures, source_id=source_id)
+            stored = db.save_history(target, batch, work, failures, source_id=source_id, replace=True)
             count = len(work) + len(failures)
         statuses.append(db.record_source_status(source_id, target, parsed["status"], _status_message(parsed), count,
                                                 origin=origin))
