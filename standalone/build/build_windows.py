@@ -12,8 +12,8 @@ Server (standalone/mssql_compat.py); the archive holds no database server. Insid
   mai.cmd, README-DEMO.md, BUILD_INFO.json.
 
 Steps: tools (uv, pefile) → Python package (SHA-512 checked against nuget.org) → Windows wheels
-from standalone/requirements-windows.lock (the versions tested in the Docker image, plus pyodbc and
-pymssql of standalone/requirements-extra.txt for SQL Server) → bytecode →
+from standalone/requirements-windows.lock (standalone/requirements.txt resolved with the versions
+tested in the Docker image) → bytecode →
 check that every extension module finds its DLLs → project files → zip and its SHA-256.
 
 Downloads go to standalone/dist/cache and are reused by the next build.
@@ -44,14 +44,16 @@ NUPKG_URL = f"https://www.nuget.org/api/v2/package/python/{PYTHON_VERSION}"
 NUPKG_CATALOG = f"https://api.nuget.org/v3/registration5-semver1/python/{PYTHON_VERSION}.json"
 PLATFORM = "x86_64-pc-windows-msvc"
 LOCK = SRC / "standalone" / "requirements-windows.lock"
-# Packages of the standalone build only (not of the Docker image): the SQL Server drivers.
-EXTRA_REQUIREMENTS = SRC / "standalone" / "requirements-extra.txt"
+# The build's own requirements: only what the application imports when it runs (not the
+# requirements.txt of the main version, which carries PostgreSQL and the model-training packages).
+REQUIREMENTS = SRC / "standalone" / "requirements.txt"
 APP_NAME = "mai-demo"
 # Project files copied into the build (directories are copied without caches and tests).
 # No migrations/ and alembic.ini: they are the PostgreSQL schema; SQL Server tables are created from the
 # table definitions of app/db.py (standalone/mssql_compat.py).
-PROJECT_ITEMS = ["app", "dashboard", "config", "n8n", "scripts", "docs", "examples/documents",
-                 "requirements.txt", "README.md"]
+# No scripts/ (sample data, model training, migrations of the main version) and no README.md /
+# requirements.txt of the main version: README-DEMO.md and standalone/requirements.txt describe the build.
+PROJECT_ITEMS = ["app", "dashboard", "config", "n8n", "docs", "examples/documents"]
 STANDALONE_ITEMS = ["__init__.py", "asgi.py", "envfile.py", "manage.py", "mssql_compat.py", "env.template",
                     "README.md"]
 TEXT_CRLF = {".cmd", ".md", ".txt", ".template"}
@@ -133,36 +135,21 @@ def relock(uv: Path, constraints: Path | None) -> None:
     # uv writes through a temporary file beside the output: the source tree may be read-only, so
     # the lock is resolved into the cache and copied into place.
     resolved = CACHE / "requirements-windows.lock.new"
-    command = [uv, "pip", "compile", SRC / "requirements.txt", EXTRA_REQUIREMENTS, "--python-platform", PLATFORM,
+    command = [uv, "pip", "compile", REQUIREMENTS, "--python-platform", PLATFORM,
                "--python-version", "3.12", "--no-header", "--no-annotate", "-o", resolved]
     if constraints:
         command += ["--constraint", constraints]
     run(command, env={**os.environ, "UV_CACHE_DIR": str(CACHE / "uv")})
     header = ("# Windows (x86_64, Python 3.12) packages of the standalone demo build, resolved by\n"
-              "# standalone/build/build.sh --relock from requirements.txt with the versions of the tested\n"
-              "# Docker image. Edit by relocking, not by hand.\n")
+              "# standalone/build/build.sh --relock from standalone/requirements.txt with the versions of\n"
+              "# the tested Docker image. Edit by relocking, not by hand.\n")
     LOCK.write_text(header + resolved.read_text(encoding="utf-8"), encoding="utf-8")
     resolved.unlink()
 
 
-def sdist_wheels() -> Path:
-    """Pure-Python packages published only as sources (autograd-gamma): build universal wheels."""
-    wheelhouse = CACHE / "wheelhouse"
-    wheelhouse.mkdir(parents=True, exist_ok=True)
-    for line in LOCK.read_text(encoding="utf-8").splitlines():
-        match = re.match(r"^(autograd-gamma)==(\S+)", line.strip())
-        if match and not list(wheelhouse.glob(f"autograd_gamma-{match.group(2)}-*.whl")):
-            run([TOOLS / "bin" / "python", "-m", "pip", "wheel", "-q", "--retries", "10", "--timeout", "120", "--no-deps",
-                 "-w", wheelhouse, f"{match.group(1)}=={match.group(2)}"])
-    for wheel in wheelhouse.glob("*.whl"):
-        if not wheel.name.endswith("-none-any.whl"):
-            raise SystemExit(f"{wheel.name} is not a universal wheel and cannot be used on Windows")
-    return wheelhouse
-
-
-def install_packages(uv: Path, site_packages: Path, wheelhouse: Path) -> None:
+def install_packages(uv: Path, site_packages: Path) -> None:
     run([uv, "pip", "install", "--target", site_packages, "--python-platform", PLATFORM, "--python-version", "3.12",
-         "--only-binary", ":all:", "--find-links", wheelhouse, "--no-deps", "-r", LOCK],
+         "--only-binary", ":all:", "--no-deps", "-r", LOCK],
         env={**os.environ, "UV_CACHE_DIR": str(CACHE / "uv")})
     # Console scripts generated for the build machine (Linux) are of no use on Windows.
     shutil.rmtree(site_packages / "bin", ignore_errors=True)
@@ -297,7 +284,7 @@ def main() -> int:
     root.mkdir(parents=True)
     nupkg_sha256 = python_runtime(root / "runtime")
     site_packages = root / "runtime" / "Lib" / "site-packages"
-    install_packages(uv, site_packages, sdist_wheels())
+    install_packages(uv, site_packages)
     problems = check_dlls(root / "runtime")
     if problems:
         log("DLLs not shipped and not part of Windows (needs Microsoft Visual C++ Redistributable 2015-2022 x64):")

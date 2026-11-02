@@ -763,8 +763,8 @@ def cmd_check(args) -> int:
         return 1
 
     say("\nПакеты")
-    modules = ("numpy", "pandas", "scipy", "lifelines", "sqlalchemy", "fastapi", "uvicorn",
-               "openpyxl", "pypdfium2", "PIL", "requests", "tzdata", "pyodbc", "pymssql")
+    modules = ("sqlalchemy", "fastapi", "uvicorn",
+               "openpyxl", "xlrd", "pypdfium2", "PIL", "requests", "tzdata", "pyodbc", "pymssql")
     missing = []
     for module in modules:
         try:

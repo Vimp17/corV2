@@ -471,6 +471,10 @@ class SkippedAnalysis(APIModel):
     telemetry_records: int = Field(ge=0)
     unique_timestamps: int = Field(ge=0)
     current_signal_count: int = Field(ge=0)
+    # Measurements within the trend window, and the model inputs with a value in the current
+    # window: the rating names what is short for a forecast (app.core.rating_builder).
+    recent_observations: int = Field(default=0, ge=0)
+    current_signals: list[str] = Field(default_factory=list)
     missing_items: list[str] = Field(default_factory=list)
     source_statuses: list[ExternalSourceStatus] = Field(default_factory=list)
     operator_message: str

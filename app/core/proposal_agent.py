@@ -129,7 +129,8 @@ def build_context(well_id: str) -> dict | None:
             "in_operation": row.get("in_operation"),
             "demount_act_recent": row.get("demount_act"), "demount_corrosion": row.get("demount_corrosion"),
             "base_act_recent": row.get("base_act"), "base_corrosion": row.get("base_corrosion"),
-            "data_gaps": [item.get("note") for item in row.get("data_gaps") or []],
+            "data_gaps": [f"{rating.GAP_LABELS.get(item.get('key'), item.get('key'))}: {item.get('note')}"
+                          for item in row.get("data_gaps") or []],
             "notes": {key: value for key, value in notes.items() if value},
         },
     }

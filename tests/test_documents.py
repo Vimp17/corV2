@@ -188,14 +188,14 @@ def _gap_keys(well):
 
 @needs_db
 def test_base_act_pdf_closes_the_missing_act_gap(client, generated):
-    assert "base_act" in _gap_keys(_well(client, "DEMO-002"))
+    assert "acts" in _gap_keys(_well(client, "DEMO-002"))
     document = _upload(client, generated / "documents" / "akt_razbora_DEMO-002.pdf")
     assert document["status"] == "loaded", document["status_message"]
     assert document["doc_type"] == "base_inspection_act"
     assert document["text_method"] == "text_layer"
     assert document["well_ids"] == ["DEMO-002"]
     well = _well(client, "DEMO-002")
-    assert "base_act" not in _gap_keys(well)
+    assert "acts" not in _gap_keys(well)
     assert well["base_act"] is True and well["base_corrosion"] is True
     assert well["category"] == "corrosive"
     assert well["provenance"]["base_act"]["source"] == "Акт разбора на базе (документ)"
@@ -212,7 +212,7 @@ def test_base_act_pdf_closes_the_missing_act_gap(client, generated):
 
     # Deleting the document removes its data: the gap is back.
     assert client.delete(f"/api/v1/documents/{document['document_id']}").status_code == 200
-    assert "base_act" in _gap_keys(_well(client, "DEMO-002"))
+    assert "acts" in _gap_keys(_well(client, "DEMO-002"))
 
 
 @needs_db
@@ -223,12 +223,12 @@ def test_scanned_act_goes_through_ocr(client, generated, fake):
     assert any(call["kind"] == "ocr" and call["model"] == "fake-ocr" for call in fake.calls)
     well = _well(client, "DEMO-005")
     assert well["demount_act"] is True and well["demount_corrosion"] is True
-    assert "base_act" in _gap_keys(well)          # a fresh demount without a base act
+    assert "acts" in _gap_keys(well)          # a fresh demount without a base act
 
 
 @needs_db
 def test_lab_protocol_excel_form_counts_as_samples(client, generated):
-    assert "samples" in _gap_keys(_well(client, "DEMO-012"))
+    assert "sampling" in _gap_keys(_well(client, "DEMO-012"))
     document = _upload(client, generated / "documents" / "protokol_khim_analiza_15.xlsx")
     assert document["status"] == "loaded", document["status_message"]
     # The table under the protocol title is found by its header row: a ХИМИК import, no AI.
@@ -236,7 +236,7 @@ def test_lab_protocol_excel_form_counts_as_samples(client, generated):
     assert document["well_ids"] == ["DEMO-012", "DEMO-013"]
     well = _well(client, "DEMO-012")
     assert well["sampling"] is True
-    assert "samples" not in _gap_keys(well)
+    assert "sampling" not in _gap_keys(well)
 
 
 @needs_db
@@ -267,7 +267,7 @@ def test_invented_values_are_not_loaded(client, generated, fake):
     fake.respond = hallucinating
     document = _upload(client, generated / "documents" / "akt_razbora_DEMO-002.pdf")
     assert document["status"] == "not_recognized"
-    assert "base_act" in _gap_keys(_well(client, "DEMO-002"))
+    assert "acts" in _gap_keys(_well(client, "DEMO-002"))
 
 
 @needs_db
@@ -328,7 +328,7 @@ def test_ai_proposal_uses_rating_crews_and_reports_gaps(client, generated, fake)
     well = _well(client, "DEMO-002")
     assert body["measure"] == well["measure_code"]
     assert body["crew"]["crew_id"] == "КРС-7"
-    assert any("акта разбора" in item for item in body["missing_data"])
+    assert any("акт разбора на базе после демонтажа" in item for item in body["missing_data"])
     assert well["ai_proposal"]["measure"] == body["measure"]
     assert "ai_proposal" not in client.get("/api/v1/rating").json()["wells"][0]
 
@@ -342,22 +342,38 @@ def test_ai_proposal_uses_rating_crews_and_reports_gaps(client, generated, fake)
 
 
 
-def test_missing_fields_tell_absent_from_stale():
+def test_data_gaps_name_the_fields_of_each_column():
     from datetime import datetime, timezone
 
-    from app.core.rating_builder import _missing_fields
-    from app.schemas import TelemetryPoint
+    from app.core.rating_builder import _data_gaps
+    from app.schemas import SkippedAnalysis, TelemetryPoint
 
-    old = TelemetryPoint(well_id="W-1", timestamp=datetime(2026, 9, 1, 9, tzinfo=timezone.utc), co2_pct=1.2)
-    items = _missing_fields({"equipment": "ЭЦН-80", "demount_act": True, "demount_corrosion": None},
-                            [old], {"water_cut_pct": 90, "chlorides_mg_l": 18000, "inhibitor_efficiency": 0.9})
-    by_name = {item["field"]: item for item in items}
-    assert by_name["CO₂"]["last"] == "01.09.2026"                       # received, but too old to count
-    assert by_name["скорость коррозии"]["last"] is None                  # never received
-    assert "отклонение закачки ингибитора" in by_name                    # asked for only with an inhibitor
-    assert "признак коррозии в акте демонтажа" in by_name
-    assert not {"обводнённость", "хлориды", "эффективность ингибитора"} & set(by_name)
-    assert not any(name.startswith("спущенное оборудование") for name in by_name)
+    now = datetime(2026, 10, 30, 12, tzinfo=timezone.utc)
+    old = TelemetryPoint(well_id="W-1", timestamp=datetime(2026, 8, 1, 9, tzinfo=timezone.utc), co2_pct=1.2)
+    fresh = TelemetryPoint(well_id="W-1", timestamp=datetime(2026, 10, 29, 9, tzinfo=timezone.utc), water_cut_pct=90,
+                           chlorides_mg_l=18000, inhibitor_efficiency=0.9, liquid_rate_m3_day=40)
+    values = {"field": "Южное", "in_operation": True, "equipment": "ЭЦН-80", "installed_at": now, "oil_pct": 10,
+              "category": "medium", "protection": "effective", "sampling": True, "model_ntc": 0.4,
+              "demount_act": True, "demount_corrosion": None}
+    gaps = {gap["key"]: gap for gap in _data_gaps(values, [old, fresh], {"water_cut_pct": 90, "chlorides_mg_l": 18000,
+                                                  "inhibitor_efficiency": 0.9}, None, [], [], [], now)}
+    # Filled columns are not listed, whichever source filled them.
+    assert set(gaps) == {"category", "environment", "acts", "protection"}
+    assert gaps["environment"]["note"] == "устарело: CO₂ (последнее значение 01.08.2026)"
+    assert gaps["category"]["note"] == "нет: скорость коррозии"
+    assert gaps["acts"]["note"] == "нет: признак коррозии в акте демонтажа"
+    assert gaps["protection"]["note"] == "нет: отклонение закачки ингибитора"   # asked for only with an inhibitor
+
+    # No forecast: what is short, by count and by the inputs the well has.
+    skipped = SkippedAnalysis(well_id="W-1", telemetry_records=2, unique_timestamps=2, current_signal_count=1,
+                              recent_observations=2, current_signals=["water_cut_pct"], operator_message="")
+    empty = {gap["key"]: gap for gap in _data_gaps({}, [fresh], {}, skipped, [], [], [], now)}
+    note = empty["forecast"]["note"]
+    assert note.startswith("модели не рассчитаны: замеров с разными датами — 2 из ")
+    assert "(есть: обводнённость); подходят: CO₂, хлориды" in note
+    assert set(empty) == {"well", "forecast", "category", "environment", "sampling", "protection", "run_days", "liquid"}
+    assert empty["run_days"]["note"] == "нет: дата спуска оборудования"
+    assert empty["well"]["note"] == "нет: месторождение, статус работы (в работе или нет)"
 
 def _proposal_context(**rating):
     return {
@@ -367,7 +383,8 @@ def _proposal_context(**rating):
                    "field": "Южное", "equipment": "ЭЦН-80", "run_days": 210, "liquid_m3_day": 85.0,
                    "in_operation": True, "demount_act_recent": True, "demount_corrosion": None,
                    "base_act_recent": False, "base_corrosion": None,
-                   "data_gaps": ["Демонтаж 02.09.2026 был, акта разбора на базе после него нет."],
+                   "data_gaps": ["Демонтаж и разбор: нет: акт разбора на базе после демонтажа 02.09.2026",
+                                 "Среда: нет: CO₂"],
                    "notes": {"base_act": "Нет акта"}, **rating},
         "acts": [{"date": "2026-09-02", "type": "Демонтаж", "corrosion_detected": None}],
         "failures": [], "lab_samples": [], "other_measurements": [], "nkt_registry": None, "documents": [],
@@ -399,11 +416,12 @@ def test_ai_proposal_gaps_name_fields_and_are_not_repeated():
     from app.core import proposal_language
 
     context = _proposal_context(run_days=None, equipment=None)
+    context["rating"]["data_gaps"].append("Наработка: нет: дата спуска оборудования")
+    context["crews"] = []
     gaps = proposal_language.field_gaps(context, 365)
-    assert "Нет значений показателей среды: CO₂." in gaps
-    assert any(gap.startswith("Нет значений для оценки коррозии и защиты: скорость коррозии") for gap in gaps)
-    assert "Нет даты спуска оборудования — наработка не рассчитана." in gaps
-    assert not any("ХИМИК" in gap or "ДАРС" in gap for gap in gaps)
+    # The rating columns' gaps (fields and dates), then what only the agent checks (the crew schedule).
+    assert gaps == ["Демонтаж и разбор: нет: акт разбора на базе после демонтажа 02.09.2026", "Среда: нет: CO₂",
+                    "Наработка: нет: дата спуска оборудования", "Нет расписания бригад — бригада не назначена."]
     # The model's rephrasings of known gaps are dropped; a new gap is kept, once.
     merged = proposal_language.merge_gaps(gaps, [
         "Нет акта разбора на базе после демонтажа 02.09.2026.",
@@ -487,7 +505,7 @@ def test_mixed_chemistry_table_through_documents(client, tmp_path):
     assert detail["loaded"]["extra_columns"] == ["pH", "Жёсткость, мг-экв/л"]
     assert "Куст" in detail["loaded"]["unused_columns"]
     well = _well(client, "DEMO-012")
-    assert well["sampling"] is True and "samples" not in _gap_keys(well)
+    assert well["sampling"] is True and "sampling" not in _gap_keys(well)
     extras = {item["name"]: item for item in well["extra_measurements"]}
     assert extras["pH"]["value"] == 6.8 and extras["pH"]["source"] == "ХИМИК"
     assert extras["pH"]["date"][:10] == (TODAY - timedelta(days=3)).isoformat()
@@ -665,7 +683,7 @@ def test_excel_documents_load_without_llm(client, tmp_path, monkeypatch):
     assert table["status"] == "loaded", table["status_message"]
     assert table["doc_type"] == "excel:table" and table["type_title"] == "Таблица показателей (Excel)"
     well = _well(client, "DEMO-012")
-    assert well["sampling"] is True and "samples" not in _gap_keys(well)
+    assert well["sampling"] is True and "sampling" not in _gap_keys(well)
     assert {"pH", "Fe общ., мг/л"} <= {item["name"] for item in well["extra_measurements"]}
     form = _upload(client, _form(tmp_path / "forma.xlsx", well="DEMO-013"))
     assert form["status"] == "loaded" and form["doc_type"] == "excel:form", form["status_message"]
@@ -710,11 +728,11 @@ def test_clear_document_list(client, generated):
     result = client.delete("/api/v1/documents?status=failed,not_recognized").json()
     assert result == {"deleted": 1, "wells": []}
     assert [row["document_id"] for row in client.get("/api/v1/documents").json()["documents"]] == [protocol["document_id"]]
-    assert "samples" not in _gap_keys(_well(client, "DEMO-012"))
+    assert "sampling" not in _gap_keys(_well(client, "DEMO-012"))
     result = client.delete("/api/v1/documents?all=true").json()
     assert result["deleted"] == 1 and result["wells"] == ["DEMO-012", "DEMO-013"]
     assert client.get("/api/v1/documents").json()["documents"] == []
-    assert "samples" in _gap_keys(_well(client, "DEMO-012"))        # its data went with it
+    assert "sampling" in _gap_keys(_well(client, "DEMO-012"))        # its data went with it
 
 
 # --------------------------------------------------------------------------- Реестр коррозии НКТ
@@ -841,12 +859,13 @@ def test_registry_through_documents(client, tmp_path, monkeypatch):
     assert new_well["field"] == "Южное"                                         # a new well gets a rating row
     # A registry row is not a measurement: no «in operation», and no ДАРС telemetry.
     assert new_well["in_operation"] is None and new_well["index"] is None
-    assert any(gap["note"].startswith("Нет замеров телеметрии: ") for gap in new_well["data_gaps"])
-    # The card names the fields the classification lacks; they are not a section of «Полнота данных».
-    absent = {item["field"]: item for item in new_well["missing_fields"]}
-    assert absent["скорость коррозии"]["last"] is None and "категория фонда" in absent["скорость коррозии"]["for"]
-    assert "CO₂" not in absent                                                   # the registry gave it
-    assert "fields" not in _gap_keys(new_well)
+    # «Полнота данных» by field: the registry filled the environment and the liquid rate, so those
+    # columns are complete without ДАРС or ХИМИК; the forecast and the status are not.
+    gaps = {gap["key"]: gap for gap in new_well["data_gaps"]}
+    assert "environment" not in gaps and "liquid" not in gaps
+    assert gaps["forecast"]["note"].startswith("модели не рассчитаны: ")
+    assert "статус работы" in gaps["well"]["note"]
+    assert gaps["category"]["note"] == "нет: скорость коррозии"
     assert well["provenance"]["in_operation"]["source_id"] != "DOC_NKT"
     # The light card endpoint ranks the well exactly as the full rating does.
     ranks = {item["well_id"]: item["rank"] for item in client.get("/api/v1/rating").json()["wells"]}

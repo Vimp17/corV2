@@ -620,7 +620,15 @@
       $('dataState').replaceChildren(...parts);
     }
 
-    const GAP_FALLBACK = { telemetry: 'Телеметрия ДАРС', samples: 'Пробы ХИМИК', base_act: 'Акты разбора', equipment: 'Оборудование (ЭРА)', models: 'Оценка моделей' };
+    // «Полнота данных» by column of the table (the backend sends the same labels in settings.gap_labels).
+    const GAP_FALLBACK = { well: 'Скважина: месторождение, статус', forecast: 'Индекс и прогноз моделей', category: 'Категория фонда',
+      environment: 'Среда', sampling: 'Отбор проб', acts: 'Демонтаж и разбор', protection: 'Оборудование и защита', run_days: 'Наработка',
+      liquid: 'Жидкость / нефть' };
+    const GAP_SHORT = { well: 'Скважина', forecast: 'Прогноз', category: 'Категория', environment: 'Среда', sampling: 'Проба', acts: 'Акты',
+      protection: 'Защита', run_days: 'Наработка', liquid: 'Жидкость' };
+    const gapLine = (g) => `${gapLabels()[g.key] || g.key}: ${g.note || ''}`;
+    // A demount without a base inspection act after it (the «Разбор на базе» cell is marked).
+    const noBaseAct = (w) => (w.data_gaps || []).some(g => g.key === 'acts' && (g.items || []).some(i => String(i.field).startsWith('акт разбора')));
     const gapLabels = () => state.rating?.settings?.gap_labels || GAP_FALLBACK;
     function setFilter(filter) { state.filter = filter; state.tableLimit = TABLE_PAGE; closeGapMenu(); render(); }
     function filterLabel(filter) {
@@ -746,10 +754,9 @@
     const fmtNum = (value, digits = 0) => value === null || value === undefined ? '—' : Number(value).toLocaleString('ru-RU', { maximumFractionDigits: digits, minimumFractionDigits: digits });
     function gapsCell(w) {
       const gaps = w.data_gaps || [];
-      if (!gaps.length) return el('span', { class: 'okmark', title: 'Телеметрия, химия и акты — данные полные', 'aria-label': 'Данные полные', text: '✓' });
-      const short = { telemetry: 'Теле\u00ADметрия', samples: 'Химия', base_act: 'Акт разбора' };
-      return el('div', { class: 'gapbox', title: gaps.map(g => g.note).filter(Boolean).join(' ') },
-        el('span', { text: 'Нет данных:' }), el('span', { text: gaps.map(g => short[g.key] || g.key).join(', ') }));
+      if (!gaps.length) return el('span', { class: 'okmark', title: 'Все столбцы рейтинга заполнены актуальными значениями', 'aria-label': 'Данные полные', text: '✓' });
+      return el('div', { class: 'gapbox', title: gaps.map(gapLine).join('\n') },
+        el('span', { text: 'Нет данных:' }), el('span', { text: gaps.map(g => GAP_SHORT[g.key] || g.key).join(', ') }));
     }
 
     function renderTable() {
@@ -785,7 +792,7 @@
           el('div', { 'data-label': 'Категория фонда' }, el('span', { class: `cat ${w.category || 'unknown'}`, text: soft(w.category_label || 'Нет данных') })),
           el('div', { 'data-label': 'Среда' }, envCell(w)),
           el('div', { 'data-label': 'Демонтаж (исторические данные)' }, actCell(w.demount_act, w.demount_corrosion, false)),
-          el('div', { 'data-label': 'Разбор на базе (исторические данные)' }, actCell(w.base_act, w.base_corrosion, (w.data_gaps || []).some(g => g.key === 'base_act'))),
+          el('div', { 'data-label': 'Разбор на базе (исторические данные)' }, actCell(w.base_act, w.base_corrosion, noBaseAct(w))),
           el('div', { 'data-label': 'Оборудование и защита' }, equipCell(w)),
           el('div', { class: 'num-cell', 'data-label': 'Наработка, сут', text: fmtNum(w.run_days) }),
           el('div', { class: 'num-cell', 'data-label': 'Жидкость / нефть' }, el('div', { style: 'display:flex; flex-direction:column' },
@@ -996,18 +1003,13 @@
         ['Наработка, сут', fmtNum(w.run_days), '', 'run_days'],
         ['Дебит жидкости, м³/сут', fmtNum(w.liquid_rate_m3_day, 1), '', 'liquid_rate_m3_day'],
         ['Доля нефти, %', fmtNum(w.oil_pct, 1), '', 'oil_pct']], w));
-      // Sections of «Полнота данных», then the fields the classification has no value for: never
-      // received (named one by one) or too old to count (with the date of the last value).
-      const gaps = w.data_gaps || [], fields = w.missing_fields || [];
-      const absent = fields.filter(f => !f.last), stale = fields.filter(f => f.last);
-      const fieldList = (title, items, text) => items.length ? el('div', { style: 'font-size:13px' }, el('b', { text: title }),
-        el('ul', { style: 'margin:2px 0 0; padding-left:18px' }, items.map(f => el('li', { text: text(f) })))) : null;
-      if (gaps.length || fields.length) {
+      // «Полнота данных» by column of the rating: the fields the well lacks, outdated ones with the date.
+      const gaps = w.data_gaps || [];
+      if (gaps.length) {
         body.splice(2, 0, el('div', { class: 'box', style: 'border-style:dashed; border-color:#C99A3A; background:#FFFBEF' },
           el('h3', { text: 'Не хватает данных' }),
-          gaps.length ? el('ul', { style: 'margin:0; padding-left:18px; font-size:13px' }, gaps.map(g => el('li', { text: `${gapLabels()[g.key] || g.key}: ${g.note || ''}` }))) : null,
-          fieldList('Нет значений для классификации в рейтинге:', absent, f => `${f.field} — ${f.for}`),
-          fieldList('Значения устарели и в расчёт не входят:', stale, f => `${f.field} — последнее ${f.last} (${f.for})`)));
+          el('ul', { style: 'margin:0; padding-left:18px; font-size:13px' }, gaps.map(g => el('li', {},
+            el('b', { text: `${gapLabels()[g.key] || g.key}: ` }), g.note || '')))));
       }
       body.push(dlGroup('Среда и обработка', [
         ['Отбор проб', yesNo(w.sampling, 'Да', 'Нет'), w.sampling ? 'ok' : (w.sampling === false ? 'na' : ''), 'sampling'],

@@ -120,38 +120,132 @@ def _latest(records: list[TelemetryPoint], field: str) -> tuple[Any, TelemetryPo
 
 
 ENV_RULE_PREFIX = "ENV_"
-# Measured fields the rating classifies a well by: (field, name in the card, what it is needed for).
-CLASSIFICATION_FIELDS = (
-    ("water_cut_pct", "обводнённость", "среда"),
-    ("co2_pct", "CO₂", "среда"),
-    ("chlorides_mg_l", "хлориды", "среда"),
-    ("corrosion_rate_mm_year", "скорость коррозии", "категория фонда, подтверждение защиты"),
-    ("inhibitor_efficiency", "эффективность ингибитора", "защита"),
-)
+# «Полнота данных» is judged on the columns of the rating table (rating.GAP_LABELS), by the values the
+# well actually has — whatever brought them (ДАРС, ХИМИК, a protocol, the НКТ registry, a passport).
+ENVIRONMENT_FIELDS = (("co2_pct", "CO₂"), ("water_cut_pct", "обводнённость"), ("chlorides_mg_l", "хлориды"))
+# Model inputs (readiness.SIGNAL_FIELDS) by name: a forecast needs MAI_MIN_CURRENT_SIGNALS of them.
+SIGNAL_NAMES = {
+    "water_cut_pct": "обводнённость", "co2_pct": "CO₂", "chlorides_mg_l": "хлориды",
+    "inhibitor_efficiency": "эффективность ингибитора", "injection_deviation_pct": "отклонение закачки",
+    "corrosion_rate_mm_year": "скорость коррозии", "wall_thickness_mm": "толщина стенки",
+    "initial_wall_thickness_mm": "начальная толщина стенки", "metal_loss_mm": "потеря металла",
+    "corrosion_load": "коррозионная нагрузка",
+}
+_MAIN_SIGNALS = 7  # the first seven are measured routinely; the rest are rare
 
 
-def _missing_fields(values: dict, records: list[TelemetryPoint], current: dict) -> list[dict]:
-    """Fields the classification (environment, category, protection) has no current value for.
+def _fresh_window() -> timedelta:
+    """A value older than this (from now) is outdated: the sample window or the telemetry age, the longer."""
+    return max(timedelta(days=settings.rating_sampling_days), timedelta(hours=settings.max_telemetry_age_hours))
 
-    {"field", "for", "last"}: last is the date of the latest value when there is one, too old to
-    count (the value is stale); None when the field was never received for the well."""
-    items = []
-    fields = list(CLASSIFICATION_FIELDS)
-    if current.get("inhibitor_efficiency") is not None:
-        fields.append(("injection_deviation_pct", "отклонение закачки ингибитора", "защита"))
-    for field, name, purpose in fields:
-        if current.get(field) is not None:
-            continue
-        _, point = _latest(records, field)
-        items.append({"field": name, "for": purpose,
-                      "last": f"{_local(point.timestamp):%d.%m.%Y}" if point is not None else None})
-    if not values.get("equipment"):
-        items.append({"field": "спущенное оборудование (исполнение НКТ)", "for": "защита", "last": None})
+
+def _measured(field: str, name: str, records: list[TelemetryPoint], current: dict, now: datetime,
+              in_calculation: bool = True) -> dict | None:
+    """None when the well has a current value of the field; else {"field", "last"}: last is the date of
+    the latest value when there is one but it is too old to count, None when there never was one.
+    in_calculation: the value must also be among the current values the analysis used."""
+    _, point = _latest(records, field)
+    if point is None:
+        return {"field": name, "last": None}
+    if (in_calculation and current.get(field) is None) or now - _utc(point.timestamp) > _fresh_window():
+        return {"field": name, "last": f"{_local(point.timestamp):%d.%m.%Y}"}
+    return None
+
+
+def _fields_note(items: list[dict]) -> str:
+    absent = [item["field"] for item in items if not item.get("last")]
+    old = [f"{item['field']} (последнее значение {item['last']})" for item in items if item.get("last")]
+    parts = (["нет: " + ", ".join(absent)] if absent else []) + (["устарело: " + ", ".join(old)] if old else [])
+    return "; ".join(parts)
+
+
+def _forecast_gap(values: dict, records: list[TelemetryPoint], skipped: SkippedAnalysis | None) -> dict | None:
+    """Why the index and the model forecasts are empty, by count and by the inputs the well has."""
+    if values.get("model_ntc") is not None or values.get("model_math") is not None:
+        return None
+    reasons: list[str] = []
+    if not records:
+        reasons.append("нет ни одного замера показателей")
+    elif skipped is not None:
+        if skipped.unique_timestamps < settings.min_telemetry_records:
+            reasons.append(f"замеров с разными датами — {skipped.unique_timestamps} из {settings.min_telemetry_records} "
+                           "нужных")
+        if skipped.recent_observations < settings.min_trend_observations:
+            reasons.append(f"замеров за последние {settings.trend_window_days} сут. — {skipped.recent_observations} "
+                           f"из {settings.min_trend_observations} нужных")
+        if skipped.current_signal_count < settings.min_current_signals:
+            present = [SIGNAL_NAMES.get(field, field) for field in skipped.current_signals]
+            suitable = [name for field, name in list(SIGNAL_NAMES.items())[:_MAIN_SIGNALS]
+                        if field not in skipped.current_signals]
+            reasons.append(f"показателей за последние {settings.max_forward_fill_days} сут. — "
+                           f"{skipped.current_signal_count} из {settings.min_current_signals} нужных"
+                           + (f" (есть: {', '.join(present)})" if present else "")
+                           + f"; подходят: {', '.join(suitable)}")
+        reasons += [item for item in skipped.missing_items if item.startswith("Последнее измерение датировано")]
+    note = ("модели не рассчитаны: " + "; ".join(reasons)) if reasons else "модели не рассчитаны: пересчитайте скважину"
+    return {"key": "forecast", "note": note, "items": [{"field": reason, "last": None} for reason in reasons]}
+
+
+def _data_gaps(values: dict, records: list[TelemetryPoint], current: dict, skipped: SkippedAnalysis | None,
+               lab_points: list[TelemetryPoint], demounts: list[dict], base_inspections: list[dict],
+               now: datetime) -> list[dict]:
+    """«Полнота данных»: per column of the rating table, the values it shows that the well lacks —
+    never received, or outdated (with the date of the last value). [{"key", "note", "items"}]."""
+    gaps: list[dict] = []
+
+    def add(key: str, items: list[dict], note: str | None = None) -> None:
+        if items:
+            gaps.append({"key": key, "note": note or _fields_note(items), "items": items})
+
+    add("well", ([] if values.get("field") else [{"field": "месторождение", "last": None}])
+        + ([] if values.get("in_operation") is not None else [{"field": "статус работы (в работе или нет)", "last": None}]))
+    forecast = _forecast_gap(values, records, skipped)
+    if forecast:
+        gaps.append(forecast)
+    rate = _measured("corrosion_rate_mm_year", "скорость коррозии", records, current, now)
+    if values.get("category") is None:
+        add("category", [rate or {"field": "признаки коррозии", "last": None}],
+            "не определена: нет оценки среды, скорости коррозии и актов с признаком коррозии")
+    elif rate:
+        add("category", [rate])
+    add("environment", [item for field, name in ENVIRONMENT_FIELDS
+                        if (item := _measured(field, name, records, current, now))])
+    if values.get("sampling") is not True:
+        last = f"{_local(lab_points[-1].timestamp):%d.%m.%Y}" if lab_points else None
+        add("sampling", [{"field": f"лабораторная проба за {settings.rating_sampling_days} сут.", "last": last}],
+            f"нет лабораторной пробы за {settings.rating_sampling_days} сут."
+            + (f" (последняя — {last})" if last else " (проб нет)"))
+    acts: list[dict] = []
+    if demounts:
+        last_demount = _utc(demounts[-1]["event_date"])
+        if not any(_utc(event["event_date"]) >= last_demount for event in base_inspections):
+            acts.append({"field": f"акт разбора на базе после демонтажа {_local(last_demount):%d.%m.%Y}", "last": None})
     for act, corrosion, name in (("demount_act", "demount_corrosion", "признак коррозии в акте демонтажа"),
                                  ("base_act", "base_corrosion", "признак коррозии в акте разбора на базе")):
         if values.get(act) and values.get(corrosion) is None:
-            items.append({"field": name, "for": "категория фонда, защита", "last": None})
-    return items
+            acts.append({"field": name, "last": None})
+    add("acts", acts)
+    protection: list[dict] = []
+    if not values.get("equipment"):
+        protection.append({"field": "спущенное оборудование (насос, НКТ, исполнение)", "last": None})
+    if values.get("protection") is None:
+        protection.append(_measured("inhibitor_efficiency", "эффективность ингибитора", records, current, now)
+                          or {"field": "эффективность ингибитора", "last": None})
+    elif current.get("inhibitor_efficiency") is not None:
+        deviation = _measured("injection_deviation_pct", "отклонение закачки ингибитора", records, current, now)
+        if deviation:
+            protection.append(deviation)
+    if values.get("protection") == "unconfirmed" and rate:
+        protection.append({**rate, "field": "скорость коррозии (подтверждение защиты)"})
+    add("protection", protection)
+    if values.get("installed_at") is None:
+        add("run_days", [{"field": "дата спуска оборудования", "last": None}])
+    liquid = [item for item in (_measured("liquid_rate_m3_day", "дебит жидкости", records, current, now,
+                                          in_calculation=False),) if item]
+    if values.get("oil_pct") is None:
+        liquid.append({"field": "обводнённость (для доли нефти)", "last": None})
+    add("liquid", liquid)
+    return gaps
 
 
 def _model_scores(result: PipelineResult | None, sources: _Sources,
@@ -282,12 +376,10 @@ def build_values(well_id: str, records: list[TelemetryPoint], events: list[dict]
 
     # Operating status: the latest DARS status, else a fresh measurement implies the well runs.
     # A registry row (snapshot) is not a measurement and says nothing about the status.
-    from app.core.source_kinds import is_lab_only, is_snapshot, snapshot_source_ids
+    from app.core.source_kinds import is_snapshot, snapshot_source_ids
 
     snapshot_ids = snapshot_source_ids()
     measured = [point for point in records if not is_snapshot(point, snapshot_ids)]
-    # «Телеметрия (ДАРС)» in the data gaps: telemetry series only, not laboratory samples.
-    series = [point for point in measured if not is_lab_only(point, sources.lab_ids)]
     value, point = _latest(records, "in_operation")
     if point is not None:
         values["in_operation"] = bool(value)
@@ -420,37 +512,10 @@ def build_values(well_id: str, records: list[TelemetryPoint], events: list[dict]
     values.update(scores)
     prov.update(score_prov)
 
-    # What is missing, by section, so the dashboard can say what to request: the notes name the
-    # missing fields and dates, not only the system they come from.
-    gaps: list[dict] = []
-    if not series:
-        gaps.append({"key": "telemetry", "note": "Нет замеров телеметрии: обводнённость, CO₂, хлориды, "
-                                                 "дебит жидкости, статус работы скважины."})
-    elif skipped is not None:
-        # Readiness explains what is short; the lines about unconfigured source APIs are left out.
-        reasons = [item.strip() for item in skipped.missing_items if not item.startswith("Источник ")]
-        gaps.append({"key": "telemetry", "note": "Мало замеров для расчёта моделей. "
-                     + (" ".join(reasons[:2]) if reasons else f"Нужно не менее {settings.min_telemetry_records} "
-                        "замеров с разными датами.")})
-    elif (now - _utc(series[-1].timestamp)).total_seconds() / 3600 > settings.max_telemetry_age_hours:
-        gaps.append({"key": "telemetry", "note": f"Последний замер телеметрии — {_local(series[-1].timestamp):%d.%m.%Y}, "
-                                                 f"старше {settings.max_telemetry_age_hours:g} ч."})
-    if values.get("sampling") is not True:
-        last_sample = (f"последняя — {_local(lab_points[-1].timestamp):%d.%m.%Y}" if lab_points
-                       else "проб нет")
-        gaps.append({"key": "samples", "note": f"Нет лабораторной пробы (CO₂, хлориды, эффективность ингибитора) "
-                                               f"за {settings.rating_sampling_days} сут.: {last_sample}."})
+    # «Полнота данных»: per column of the rating, the values the well lacks (not the sources).
     demounts = [event for event in by_kind["demount"] if _utc(event["event_date"]) >= window_start]
-    if demounts:
-        last_demount = _utc(demounts[-1]["event_date"])
-        if not any(_utc(event["event_date"]) >= last_demount for event in by_kind["base_inspection"]):
-            gaps.append({"key": "base_act", "note": f"Демонтаж {_local(last_demount):%d.%m.%Y} был, "
-                                                    "акта разбора на базе после него нет."})
-    # Not a section of «Полнота данных»: the card lists the fields (rating.evaluate → missing_fields).
-    fields = _missing_fields(values, records, current)
-    if fields:
-        gaps.append({"key": "fields", "items": fields})
-    values["data_gaps"] = gaps
+    values["data_gaps"] = _data_gaps(values, records, current, skipped, lab_points, demounts,
+                                     by_kind["base_inspection"], now)
     return values, prov
 
 

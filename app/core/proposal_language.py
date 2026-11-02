@@ -11,11 +11,6 @@ from __future__ import annotations
 import re
 from typing import Any
 
-# (label in the context's latest measurements, name in «Нет данных»)
-ENVIRONMENT_FIELDS = (("обводнённость, %", "обводнённость"), ("CO₂, %", "CO₂"), ("хлориды, мг/л", "хлориды"))
-CORROSION_FIELDS = (("скорость коррозии, мм/год", "скорость коррозии"), ("толщина стенки, мм", "толщина стенки НКТ"),
-                    ("эффективность ингибитора (доля)", "эффективность ингибитора"),
-                    ("отклонение закачки, %", "отклонение закачки ингибитора"))
 CREW_STATUS = {"available": "свободна", "busy": "занята", "unknown": "неизвестно"}
 NOTE_NAMES = {"category": "категория фонда", "corrosive_environment": "среда", "protection": "защита",
               "demount_act": "акт демонтажа", "demount_corrosion": "коррозия при демонтаже",
@@ -56,9 +51,17 @@ def clean(text: Any) -> str:
     return _GLOSSARY_PATTERN.sub(lambda match: _GLOSSARY_LOWER[match.group(1).lower()], str(text))
 
 
+def _stem(word: str) -> str:
+    """A word without its ending: the first six letters of a long word, a short one without its last
+    letter («дата», «дате» → «дат»); numbers stay whole."""
+    if word.isdigit():
+        return word
+    return word[:6] if len(word) >= 7 else word[:max(3, len(word) - 1)]
+
+
 def _key(text: str) -> set[str]:
     """The words of a gap, cut to their stems: «Нет пробы» and «Нет проб» are the same gap."""
-    return {word[:6] for word in _WORD.findall(text.casefold().replace("ё", "е"))
+    return {_stem(word) for word in _WORD.findall(text.casefold().replace("ё", "е"))
             if len(word) > 2 and word[:6] not in _FILLER}
 
 
@@ -78,26 +81,11 @@ def merge_gaps(known: list[str], extra: list[str]) -> list[str]:
 
 
 def field_gaps(context: dict, act_days: int) -> list[str]:
-    """What is missing for a decision, as concrete fields (not the systems they come from)."""
+    """What is missing for a decision, as concrete fields (not the systems they come from): the gaps
+    of the rating columns (fields and dates, app.core.rating_builder._data_gaps), then what only the
+    agent looks at — acts in the repair history, the crew schedule, unreadable documents."""
     rating = context["rating"]
     gaps = list(rating.get("data_gaps") or [])
-    latest = context.get("latest_measurements") or {}
-    environment = [name for label, name in ENVIRONMENT_FIELDS if label not in latest]
-    if environment:
-        gaps.append("Нет значений показателей среды: " + ", ".join(environment) + ".")
-    corrosion = [name for label, name in CORROSION_FIELDS if label not in latest]
-    if corrosion:
-        gaps.append("Нет значений для оценки коррозии и защиты: " + ", ".join(corrosion) + ".")
-    if not rating.get("equipment"):
-        gaps.append("Не указано спущенное оборудование (насос, НКТ и их исполнение).")
-    if rating.get("run_days") is None:
-        gaps.append("Нет даты спуска оборудования — наработка не рассчитана.")
-    if not rating.get("field"):
-        gaps.append("Не указано месторождение.")
-    if rating.get("liquid_m3_day") is None:
-        gaps.append("Нет дебита жидкости.")
-    if rating.get("in_operation") is None:
-        gaps.append("Нет статуса работы скважины (в работе или нет).")
     if not context.get("acts"):
         gaps.append(f"Нет актов демонтажа и разбора за {act_days} сут. в истории ремонтов.")
     if not context.get("crews"):

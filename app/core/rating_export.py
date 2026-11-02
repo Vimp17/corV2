@@ -102,7 +102,8 @@ def _cell_values(well: dict) -> dict[str, Any]:
         "oil_pct": well.get("oil_pct"),
         "oil_l_day": well.get("oil_l_day"),
         "action": well.get("action"),
-        "data_gaps": ", ".join(well.get("data_gap_labels") or []) or "полные",
+        "data_gaps": "\n".join(f"{rating.GAP_LABELS.get(gap['key'], gap['key'])}: {gap.get('note') or ''}"
+                               for gap in well.get("data_gaps") or []) or "полные",
         "sampling": _yn(well.get("sampling"), "Да", "Нет"),
         "corrosive_environment": _yn(well.get("corrosive_environment"), "Коррозионная", "Некоррозионная"),
         "tonnage_t": well.get("tonnage_t"),
