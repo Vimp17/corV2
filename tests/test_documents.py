@@ -409,6 +409,19 @@ def test_recompute_one_well_and_unknown_number(client):
     assert "NO-SUCH-WELL" not in {row["well_id"] for row in client.get("/api/v1/ingestion/wells").json()}
 
 
+@needs_db
+def test_card_lists_every_ntc_rule(client):
+    well = _well(client, "DEMO-001")
+    rules = well["provenance"]["model_ntc"]["rules"]
+    assert len(rules) == 17 and {rule["group"] for rule in rules} == {"Среда", "Защита", "Технология", "Коррозия"}
+    points = sum(rule["points"] for rule in rules)
+    assert f"{points} баллов из 14" in well["provenance"]["model_ntc"]["note"]
+    assert any(rule["points"] == 0 and rule["value"] is not None for rule in rules)   # rules that did not fire too
+    # The rating list stays light: the rules come with the well card only.
+    listed = next(item for item in client.get("/api/v1/rating").json()["wells"] if item["well_id"] == "DEMO-001")
+    assert "rules" not in listed["provenance"]["model_ntc"]
+
+
 def _proposal_context(**rating):
     return {
         "well_id": "DEMO-002", "today": TODAY.isoformat(),
