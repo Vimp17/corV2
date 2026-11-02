@@ -194,3 +194,59 @@ def test_push_json(client):
     assert client.post("/api/v1/ingestion/crew-schedule", json={"crew_availability": [CREW]}).status_code == 422
     everywhere = client.post("/api/v1/ingestion/crew-schedule?all_wells=true", json={"records": [CREW]}).json()
     assert everywhere["status"] == "ok" and everywhere["targets"] == ["PUSH-1"]
+
+
+def test_liquid_rate_headers():
+    from app.core.documents import nkt_registry
+    from app.core.documents.excel_reader import field_for
+
+    for header in ("Средний дебит по жидкости, м3/сут", "Дебит жидкости, м3/сут", "Qж, м3/сут", "Дебит, м3/сут"):
+        assert field_for(header, {}) == "liquid_rate_m3_day", header
+        assert nkt_registry.column_key(header, set()) == "liquid_rate_m3_day", header
+    for header in ("Дебит по нефти, т/сут", "Дебит газа, м3/сут"):       # not the liquid rate
+        assert field_for(header, {}) is None and nkt_registry.column_key(header, set()) is None, header
+
+
+def test_export_with_liquid_rate_by_its_name_fills_liquid_and_oil(client):
+    from openpyxl import Workbook
+
+    book = Workbook()
+    book.active.append(["Скважина", "Дата", "Средний дебит по жидкости, м3/сут", "Средняя обводненность, %"])
+    book.active.append(["LIQ-1", TODAY.strftime("%d.%m.%Y"), 45.5, 70])
+    buffer = BytesIO()
+    book.save(buffer)
+    result = client.post("/api/v1/ingestion/excel", data={"profile_id": "dars"},
+                         files={"file": ("dars.xlsx", buffer.getvalue())}).json()
+    assert result["source_columns"]["liquid_rate_m3_day"] == "Средний дебит по жидкости, м3/сут"
+    assert result["extra_columns"] == []
+    well = client.get("/api/v1/rating/wells/LIQ-1").json()
+    assert well["liquid_rate_m3_day"] == 45.5 and well["oil_pct"] == 30 and well["oil_l_day"] == 13650
+    # Among documents the same table is a ДАРС export: the liquid rate is not a ХИМИК field.
+    from app.core.documents.text import detect_profile
+
+    assert detect_profile(buffer.getvalue(), "liquid.xlsx") == "dars"
+
+
+def test_a_file_imported_again_replaces_its_rows(client):
+    from datetime import datetime, timezone
+
+    from app import db
+    from app.schemas import TelemetryPoint, WorkHistoryItem
+
+    def points(*values):
+        return [TelemetryPoint.model_validate({"timestamp": datetime(2026, 10, day, 8, tzinfo=timezone.utc),
+                                               "source_id": "DARS", "water_cut_pct": value})
+                for day, value in enumerate(values, start=1)]
+
+    db.save_batch("REP-1", "FILE-1", points(10, 11, 12), replace=True)
+    replayed = db.save_batch("REP-1", "FILE-1", points(10, 11, 12), replace=True)
+    assert replayed["idempotent_replay"] is True
+    db.save_batch("REP-1", "FILE-1", points(20), replace=True)          # the same file read differently
+    assert [point.water_cut_pct for point in db.load_telemetry("REP-1")] == [20]
+    with pytest.raises(ValueError):                                     # a pushed batch id stays strict
+        db.save_batch("REP-1", "FILE-1", points(30))
+    act = WorkHistoryItem(date=datetime(2026, 10, 1, tzinfo=timezone.utc), work_type="Акт демонтажа")
+    db.save_history("REP-1", "FILE-2", [act, act.model_copy(update={"corrosion_detected": True})], [], source_id="ERA",
+                    replace=True)
+    db.save_history("REP-1", "FILE-2", [act], [], source_id="ERA", replace=True)
+    assert len(db.load_history_events("REP-1")) == 1

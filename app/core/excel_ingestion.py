@@ -184,8 +184,9 @@ def _source_field_metadata(profile: dict, headers: list[Any]) -> dict[str, str]:
 
 def _sheet_field_map(profile: dict, headers: list[Any]) -> tuple[dict, dict[str, str]]:
     """The profile's columns plus, for telemetry, the columns its aliases miss but the indicator name
-    patterns recognise («Тоннаж реагента, т» → tonnage_t), so the value fills its field instead of
-    becoming an additional indicator. Returns (field_map, {field: header} of the recognised columns)."""
+    patterns recognise as one of the profile's fields («Тоннаж реагента, т» → tonnage_t in ХИМИК), so the
+    value fills its field instead of becoming an additional indicator; a field the profile does not have
+    (the liquid rate for ХИМИК) is not taken. Returns (field_map, {field: header} of the recognised columns)."""
     field_map = profile.get("field_map", {})
     if profile.get("kind") != "telemetry":
         return field_map, {}
@@ -197,7 +198,7 @@ def _sheet_field_map(profile: dict, headers: list[Any]) -> tuple[dict, dict[str,
         if header is None or str(header) in known.values():
             continue
         field = field_for(header, {})
-        if field in (MEASUREMENT_FIELDS | TEXT_FIELDS) and field not in known and field not in recognised:
+        if field in field_map and field not in known and field not in recognised:
             recognised[field] = str(header)
     if not recognised:
         return field_map, {}

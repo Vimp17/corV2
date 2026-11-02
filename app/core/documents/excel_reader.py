@@ -31,6 +31,9 @@ MAX_COLUMNS = 60
 HEADER_SCAN_ROWS = 30
 MAX_REJECTED_STORED = 50
 
+# The liquid rate: «дебит жидкости», «средний дебит по жидкости», «Qж», a bare «Дебит, м³/сут» —
+# not «дебит нефти» or «дебит газа». Shared with the НКТ registry (app.core.documents.nkt_registry).
+LIQUID_RATE = r"дебит\w*\s+(по\s+)?жидк|(^|[^a-zа-я])qж|^(средн\w*\s+)?(суточн\w*\s+)?дебит\w*\s*(,|\(|$)"
 # Recognised indicators: (field, name pattern, label). Specific patterns go first.
 FIELD_PATTERNS: list[tuple[str, str, str]] = [
     ("initial_wall_thickness_mm", r"(начальн|исходн)\w*\s+толщин", "Начальная толщина стенки, мм"),
@@ -42,7 +45,7 @@ FIELD_PATTERNS: list[tuple[str, str, str]] = [
     ("water_cut_pct", r"обводн", "Обводнённость, %"),
     ("chlorides_mg_l", r"хлорид|(^|[^a-zа-я])cl([^a-zа-я]|$)", "Хлориды, мг/л"),
     ("co2_pct", r"(^|[^a-zа-я0-9])(co2|со2|co₂|со₂)([^a-zа-я0-9]|$)|углекисл|диоксид\w*\s+углерод", "CO₂, %"),
-    ("liquid_rate_m3_day", r"дебит\w*\s+жидк|(^|[^a-zа-я])qж", "Дебит жидкости, м³/сут"),
+    ("liquid_rate_m3_day", LIQUID_RATE, "Дебит жидкости, м³/сут"),
     ("tonnage_t", r"тоннаж", "Тоннаж, т"),
     ("noo_days", r"(^|[^a-zа-я])ноо([^a-zа-я]|$)", "НОО, сут"),
 ]
