@@ -1,7 +1,7 @@
 """AI agent's proposal for one well: what to do, by when, which crew, and why.
 
 The LLM (LiteLLM, MAI_LLM_MODEL) receives everything the system knows about the well — the
-rating and both model forecasts, acts, chemistry, protection, data gaps, documents and their
+rating and the НТЦ forecast, acts, chemistry, protection, data gaps, documents and their
 status, the crew schedule — plus the response-measure examples of config/response_examples.json.
 It must rely on that data only and name what is missing instead of guessing. The answer is
 checked (measure code, crew from the schedule, dates) and stored on the well's rating row.
@@ -111,7 +111,7 @@ def build_context(well_id: str) -> dict | None:
     provenance = row.get("provenance") or {}
     notes = {key: (provenance.get(key) or {}).get("note") for key in
              ("category", "corrosive_environment", "protection", "demount_act", "demount_corrosion",
-              "base_act", "base_corrosion", "model_ntc", "model_math", "sampling")}
+              "base_act", "base_corrosion", "model_ntc", "sampling")}
     context: dict[str, Any] = {
         "well_id": well_id,
         "today": rating.local_today().isoformat(),
@@ -119,7 +119,7 @@ def build_context(well_id: str) -> dict | None:
             "index": row.get("index"), "index_before_protection": row.get("index_raw"),
             "measure_code": row.get("measure_code"), "measure": row.get("measure_label"),
             "deadline": row.get("deadline"), "plan_date": row.get("plan_date"),
-            "forecast_ntc": row.get("model_ntc"), "forecast_math": row.get("model_math"),
+            "forecast_ntc": row.get("model_ntc"),
             "category": row.get("category_label") or None,
             "corrosive_environment": row.get("corrosive_environment"),
             "protection": row.get("protection_label") or None,

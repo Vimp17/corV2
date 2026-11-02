@@ -118,9 +118,9 @@ def test_file_kinds():
         intake.detect_kind(b"PK\x03\x04....", "letter.docx")
 
 
-# --------------------------------------------------------------------------- PostgreSQL
+# --------------------------------------------------------------------------- with the database
 needs_db = pytest.mark.skipif(not os.environ.get("MAI_TEST_DATABASE_URL"),
-                              reason="set MAI_TEST_DATABASE_URL to run the PostgreSQL tests")
+                              reason="set MAI_TEST_DATABASE_URL to run the SQL Server tests")
 
 
 @pytest.fixture(scope="module")
@@ -146,20 +146,15 @@ def fake(monkeypatch):
 @pytest.fixture()
 def client(generated, fake):
     from fastapi.testclient import TestClient
-    from sqlalchemy import text
 
     from app import db
     from app.main import app
 
     with TestClient(app) as test_client:
         with db.engine().begin() as conn:
-            if conn.dialect.name == "postgresql":
-                conn.execute(text("TRUNCATE documents, telemetry, ingestion_batches, history_events, history_batches, "
-                                  "source_health, source_documents, well_rating, analysis_runs, era_proposals CASCADE"))
-            else:  # SQL Server (MSSQL mode of the standalone build): no TRUNCATE … CASCADE
-                for table in reversed(db.metadata.sorted_tables):
-                    if table.name != "monitor_jobs":
-                        conn.execute(table.delete())
+            for table in reversed(db.metadata.sorted_tables):
+                if table.name != "monitor_jobs":
+                    conn.execute(table.delete())
         for profile, name in (("dars", "sample_dars.xlsx"), ("khimik", "sample_khimik.xlsx"), ("era", "sample_era.xlsx")):
             with open(generated / name, "rb") as handle:
                 response = test_client.post("/api/v1/ingestion/excel", data={"profile_id": profile},
@@ -346,7 +341,8 @@ def test_data_gaps_name_the_fields_of_each_column():
     from datetime import datetime, timezone
 
     from app.core.rating_builder import _data_gaps
-    from app.schemas import SkippedAnalysis, TelemetryPoint
+    from app.core.readiness import Readiness
+    from app.schemas import TelemetryPoint
 
     now = datetime(2026, 10, 30, 12, tzinfo=timezone.utc)
     old = TelemetryPoint(well_id="W-1", timestamp=datetime(2026, 8, 1, 9, tzinfo=timezone.utc), co2_pct=1.2)
@@ -355,8 +351,9 @@ def test_data_gaps_name_the_fields_of_each_column():
     values = {"field": "Южное", "in_operation": True, "equipment": "ЭЦН-80", "installed_at": now, "oil_pct": 10,
               "category": "medium", "protection": "effective", "sampling": True, "model_ntc": 0.4,
               "demount_act": True, "demount_corrosion": None}
+    ready = Readiness(unique_timestamps=8, recent_observations=8, current_signals=["water_cut_pct", "chlorides_mg_l"])
     gaps = {gap["key"]: gap for gap in _data_gaps(values, [old, fresh], {"water_cut_pct": 90, "chlorides_mg_l": 18000,
-                                                  "inhibitor_efficiency": 0.9}, None, [], [], [], now)}
+                                                  "inhibitor_efficiency": 0.9}, ready, [], [], [], now)}
     # Filled columns are not listed, whichever source filled them.
     assert set(gaps) == {"category", "environment", "acts", "protection"}
     assert gaps["environment"]["note"] == "устарело: CO₂ (последнее значение 01.08.2026)"
@@ -365,15 +362,24 @@ def test_data_gaps_name_the_fields_of_each_column():
     assert gaps["protection"]["note"] == "нет: отклонение закачки ингибитора"   # asked for only with an inhibitor
 
     # No forecast: what is short, by count and by the inputs the well has.
-    skipped = SkippedAnalysis(well_id="W-1", telemetry_records=2, unique_timestamps=2, current_signal_count=1,
-                              recent_observations=2, current_signals=["water_cut_pct"], operator_message="")
-    empty = {gap["key"]: gap for gap in _data_gaps({}, [fresh], {}, skipped, [], [], [], now)}
+    short = Readiness(unique_timestamps=2, recent_observations=2, current_signals=["water_cut_pct"])
+    empty = {gap["key"]: gap for gap in _data_gaps({}, [fresh], {}, short, [], [], [], now)}
     note = empty["forecast"]["note"]
     assert note.startswith("модели не рассчитаны: замеров с разными датами — 2 из ")
     assert "(есть: обводнённость); подходят: CO₂, хлориды" in note
     assert set(empty) == {"well", "forecast", "category", "environment", "sampling", "protection", "run_days", "liquid"}
     assert empty["run_days"]["note"] == "нет: дата спуска оборудования"
     assert empty["well"]["note"] == "нет: месторождение, статус работы (в работе или нет)"
+
+@needs_db
+def test_recompute_one_well_and_unknown_number(client):
+    well = client.post("/api/v1/monitor/wells/DEMO-001/analyze").json()
+    assert well["index"] is not None and well["rank"] == 1
+    # A mistyped number is not added to the rating or the list of wells.
+    assert client.post("/api/v1/monitor/wells/NO-SUCH-WELL/analyze").status_code == 404
+    assert client.get("/api/v1/rating/wells/NO-SUCH-WELL").status_code == 404
+    assert "NO-SUCH-WELL" not in {row["well_id"] for row in client.get("/api/v1/ingestion/wells").json()}
+
 
 def _proposal_context(**rating):
     return {

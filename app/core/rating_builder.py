@@ -1,33 +1,34 @@
-"""Builds each well's rating row from source data and the risk models.
+"""Builds each well's rating row from its data in the database.
 
-Inputs, all already in the database (pulled from the source APIs when they are configured, or
-uploaded by users):
-  DARS   - field, operating status and the telemetry the risk models run on;
+Inputs (pulled from the source APIs when they are configured, uploaded by users or read from
+documents):
+  DARS   - field, operating status and the telemetry the НТЦ rules run on;
   ХИМИК  - laboratory samples (profile flag "lab_samples"), tonnage and НОО of the treatment;
   ERA    - equipment runs, demount and base-inspection acts with the corrosion finding.
-The НТЦ column is the score of a risk-model plugin with model_id "ntc" when one is installed,
-otherwise the rule engine's normalised score; the math column is the Cox model probability.
-Every value is stored with its provenance (source, date, note) so the dashboard can show where
-it came from. Operator fields (plan, Промайн document, comment) are never written here.
+The НТЦ column is the rule score (app.core.rules) on the current values and trends, computed when
+the well has enough measurements (app.core.readiness). Every value is stored with its provenance
+(source, date, note) so the dashboard can show where it came from. Operator fields (plan, Промайн
+document, comment) are never written here.
 """
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 from zoneinfo import ZoneInfo
 
 from app import db
 from app.config import settings
-from app.core import rating
-from app.core.diagnostics import THRESHOLDS
+from app.core import rating, readiness
 from app.core.excel_ingestion import load_profiles
-from app.core.pipeline import PreparedAnalysis, prepare_well_analysis
-from app.schemas import PipelineResult, SkippedAnalysis, TelemetryPoint
+from app.core.features import Features, build_features
+from app.core.normalization import normalize_records
+from app.core.rules import ENVIRONMENT_PREFIX, THRESHOLDS, Finding, evaluate_rules, score
+from app.core.source_kinds import lab_source_ids, snapshot_source_ids
+from app.schemas import TelemetryPoint
 
 logger = logging.getLogger(__name__)
-
-NTC_MODEL_ID = "ntc"
 # Words in the equipment description that mean a protective design (coated or corrosion-
 # resistant tubing, inhibitor containers). Profiles may override them ("protection_keywords").
 _DEFAULT_PROTECTION_WORDS = ["покрыт", "коррозионностойк", "нержав", "стеклопластик", "футеров",
@@ -119,19 +120,45 @@ def _latest(records: list[TelemetryPoint], field: str) -> tuple[Any, TelemetryPo
     return None, None
 
 
-ENV_RULE_PREFIX = "ENV_"
+@dataclass
+class Prepared:
+    """Current values and trends of a well and their normalised rows (the input of the rules)."""
+
+    features: Features
+    normalized: list[dict]
+
+
+def prepare(records: list[TelemetryPoint]) -> Prepared:
+    """Laboratory samples and registry snapshots stay current for the sampling window, telemetry for
+    MAI_MAX_FORWARD_FILL_DAYS (app.core.source_kinds)."""
+    snapshots = snapshot_source_ids()
+    normalized = normalize_records(records, settings.max_forward_fill_days,
+                                   sample_fill_days=settings.rating_sampling_days,
+                                   sample_sources=lab_source_ids() | snapshots, snapshot_sources=snapshots)
+    return Prepared(build_features(normalized), normalized)
+
+
+# Corrosive environment: CO₂, water cut or chlorides at or above the high threshold.
+ENVIRONMENT_RULES = (("co2_pct", "co2_high", "Повышенная доля CO₂"),
+                     ("water_cut_pct", "water_cut_high", "Высокая обводнённость"),
+                     ("chlorides_mg_l", "chlorides_high", "Высокая концентрация хлоридов"))
+
+
+def _environment(features: Features) -> tuple[bool | None, list[str]]:
+    """(corrosive, reasons); corrosive is None without any of the three values or their trends."""
+    values, trends = features.current_values, features.trends_per_day
+    reasons = [f"{reason}: {values[field]:g}." for field, high, reason in ENVIRONMENT_RULES
+               if values.get(field) is not None and values[field] >= THRESHOLDS[high]]
+    if reasons:
+        return True, reasons
+    known = (any(values.get(field) is not None for field, _, _ in ENVIRONMENT_RULES)
+             or any(trends.get(field) is not None for field in ("co2_pct", "water_cut_pct")))
+    return (False if known else None), []
+
+
 # «Полнота данных» is judged on the columns of the rating table (rating.GAP_LABELS), by the values the
 # well actually has — whatever brought them (ДАРС, ХИМИК, a protocol, the НКТ registry, a passport).
 ENVIRONMENT_FIELDS = (("co2_pct", "CO₂"), ("water_cut_pct", "обводнённость"), ("chlorides_mg_l", "хлориды"))
-# Model inputs (readiness.SIGNAL_FIELDS) by name: a forecast needs MAI_MIN_CURRENT_SIGNALS of them.
-SIGNAL_NAMES = {
-    "water_cut_pct": "обводнённость", "co2_pct": "CO₂", "chlorides_mg_l": "хлориды",
-    "inhibitor_efficiency": "эффективность ингибитора", "injection_deviation_pct": "отклонение закачки",
-    "corrosion_rate_mm_year": "скорость коррозии", "wall_thickness_mm": "толщина стенки",
-    "initial_wall_thickness_mm": "начальная толщина стенки", "metal_loss_mm": "потеря металла",
-    "corrosion_load": "коррозионная нагрузка",
-}
-_MAIN_SIGNALS = 7  # the first seven are measured routinely; the rest are rare
 
 
 def _fresh_window() -> timedelta:
@@ -159,34 +186,38 @@ def _fields_note(items: list[dict]) -> str:
     return "; ".join(parts)
 
 
-def _forecast_gap(values: dict, records: list[TelemetryPoint], skipped: SkippedAnalysis | None) -> dict | None:
-    """Why the index and the model forecasts are empty, by count and by the inputs the well has."""
-    if values.get("model_ntc") is not None or values.get("model_math") is not None:
+def _forecast_gap(values: dict, records: list[TelemetryPoint], ready: readiness.Readiness) -> dict | None:
+    """Why the index and the НТЦ forecast are empty, by count and by the inputs the well has."""
+    if values.get("model_ntc") is not None:
         return None
     reasons: list[str] = []
     if not records:
         reasons.append("нет ни одного замера показателей")
-    elif skipped is not None:
-        if skipped.unique_timestamps < settings.min_telemetry_records:
-            reasons.append(f"замеров с разными датами — {skipped.unique_timestamps} из {settings.min_telemetry_records} "
+    elif not ready.ready:
+        if ready.unique_timestamps < settings.min_telemetry_records:
+            reasons.append(f"замеров с разными датами — {ready.unique_timestamps} из {settings.min_telemetry_records} "
                            "нужных")
-        if skipped.recent_observations < settings.min_trend_observations:
-            reasons.append(f"замеров за последние {settings.trend_window_days} сут. — {skipped.recent_observations} "
+        if ready.recent_observations < settings.min_trend_observations:
+            reasons.append(f"замеров за последние {settings.trend_window_days} сут. — {ready.recent_observations} "
                            f"из {settings.min_trend_observations} нужных")
-        if skipped.current_signal_count < settings.min_current_signals:
-            present = [SIGNAL_NAMES.get(field, field) for field in skipped.current_signals]
-            suitable = [name for field, name in list(SIGNAL_NAMES.items())[:_MAIN_SIGNALS]
-                        if field not in skipped.current_signals]
+        signals = ready.current_signals
+        if len(signals) < settings.min_current_signals:
+            names = readiness.SIGNAL_NAMES
+            present = [names[field] for field in signals]
+            suitable = [name for field, name in list(names.items())[:readiness.MAIN_SIGNALS] if field not in signals]
             reasons.append(f"показателей за последние {settings.max_forward_fill_days} сут. — "
-                           f"{skipped.current_signal_count} из {settings.min_current_signals} нужных"
+                           f"{len(signals)} из {settings.min_current_signals} нужных"
                            + (f" (есть: {', '.join(present)})" if present else "")
                            + f"; подходят: {', '.join(suitable)}")
-        reasons += [item for item in skipped.missing_items if item.startswith("Последнее измерение датировано")]
+        if ready.ahead_hours is not None:
+            reasons.append(f"Последнее измерение датировано будущим временем (+{ready.ahead_hours:.1f} ч.; "
+                           f"допустимо до {settings.max_future_skew_hours:g} ч.); проверьте часы и часовой пояс "
+                           "источника.")
     note = ("модели не рассчитаны: " + "; ".join(reasons)) if reasons else "модели не рассчитаны: пересчитайте скважину"
     return {"key": "forecast", "note": note, "items": [{"field": reason, "last": None} for reason in reasons]}
 
 
-def _data_gaps(values: dict, records: list[TelemetryPoint], current: dict, skipped: SkippedAnalysis | None,
+def _data_gaps(values: dict, records: list[TelemetryPoint], current: dict, ready: readiness.Readiness,
                lab_points: list[TelemetryPoint], demounts: list[dict], base_inspections: list[dict],
                now: datetime) -> list[dict]:
     """«Полнота данных»: per column of the rating table, the values it shows that the well lacks —
@@ -199,7 +230,7 @@ def _data_gaps(values: dict, records: list[TelemetryPoint], current: dict, skipp
 
     add("well", ([] if values.get("field") else [{"field": "месторождение", "last": None}])
         + ([] if values.get("in_operation") is not None else [{"field": "статус работы (в работе или нет)", "last": None}]))
-    forecast = _forecast_gap(values, records, skipped)
+    forecast = _forecast_gap(values, records, ready)
     if forecast:
         gaps.append(forecast)
     rate = _measured("corrosion_rate_mm_year", "скорость коррозии", records, current, now)
@@ -248,66 +279,29 @@ def _data_gaps(values: dict, records: list[TelemetryPoint], current: dict, skipp
     return gaps
 
 
-def _model_scores(result: PipelineResult | None, sources: _Sources,
-                  protection: str | None = None) -> tuple[dict, dict]:
-    """НТЦ and math scores. With confirmed effective protection (and MAI_RATING_PROTECTION_MODE
-    = adjust) the environment rule points of the rule-based НТЦ score count with
+def _ntc_score(findings: list[Finding] | None, when: datetime, sources: _Sources,
+               protection: str | None) -> tuple[dict, dict]:
+    """The НТЦ score from the rule points. With confirmed effective protection (and
+    MAI_RATING_PROTECTION_MODE = adjust) the environment rule points count with
     MAI_RATING_PROTECTION_FACTOR; points for measured damage are never reduced."""
-    values = {"model_ntc": None, "model_math": None, "model_ntc_raw": None}
-    provenance: dict[str, dict] = {}
-    if result is None:
-        return values, provenance
-    when = result.features.latest_timestamp
-    horizon = result.rule_risk.horizon_days
-    plugin = next((item for item in result.model_predictions
-                   if item.model_id == NTC_MODEL_ID and item.status == "ok"), None)
-    plugin_score = None
-    if plugin is not None:
-        plugin_score = plugin.probability if plugin.probability is not None else plugin.score
-        if plugin_score is not None and not 0 <= plugin_score <= 1:
-            plugin_score = None
-    if plugin_score is not None:
-        values["model_ntc"] = round(float(plugin_score), 4)
-        provenance["model_ntc"] = _prov(sources, None, when,
-                                        f"Модель НТЦ (плагин {plugin.model_id} v{plugin.model_version}), "
-                                        f"горизонт {horizon} сут.")
-        if protection == "effective":
-            provenance["model_ntc"]["note"] += " Защита учитывается логикой модели НТЦ, корректировки нет."
-    elif result.rule_risk.status == "ok" and result.rule_risk.risk_score is not None:
-        raw = round(float(result.rule_risk.risk_score), 4)
-        points = result.rule_risk.risk_points or 0
-        env_points = sum(item.points for item in result.rule_risk.findings
-                         if item.rule_id.startswith(ENV_RULE_PREFIX))
-        values["model_ntc"] = values["model_ntc_raw"] = raw
-        note = f"Правила НТЦ: {points} баллов из 14, горизонт {horizon} сут."
-        if protection == "effective" and env_points:
-            factor = settings.rating_protection_factor
-            adjusted_points = points - env_points * (1 - factor)
-            if settings.rating_protection_mode == "adjust":
-                values["model_ntc"] = round(min(adjusted_points / 14.0, 1.0), 4)
-                note += (f" Защита эффективна: баллы среды ({env_points}) учтены с коэффициентом "
-                         f"{factor:g}, итого {adjusted_points:g} баллов.")
-            else:
-                note += (f" Защита эффективна; с её учётом было бы {adjusted_points:g} баллов "
-                         "(режим MAI_RATING_PROTECTION_MODE=info, индекс не корректируется).")
-        provenance["model_ntc"] = _prov(sources, None, when, note)
-    else:
-        provenance["model_ntc"] = _prov(sources, None, when, "Недостаточно данных для правил НТЦ.")
-    cox = result.cox_risk
-    if cox.status == "ok" and cox.risk_score is not None and 0 <= cox.risk_score <= 1:
-        values["model_math"] = round(float(cox.risk_score), 4)
-        provenance["model_math"] = _prov(sources, None, when,
-                                         f"Модель Кокса v{cox.model_version}, вероятность отказа "
-                                         f"за {cox.horizon_days} сут.")
-    else:
-        reason = {"unavailable": "модель Кокса не обучена или не подключена (MAI_COX_MODEL_PATH)",
-                  "insufficient_data": "недостаточно данных для модели Кокса"}.get(cox.status, cox.reason or cox.status)
-        provenance["model_math"] = _prov(sources, None, when,
-                                         f"Мат. модель недоступна: {reason}. Индекс считается по модели НТЦ.")
-    return values, provenance
-
-
-GAP_LABELS = rating.GAP_LABELS
+    values = {"model_ntc": None, "model_ntc_raw": None}
+    if findings is None:
+        return values, {"model_ntc": _prov(sources, None, when, "Недостаточно данных для правил НТЦ.")}
+    points = sum(item.points for item in findings)
+    env_points = sum(item.points for item in findings if item.rule_id.startswith(ENVIRONMENT_PREFIX))
+    values["model_ntc"] = values["model_ntc_raw"] = score(points)
+    note = f"Правила НТЦ: {points} баллов из 14."
+    if protection == "effective" and env_points:
+        factor = settings.rating_protection_factor
+        adjusted_points = points - env_points * (1 - factor)
+        if settings.rating_protection_mode == "adjust":
+            values["model_ntc"] = score(adjusted_points)
+            note += (f" Защита эффективна: баллы среды ({env_points}) учтены с коэффициентом "
+                     f"{factor:g}, итого {adjusted_points:g} баллов.")
+        else:
+            note += (f" Защита эффективна; с её учётом было бы {adjusted_points:g} баллов "
+                     "(режим MAI_RATING_PROTECTION_MODE=info, индекс не корректируется).")
+    return values, {"model_ntc": _prov(sources, None, when, note)}
 
 
 def extra_measurements(well_id: str) -> list[dict]:
@@ -344,14 +338,14 @@ def well_passports(well_id: str) -> list[tuple[str, dict, datetime | None]]:
     return result
 
 
-def build_values(well_id: str, records: list[TelemetryPoint], events: list[dict],
-                 prepared: PreparedAnalysis | None, result: PipelineResult | None,
-                 now: datetime | None = None, skipped: SkippedAnalysis | None = None,
+def build_values(records: list[TelemetryPoint], events: list[dict], now: datetime | None = None,
                  passports: list[tuple[str, dict, datetime | None]] | None = None) -> tuple[dict, dict]:
     """Rating field values and their provenance for one well."""
     now = now or datetime.now(timezone.utc)
     sources = _Sources()
     records = sorted(records, key=lambda point: _utc(point.timestamp))
+    prepared = prepare(records) if records else None
+    ready = readiness.assess(records)
     values: dict[str, Any] = {}
     prov: dict[str, dict] = {}
 
@@ -453,14 +447,11 @@ def build_values(well_id: str, records: list[TelemetryPoint], events: list[dict]
                 prov[act_field] = _prov(sources, None, None,
                                         f"Актов за последние {settings.rating_act_days} сут. нет.")
 
-    # Environment: the environment diagnosis on the latest telemetry.
+    # Environment: CO₂, water cut and chlorides of the latest values.
     rate = None
     if prepared is not None:
-        severity = prepared.environment.severity
-        values["corrosive_environment"] = (True if severity in {"HIGH", "CRITICAL"}
-                                           else False if severity in {"LOW", "MEDIUM"} else None)
-        reasons = "; ".join(item.reason for item in prepared.environment.findings
-                            if item.severity in {"HIGH", "CRITICAL"})
+        values["corrosive_environment"], found = _environment(prepared.features)
+        reasons = "; ".join(found)
         when = prepared.features.latest_timestamp
         contributing = {_record_sources(point) for point in
                         (_latest(records, name)[1] for name in ("co2_pct", "water_cut_pct", "chlorides_mg_l"))
@@ -508,18 +499,21 @@ def build_values(well_id: str, records: list[TelemetryPoint], events: list[dict]
         when = prepared.features.latest_timestamp if prepared is not None else None
         prov["protection"] = {**_prov(sources, None, when, protection_note), "means": means}
 
-    scores, score_prov = _model_scores(result, sources, protection)
-    values.update(scores)
-    prov.update(score_prov)
+    values.update(model_ntc=None, model_ntc_raw=None)
+    if prepared is not None and ready.ready:
+        scores, score_prov = _ntc_score(evaluate_rules(prepared.features, prepared.normalized),
+                                        prepared.features.latest_timestamp, sources, protection)
+        values.update(scores)
+        prov.update(score_prov)
 
     # «Полнота данных»: per column of the rating, the values the well lacks (not the sources).
     demounts = [event for event in by_kind["demount"] if _utc(event["event_date"]) >= window_start]
-    values["data_gaps"] = _data_gaps(values, records, current, skipped, lab_points, demounts,
+    values["data_gaps"] = _data_gaps(values, records, current, ready, lab_points, demounts,
                                      by_kind["base_inspection"], now)
     return values, prov
 
 
-def _assess_protection(values: dict, prepared: PreparedAnalysis | None, rate: float | None,
+def _assess_protection(values: dict, prepared: Prepared | None, rate: float | None,
                        sources: _Sources) -> tuple[str | None, str | None]:
     """Protection status: effective / unconfirmed / insufficient, or None without data.
 
@@ -569,50 +563,21 @@ def _assess_protection(values: dict, prepared: PreparedAnalysis | None, rate: fl
                          + f"; скорость коррозии {rate:.2f} мм/год ниже {max_rate:g}.")
 
 
-def update_from_analysis(well_id: str, records: list[TelemetryPoint],
-                         prepared: PreparedAnalysis | None,
-                         results: Iterable[PipelineResult | SkippedAnalysis]) -> dict | None:
-    """Recompute and store the well's rating after an analysis. Errors are logged, not raised."""
-    try:
-        results = list(results)
-        def horizon(item) -> int | None:
-            return item.rule_risk.horizon_days if isinstance(item, PipelineResult) else item.horizon_days
-
-        chosen = next((item for item in results if horizon(item) == settings.rating_horizon_days),
-                      results[0] if results else None)
-        skipped = chosen if isinstance(chosen, SkippedAnalysis) else None
-        result = chosen if isinstance(chosen, PipelineResult) else None
-        if prepared is None and records:
-            try:
-                prepared = prepare_well_analysis(well_id, records)
-            except Exception:  # evidence is optional for a skipped well
-                logger.info("Rating evidence could not be prepared for well_id=%s", well_id, exc_info=True)
-        events = db.load_history_events(well_id)
-        values, provenance = build_values(well_id, records, events, prepared, result, skipped=skipped,
-                                          passports=well_passports(well_id))
-        measure = rating.measure_for(rating.priority_index(values["model_ntc"], values["model_math"]))
-        return db.save_computed_rating(
-            well_id, values, measure=measure, provenance=provenance,
-            skip_reason=skipped.operator_message[:2000] if skipped else None,
-            analysis_id=chosen.analysis_id if chosen is not None else None,
-        )
-    except Exception:
-        logger.exception("Rating computation failed for well_id=%s", well_id)
-        return None
+def update(well_id: str) -> dict:
+    """Recompute the well's rating from its stored data and store it; returns the stored row."""
+    values, provenance = build_values(db.load_telemetry(well_id), db.load_history_events(well_id),
+                                      passports=well_passports(well_id))
+    return db.save_computed_rating(well_id, values, provenance=provenance,
+                                   measure=rating.measure_for(rating.priority_index(values["model_ntc"])))
 
 
-def recompute_wells(well_ids: Iterable[str], app_state, request_id: str | None = None) -> dict:
-    """Analyse wells on the rating horizon from stored data and refresh their rating.
-
-    Used after uploads and pushes; no source APIs are called (the daily cycle and the per-well
-    button refresh sources first).
-    """
-    from app.core.orchestration import analyze_saved_well_horizons
-
+def recompute_wells(well_ids: Iterable[str]) -> dict:
+    """Recompute the rating of the wells from stored data. Used after uploads and pushes; no source
+    APIs are called (the daily cycle and the per-well button refresh sources first)."""
     done, failed = [], []
     for well_id in dict.fromkeys(well_ids):
         try:
-            analyze_saved_well_horizons(well_id, [settings.rating_horizon_days], app_state, request_id)
+            update(well_id)
             done.append(well_id)
         except Exception:
             logger.exception("Rating recompute failed for well_id=%s", well_id)
@@ -620,13 +585,13 @@ def recompute_wells(well_ids: Iterable[str], app_state, request_id: str | None =
     return {"recomputed": done, "failed": failed}
 
 
-def schedule_recompute(well_ids: Iterable[str], app_state, background_tasks, request_id: str | None = None) -> dict:
+def schedule_recompute(well_ids: Iterable[str], background_tasks) -> dict:
     """Recompute now for small uploads, in the background for large ones."""
     wells = [well for well in dict.fromkeys(well_ids) if well]
     if not wells:
         return {"mode": "none", "wells": 0}
     if len(wells) <= settings.rating_recompute_sync_limit or background_tasks is None:
-        outcome = recompute_wells(wells, app_state, request_id)
+        outcome = recompute_wells(wells)
         return {"mode": "sync", "wells": len(wells), "failed": outcome["failed"]}
-    background_tasks.add_task(recompute_wells, wells, app_state, request_id)
+    background_tasks.add_task(recompute_wells, wells)
     return {"mode": "background", "wells": len(wells)}

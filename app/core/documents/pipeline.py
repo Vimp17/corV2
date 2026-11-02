@@ -64,15 +64,14 @@ def _finish(document_id: str, status: str, message: str | None, **values) -> dic
     return db.get_document(document_id) or {}
 
 
-def _recompute(wells: list[str], app_state) -> None:
-    if not wells or app_state is None:
-        return
-    from app.core import rating_builder
+def _recompute(wells: list[str]) -> None:
+    if wells:
+        from app.core import rating_builder
 
-    rating_builder.recompute_wells(wells, app_state)
+        rating_builder.recompute_wells(wells)
 
 
-def _import_by_profile(document: dict, content: bytes, profile_id: str, app_state) -> dict:
+def _import_by_profile(document: dict, content: bytes, profile_id: str) -> dict:
     """An Excel table in the ДАРС / ХИМИК / ЭРА layout goes through the usual source import."""
     from app.core.source_connectors import ingest_excel_bytes
 
@@ -94,7 +93,7 @@ def _import_by_profile(document: dict, content: bytes, profile_id: str, app_stat
         return _finish(document["document_id"], "not_recognized",
                        "Таблица похожа на выгрузку источника, но строк для загрузки нет.",
                        doc_type=f"source:{profile_id}", text_method="excel_profile", loaded=loaded, well_ids=[])
-    _recompute(wells, app_state)
+    _recompute(wells)
     rejected = result.get("rows_rejected") or 0
     message = f"Импорт как {result.get('source_id')}: {loaded['records']} записей по {len(wells)} скв."
     if rejected:
@@ -106,7 +105,7 @@ def _import_by_profile(document: dict, content: bytes, profile_id: str, app_stat
 EXCEL_SPEC = {"title": "Таблица показателей (Excel)", "target": "telemetry", "source_id": "DOC_LAB"}
 
 
-def _read_excel(document: dict, content: bytes, app_state) -> dict:
+def _read_excel(document: dict, content: bytes) -> dict:
     """Any other Excel: tables and forms read by rules, never by AI (app.core.documents.excel_reader).
 
     Accepted rows are stored as samples of the laboratory-protocol source (DOC_LAB)."""
@@ -144,7 +143,7 @@ def _read_excel(document: dict, content: bytes, app_state) -> dict:
         return _finish(document_id, "not_recognized", excel_reader.not_found_reason(result), doc_type=doc_type,
                        well_ids=mentioned, extraction=extraction, loaded=None, doc_date=None, **text_values)
     loaded = load.load_records(document, spec, result["records"])
-    _recompute(loaded["wells"], app_state)
+    _recompute(loaded["wells"])
     dates = sorted(record["fields"]["sample_date"]["value"] for record in result["records"]
                    if record["accepted"] and record["fields"]["sample_date"]["value"])
     message = f"Excel: загружено проб — {loaded['records']}, скважин — {len(loaded['wells'])}."
@@ -158,7 +157,7 @@ def _read_excel(document: dict, content: bytes, app_state) -> dict:
                    doc_date=datetime.fromisoformat(dates[-1]).date() if dates else None, **text_values)
 
 
-def _read_registry(document: dict, content: bytes, app_state) -> dict:
+def _read_registry(document: dict, content: bytes) -> dict:
     """Реестр коррозии НКТ: one row per well, read by its column names (app.core.documents.nkt_registry)."""
     from zoneinfo import ZoneInfo
 
@@ -191,7 +190,7 @@ def _read_registry(document: dict, content: bytes, app_state) -> dict:
                        doc_type=nkt_registry.DOC_TYPE, well_ids=mentioned, extraction=extraction, loaded=None,
                        doc_date=None, **text_values)
     loaded = nkt_registry.load(document, result)
-    _recompute(loaded["wells"], app_state)
+    _recompute(loaded["wells"])
     message = f"{nkt_registry.TITLE}: загружено строк — {loaded['records']}, скважин — {len(loaded['wells'])}."
     if loaded["new_wells"]:
         message += f" Новых скважин в системе: {len(loaded['new_wells'])}."
@@ -213,7 +212,7 @@ def _retry_or_fail(document: dict, reason: str, configured: bool) -> dict:
     return _finish(document["document_id"], "failed", reason)
 
 
-def process_document(document_id: str, app_state=None) -> dict:
+def process_document(document_id: str) -> dict:
     """Run one claimed document through text -> type -> fields -> checks -> data."""
     document = db.get_document(document_id)
     if document is None:
@@ -236,15 +235,15 @@ def process_document(document_id: str, app_state=None) -> dict:
         from app.core.documents import nkt_registry
 
         if nkt_registry.detect(content):
-            return _read_registry(document, content, app_state)
+            return _read_registry(document, content)
         try:
             profile_id = doc_text.detect_profile(content, document["filename"])
         except Exception:
             logger.exception("Profile detection failed document_id=%s", document_id)
             profile_id = None
         if profile_id:
-            return _import_by_profile(document, content, profile_id, app_state)
-        return _read_excel(document, content, app_state)
+            return _import_by_profile(document, content, profile_id)
+        return _read_excel(document, content)
 
     try:
         result = doc_text.document_text(document, content)
@@ -300,7 +299,7 @@ def process_document(document_id: str, app_state=None) -> dict:
 
     loaded = load.load_records(document, spec, checked)
     wells = sorted(set(loaded["wells"]) | set(mentioned))
-    _recompute(loaded["wells"], app_state)
+    _recompute(loaded["wells"])
     message = f"{spec.get('title')}: загружено записей — {loaded['records']}, скважин — {len(loaded['wells'])}."
     message += _new_wells_note(checked)
     if len(accepted) < len(checked):
@@ -325,7 +324,7 @@ def load_date_field(spec: dict) -> str:
     return DATE_FIELD[spec["target"]]
 
 
-def process_queue(app_state=None, limit: int = 20) -> list[dict]:
+def process_queue(limit: int = 20) -> list[dict]:
     """Process up to `limit` queued documents; returns their final rows."""
     done = []
     for _ in range(limit):
@@ -333,21 +332,21 @@ def process_queue(app_state=None, limit: int = 20) -> list[dict]:
         if document is None:
             break
         try:
-            done.append(process_document(document["document_id"], app_state))
+            done.append(process_document(document["document_id"]))
         except Exception:
             logger.exception("Document processing failed document_id=%s", document["document_id"])
             done.append(_finish(document["document_id"], "failed", "Внутренняя ошибка обработки."))
     return done
 
 
-def process_now(document_id: str, app_state=None) -> dict | None:
+def process_now(document_id: str) -> dict | None:
     """Process one queued document immediately (upload with wait=true); None when another
     worker has already taken it or it is not queued."""
     document = db.claim_next_document(document_id)
     if document is None:
         return None
     try:
-        return process_document(document_id, app_state)
+        return process_document(document_id)
     except Exception:
         logger.exception("Document processing failed document_id=%s", document_id)
         return _finish(document_id, "failed", "Внутренняя ошибка обработки.")
@@ -361,22 +360,22 @@ def reset_for_processing(document_id: str) -> dict | None:
     return db.get_document(document_id)
 
 
-def delete_documents(statuses: set[str] | None, app_state=None) -> dict:
+def delete_documents(statuses: set[str] | None) -> dict:
     """Delete documents with the given statuses (None = every document except those being
     processed) and the data they loaded; the rating of the affected wells is recomputed once."""
     deleted, wells = 0, set()
     for row in db.list_documents(limit=100000):
         if row["status"] in {"queued", "processing"} or (statuses is not None and row["status"] not in statuses):
             continue
-        removed = delete_document(row["document_id"], app_state, recompute=False)
+        removed = delete_document(row["document_id"], recompute=False)
         if removed is not None:
             deleted += 1
             wells |= set((removed.get("loaded") or {}).get("wells") or [])
-    _recompute([well for well in sorted(wells) if db.well_has_data(well)], app_state)
+    _recompute([well for well in sorted(wells) if db.well_has_data(well)])
     return {"deleted": deleted, "wells": sorted(wells)}
 
 
-def delete_document(document_id: str, app_state=None, recompute: bool = True) -> dict | None:
+def delete_document(document_id: str, recompute: bool = True) -> dict | None:
     """Remove a document, the data it loaded and its stored original; recompute its wells."""
     document = db.get_document(document_id)
     if document is None:
@@ -396,15 +395,14 @@ def delete_document(document_id: str, app_state=None, recompute: bool = True) ->
         else:
             db.forget_well(well)
     if recompute:
-        _recompute(remaining, app_state)
+        _recompute(remaining)
     return document
 
 
 class DocumentWorker:
     """Background thread: scans the inbox folder and processes queued documents."""
 
-    def __init__(self, app_state) -> None:
-        self.app_state = app_state
+    def __init__(self) -> None:
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._thread: threading.Thread | None = None
@@ -433,7 +431,7 @@ class DocumentWorker:
                 if now - last_requeue >= 60:
                     last_requeue = now
                     db.requeue_stale_documents()
-                processed = process_queue(self.app_state, limit=5)
+                processed = process_queue(limit=5)
             except Exception:
                 logger.exception("Documents worker cycle failed")
                 processed = []

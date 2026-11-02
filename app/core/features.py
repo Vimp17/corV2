@@ -1,87 +1,59 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import datetime
 from math import isfinite
 
 from app.config import settings
-from app.core.quality import MEASUREMENTS
-from app.schemas import FeatureSnapshot
+
+TREND_FIELDS = ("water_cut_pct", "co2_pct", "chlorides_mg_l", "inhibitor_efficiency")
 
 
-TREND_FIELDS = (
-    "water_cut_pct", "co2_pct", "chlorides_mg_l", "inhibitor_efficiency",
-)
+@dataclass
+class Features:
+    latest_timestamp: datetime
+    observation_count: int
+    current_values: dict[str, float | bool | None]
+    trends_per_day: dict[str, float | None]
 
 
-def _parse_timestamp(value: str) -> datetime:
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-
-
-def _slope(rows: list[dict], field: str, window_days: int | None = None,
-           min_observations: int | None = None) -> tuple[float | None, int]:
-    """Least-squares slope per day over the trailing window ending at the latest record.
-
-    Window and minimum sample count default to MAI_TREND_WINDOW_DAYS and
-    MAI_MIN_TREND_OBSERVATIONS, the same values readiness uses.
-    """
-    window_days = settings.trend_window_days if window_days is None else window_days
-    min_observations = settings.min_trend_observations if min_observations is None else min_observations
-    latest = _parse_timestamp(rows[-1]["timestamp"])
+def _slope(rows: list[dict], field: str) -> float | None:
+    """Least-squares slope per day over the trend window ending at the latest row: the window and the
+    minimum number of values are MAI_TREND_WINDOW_DAYS and MAI_MIN_TREND_OBSERVATIONS, as in readiness."""
+    latest = rows[-1]["timestamp"]
     samples: list[tuple[float, float]] = []
     for row in rows:
-        ts = _parse_timestamp(row["timestamp"])
-        days_before_latest = (latest - ts).total_seconds() / 86400.0
+        days_before_latest = (latest - row["timestamp"]).total_seconds() / 86400.0
         value = row["calculated"].get(field)
-        if days_before_latest <= window_days and value is not None and isfinite(float(value)):
+        if days_before_latest <= settings.trend_window_days and value is not None and isfinite(float(value)):
             samples.append((-days_before_latest, float(value)))
-    if len(samples) < min_observations:
-        return None, len(samples)
+    if len(samples) < settings.min_trend_observations:
+        return None
     mean_x = sum(x for x, _ in samples) / len(samples)
     mean_y = sum(y for _, y in samples) / len(samples)
     denom = sum((x - mean_x) ** 2 for x, _ in samples)
     if denom <= 0:
-        return None, len(samples)
+        return None
     slope = sum((x - mean_x) * (y - mean_y) for x, y in samples) / denom
-    return (slope if isfinite(slope) else None), len(samples)
+    return slope if isfinite(slope) else None
 
 
-def build_features(well_id: str, normalized: list[dict]) -> FeatureSnapshot:
-    """Current values, trends and coverage of a well.
+def build_features(normalized: list[dict]) -> Features:
+    """Current values and trends of a well from its normalised rows (app.core.normalization).
 
     Rows marked "snapshot" (a registry without its own measurement time) are not observations:
-    the latest time, trends and coverage come from the other rows. A snapshot newer than the
-    latest observation still updates the current values it carries."""
+    the latest time and the trends come from the other rows. A snapshot newer than the latest
+    observation still updates the current values it carries."""
     if not normalized:
         raise ValueError("at least one normalized record is required")
-    every = sorted(normalized, key=lambda row: _parse_timestamp(row["timestamp"]))
+    every = sorted(normalized, key=lambda row: row["timestamp"])
     rows = [row for row in every if not row.get("snapshot")] or every
-    timestamps = [_parse_timestamp(row["timestamp"]) for row in rows]
-    latest = timestamps[-1]
-    first = timestamps[0]
+    latest = rows[-1]["timestamp"]
     current = dict(rows[-1]["calculated"])
     for row in every:
-        if row.get("snapshot") and _parse_timestamp(row["timestamp"]) > latest:
+        if row.get("snapshot") and row["timestamp"] > latest:
             for field, value in row["calculated"].items():
                 if value is not None and field not in row.get("imputed_fields", ()):
                     current[field] = value
-    trends: dict[str, float | None] = {}
-    counts: dict[str, int] = {}
-    for field in TREND_FIELDS:
-        trends[field], counts[field] = _slope(rows, field)
-    available = sum(
-        1 for row in rows for field in MEASUREMENTS
-        if row["raw"].get(field) is not None
-    )
-    possible = len(rows) * len(MEASUREMENTS)
-    return FeatureSnapshot(
-        well_id=well_id,
-        latest_timestamp=latest,
-        observation_count=len(rows),
-        days_covered=max(0.0, (latest - first).total_seconds() / 86400.0),
-        missing_signal_fraction=1.0 - (available / possible if possible else 0.0),
-        current_values=current,
-        feature_sources=dict(rows[-1].get("feature_sources", {})),
-        trends_per_day=trends,
-        trend_observation_count=counts,
-    )
+    return Features(latest_timestamp=latest, observation_count=len(rows), current_values=current,
+                    trends_per_day={field: _slope(rows, field) for field in TREND_FIELDS})

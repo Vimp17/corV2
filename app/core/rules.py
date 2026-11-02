@@ -1,170 +1,154 @@
+"""НТЦ rule score: points for the environment, protection, technology and corrosion findings on the
+current values and trends of a well (app.core.features).
+
+The score is the sum of the points divided by CRITICAL_POINTS, capped at 1: a deterministic expert
+index for the rating, not a probability of failure. The thresholds are the demonstration values of the
+V3.0 notebook; calibrate them against field evidence before operational use.
+"""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import timedelta
 
-from app.core.diagnostics import THRESHOLDS, assess_wall
-from app.schemas import ActionItem, FeatureSnapshot, RuleFinding, RuleRisk
+from app.core.features import Features
+
+THRESHOLDS = {
+    "water_cut_high": 75.0, "water_cut_critical": 90.0,
+    "co2_high": 3.0, "co2_critical": 5.0,
+    "chlorides_high": 30000.0, "chlorides_critical": 50000.0,
+    "inhibitor_low": 0.70, "inhibitor_critical": 0.40,
+    "injection_dev_high": 15.0, "injection_dev_critical": 30.0,
+    "wall_thickness_warning": 8.0, "wall_thickness_critical": 5.0,
+    # Fraction of the initial wall lost. Chosen to match the absolute thresholds above for the
+    # 12 mm demo pipe (8 mm left = 1/3 lost, 5 mm left = 7/12 lost); used whenever the initial
+    # thickness is known, so thin- and thick-walled pipes are judged by their own design wall.
+    "wall_loss_warning": 0.33, "wall_loss_critical": 0.58,
+    "corrosion_rate_high": 0.35, "corrosion_rate_critical": 0.60,
+}
+POINTS = {"high": 4, "critical": 7, "growth": 1, "persistent_7d": 1,
+          "compatibility": 7, "wall_warning": 2, "wall_critical": 14}
+CRITICAL_POINTS = 14
+# Rules on the environment (CO₂, water cut, chlorides): the points protection may reduce in the rating.
+ENVIRONMENT_PREFIX = "ENV_"
 
 
-RULE_POINTS = {"high": 4, "critical": 7, "growth": 1, "persistent_7d": 1,
-               "compatibility": 7, "wall_warning": 2, "wall_critical": 14}
+@dataclass(frozen=True)
+class Finding:
+    rule_id: str
+    points: int
+    reason: str
+
+
+def assess_wall(values: dict) -> tuple[bool, str] | None:
+    """(critical, reason) for a thin wall, judged against the initial wall when it is known; None
+    when the wall is fine or not measured."""
+    wall = values.get("wall_thickness_mm")
+    if wall is None:
+        return None
+    initial = values.get("initial_wall_thickness_mm")
+    if initial is not None and initial > 0 and initial >= wall:
+        loss = (initial - wall) / initial
+        for critical, key in ((True, "wall_loss_critical"), (False, "wall_loss_warning")):
+            if loss >= THRESHOLDS[key]:
+                return critical, (f"Потеряно {loss:.0%} исходной толщины стенки "
+                                  f"({wall:g} из {initial:g} мм); порог {THRESHOLDS[key]:.0%}.")
+        return None
+    for critical, key, text in ((True, "wall_thickness_critical", "Остаточная толщина достигла критического порога"),
+                                (False, "wall_thickness_warning", "Остаточная толщина ниже порога предупреждения")):
+        if wall <= THRESHOLDS[key]:
+            return critical, f"{text} ({wall:g} мм); исходная толщина неизвестна, применён абсолютный порог."
+    return None
 
 
 def _persistent(normalized: list[dict], field: str, predicate) -> bool:
+    """The field met the predicate on each of the last 7 days with a measurement (no carried values)."""
     if not normalized:
         return False
-    latest = datetime.fromisoformat(normalized[-1]["timestamp"].replace("Z", "+00:00"))
+    latest = normalized[-1]["timestamp"]
     window = []
     for row in reversed(normalized):
-        timestamp = datetime.fromisoformat(row["timestamp"].replace("Z", "+00:00"))
-        if (latest - timestamp).total_seconds() > 6 * 86400:
+        timestamp = row["timestamp"]
+        if latest - timestamp > timedelta(days=6):
             break
         if timestamp.date() not in {item[0] for item in window}:
             if field in row.get("imputed_fields", []):
                 return False
-            value = row["calculated"].get(field)
-            window.append((timestamp.date(), value))
+            window.append((timestamp.date(), row["calculated"].get(field)))
     return len(window) >= 7 and all(value is not None and predicate(value) for _, value in window[:7])
 
 
-def evaluate_rules(features: FeatureSnapshot, normalized: list[dict], horizon_days: int) -> RuleRisk:
+def evaluate_rules(features: Features, normalized: list[dict]) -> list[Finding] | None:
+    """The triggered rules; None when the well has no current value at all."""
     values, trends = features.current_values, features.trends_per_day
-    findings: list[RuleFinding] = []
+    if not any(value is not None for value in values.values()):
+        return None
+    findings: list[Finding] = []
 
-    def add(rule_id: str, condition: bool, severity: str, points: int, reason: str,
-            value=None, threshold=None) -> None:
+    def add(rule_id: str, condition: bool, points: int, reason: str) -> None:
         if condition:
-            findings.append(RuleFinding(
-                rule_id=rule_id, severity=severity, points=points,
-                value=value, threshold=threshold, reason=reason,
-            ))
+            findings.append(Finding(rule_id, points, reason))
 
-    def graded(field: str, high: float, critical: float, high_id: str, critical_id: str,
-               label: str, high_reason: str, critical_reason: str) -> None:
+    def graded(field: str, high: str, critical: str, ids: tuple[str, str], reasons: tuple[str, str],
+               below: bool = False) -> None:
         value = values.get(field)
         if value is None:
             return
-        is_critical = value >= critical
-        add(critical_id if is_critical else high_id, value >= high,
-            "CRITICAL" if is_critical else "HIGH",
-            RULE_POINTS["critical"] if is_critical else RULE_POINTS["high"],
-            critical_reason if is_critical else high_reason, value,
-            critical if is_critical else high)
+        beyond = (lambda key: value < THRESHOLDS[key]) if below else (lambda key: value >= THRESHOLDS[key])
+        if beyond(critical):
+            add(ids[1], True, POINTS["critical"], reasons[1])
+        elif beyond(high):
+            add(ids[0], True, POINTS["high"], reasons[0])
 
-    graded("co2_pct", THRESHOLDS["co2_high"], THRESHOLDS["co2_critical"],
-           "ENV_CO2_001", "ENV_CO2_003", "CO₂", "Повышенный CO₂", "Критический уровень CO₂")
-    add("ENV_CO2_002", trends.get("co2_pct") is not None and trends["co2_pct"] > 0.012,
-        "MEDIUM", RULE_POINTS["growth"], "Наблюдается рост CO₂", trends.get("co2_pct"), 0.012)
-    add("ENV_CO2_004", _persistent(normalized, "co2_pct", lambda x: x >= THRESHOLDS["co2_high"]),
-        "MEDIUM", RULE_POINTS["persistent_7d"], "CO₂ превышает высокий порог не менее 7 дней", 7, 7)
+    def growth(rule_id: str, field: str, limit: float, reason: str) -> None:
+        slope = trends.get(field)
+        add(rule_id, slope is not None and (slope < limit if limit < 0 else slope > limit), POINTS["growth"], reason)
 
-    graded("water_cut_pct", THRESHOLDS["water_cut_high"], THRESHOLDS["water_cut_critical"],
-           "ENV_WATER_001", "ENV_WATER_003", "water_cut", "Высокая обводнённость", "Критическая обводнённость")
-    add("ENV_WATER_002", trends.get("water_cut_pct") is not None and trends["water_cut_pct"] > 0.10,
-        "MEDIUM", RULE_POINTS["growth"], "Наблюдается рост обводнённости", trends.get("water_cut_pct"), 0.10)
-    add("ENV_WATER_004", _persistent(normalized, "water_cut_pct", lambda x: x >= THRESHOLDS["water_cut_high"]),
-        "MEDIUM", RULE_POINTS["persistent_7d"], "Высокая обводнённость сохраняется не менее 7 дней", 7, 7)
+    def persistent(rule_id: str, field: str, predicate, reason: str) -> None:
+        add(rule_id, _persistent(normalized, field, predicate), POINTS["persistent_7d"], reason)
 
-    graded("chlorides_mg_l", THRESHOLDS["chlorides_high"], THRESHOLDS["chlorides_critical"],
-           "ENV_CL_001", "ENV_CL_002", "chlorides", "Высокое содержание хлоридов", "Критическое содержание хлоридов")
-    add("ENV_CL_003", _persistent(normalized, "chlorides_mg_l", lambda x: x >= THRESHOLDS["chlorides_high"]),
-        "MEDIUM", RULE_POINTS["persistent_7d"], "Высокое содержание хлоридов сохраняется не менее 7 дней", 7, 7)
+    graded("co2_pct", "co2_high", "co2_critical", ("ENV_CO2_001", "ENV_CO2_003"),
+           ("Повышенный CO₂", "Критический уровень CO₂"))
+    growth("ENV_CO2_002", "co2_pct", 0.012, "Наблюдается рост CO₂")
+    persistent("ENV_CO2_004", "co2_pct", lambda x: x >= THRESHOLDS["co2_high"],
+               "CO₂ превышает высокий порог не менее 7 дней")
 
-    inhibitor = values.get("inhibitor_efficiency")
-    if inhibitor is not None:
-        critical = inhibitor < THRESHOLDS["inhibitor_critical"]
-        low = inhibitor < THRESHOLDS["inhibitor_low"]
-        add("PROT_INH_002" if critical else "PROT_INH_001", low,
-            "CRITICAL" if critical else "HIGH", RULE_POINTS["critical"] if critical else RULE_POINTS["high"],
-            "Критически низкая эффективность ингибиторной защиты" if critical else "Эффективность ингибиторной защиты ниже порога",
-            inhibitor, THRESHOLDS["inhibitor_critical"] if critical else THRESHOLDS["inhibitor_low"])
-    inhibitor_trend = trends.get("inhibitor_efficiency")
-    add("PROT_INH_003", inhibitor_trend is not None and inhibitor_trend < -0.0025,
-        "MEDIUM", RULE_POINTS["growth"], "Эффективность защиты устойчиво снижается", inhibitor_trend, -0.0025)
-    add("PROT_INH_004", _persistent(normalized, "inhibitor_efficiency", lambda x: x < THRESHOLDS["inhibitor_low"]),
-        "MEDIUM", RULE_POINTS["persistent_7d"], "Недостаточная защита сохраняется не менее 7 дней", 7, 7)
+    graded("water_cut_pct", "water_cut_high", "water_cut_critical", ("ENV_WATER_001", "ENV_WATER_003"),
+           ("Высокая обводнённость", "Критическая обводнённость"))
+    growth("ENV_WATER_002", "water_cut_pct", 0.10, "Наблюдается рост обводнённости")
+    persistent("ENV_WATER_004", "water_cut_pct", lambda x: x >= THRESHOLDS["water_cut_high"],
+               "Высокая обводнённость сохраняется не менее 7 дней")
 
-    injection = values.get("injection_deviation_pct")
-    if injection is not None:
-        critical = injection >= THRESHOLDS["injection_dev_critical"]
-        high = injection >= THRESHOLDS["injection_dev_high"]
-        add("TECH_INJ_002" if critical else "TECH_INJ_001", high,
-            "CRITICAL" if critical else "HIGH", RULE_POINTS["critical"] if critical else RULE_POINTS["high"],
-            "Критическое отклонение режима закачки" if critical else "Отклонение режима закачки превышает порог",
-            injection, THRESHOLDS["injection_dev_critical"] if critical else THRESHOLDS["injection_dev_high"])
-    add("TECH_INJ_003", _persistent(normalized, "injection_deviation_pct", lambda x: x >= THRESHOLDS["injection_dev_high"]),
-        "MEDIUM", RULE_POINTS["persistent_7d"], "Отклонение режима закачки сохраняется не менее 7 дней", 7, 7)
-    add("TECH_COMP_001", values.get("water_compatibility_issue") is True, "CRITICAL",
-        RULE_POINTS["compatibility"], "Обнаружен признак несовместимости вод", True, None)
+    graded("chlorides_mg_l", "chlorides_high", "chlorides_critical", ("ENV_CL_001", "ENV_CL_002"),
+           ("Высокое содержание хлоридов", "Критическое содержание хлоридов"))
+    persistent("ENV_CL_003", "chlorides_mg_l", lambda x: x >= THRESHOLDS["chlorides_high"],
+               "Высокое содержание хлоридов сохраняется не менее 7 дней")
 
-    rate = values.get("corrosion_rate_mm_year")
-    if rate is not None:
-        critical = rate >= THRESHOLDS["corrosion_rate_critical"]
-        high = rate >= THRESHOLDS["corrosion_rate_high"]
-        add("CORR_RATE_002" if critical else "CORR_RATE_001", high,
-            "CRITICAL" if critical else "HIGH", RULE_POINTS["critical"] if critical else RULE_POINTS["high"],
-            "Критическая скорость коррозии" if critical else "Высокая скорость коррозии", rate,
-            THRESHOLDS["corrosion_rate_critical"] if critical else THRESHOLDS["corrosion_rate_high"])
-    add("CORR_RATE_003", _persistent(normalized, "corrosion_rate_mm_year", lambda x: x >= THRESHOLDS["corrosion_rate_high"]),
-        "MEDIUM", RULE_POINTS["persistent_7d"], "Высокая скорость коррозии сохраняется не менее 7 дней", 7, 7)
-    wall_finding = assess_wall(values)
-    if wall_finding is not None:
-        critical = wall_finding["severity"] == "CRITICAL"
-        add("CORR_WALL_002" if critical else "CORR_WALL_001", True, wall_finding["severity"],
-            RULE_POINTS["wall_critical"] if critical else RULE_POINTS["wall_warning"],
-            wall_finding["reason"], wall_finding["value"], wall_finding["threshold"])
+    graded("inhibitor_efficiency", "inhibitor_low", "inhibitor_critical", ("PROT_INH_001", "PROT_INH_002"),
+           ("Эффективность ингибиторной защиты ниже порога", "Критически низкая эффективность ингибиторной защиты"),
+           below=True)
+    growth("PROT_INH_003", "inhibitor_efficiency", -0.0025, "Эффективность защиты устойчиво снижается")
+    persistent("PROT_INH_004", "inhibitor_efficiency", lambda x: x < THRESHOLDS["inhibitor_low"],
+               "Недостаточная защита сохраняется не менее 7 дней")
 
-    points = sum(item.points for item in findings)
-    risk_class = "CRITICAL" if points >= 14 else "HIGH" if points >= 7 else "MEDIUM" if points >= 4 else "LOW"
-    has_values = any(value is not None for value in values.values())
-    return RuleRisk(
-        status="ok" if has_values else "insufficient_data",
-        risk_score=min(points / 14.0, 1.0) if has_values else None,
-        risk_points=points if has_values else None,
-        risk_class=risk_class if has_values else "UNKNOWN",
-        horizon_days=horizon_days,
-        findings=findings,
-        note="Баллы и класс правилового движка — детерминированный экспертный индикатор, не вероятность отказа; пороги демонстрационные.",
-    )
+    graded("injection_deviation_pct", "injection_dev_high", "injection_dev_critical", ("TECH_INJ_001", "TECH_INJ_002"),
+           ("Отклонение режима закачки превышает порог", "Критическое отклонение режима закачки"))
+    persistent("TECH_INJ_003", "injection_deviation_pct", lambda x: x >= THRESHOLDS["injection_dev_high"],
+               "Отклонение режима закачки сохраняется не менее 7 дней")
+    add("TECH_COMP_001", values.get("water_compatibility_issue") is True, POINTS["compatibility"],
+        "Обнаружен признак несовместимости вод")
+
+    graded("corrosion_rate_mm_year", "corrosion_rate_high", "corrosion_rate_critical", ("CORR_RATE_001", "CORR_RATE_002"),
+           ("Высокая скорость коррозии", "Критическая скорость коррозии"))
+    persistent("CORR_RATE_003", "corrosion_rate_mm_year", lambda x: x >= THRESHOLDS["corrosion_rate_high"],
+               "Высокая скорость коррозии сохраняется не менее 7 дней")
+    wall = assess_wall(values)
+    if wall is not None:
+        critical, reason = wall
+        add("CORR_WALL_002" if critical else "CORR_WALL_001", True,
+            POINTS["wall_critical"] if critical else POINTS["wall_warning"], reason)
+    return findings
 
 
-def make_action_plan(risk: RuleRisk, environment, protection, technology, corrosion) -> list[ActionItem]:
-    actions: list[ActionItem] = []
-    rule_ids = {item.rule_id for item in risk.findings}
-    if risk.risk_class == "CRITICAL":
-        actions.append(ActionItem(
-            priority="CRITICAL",
-            action="Организовать первоочередную инженерную оценку риска и определить необходимость внепланового обследования",
-            reason="Совокупный балл Rule Engine достиг демонстрационного критического уровня.",
-            owner="production_engineer/maintenance",
-        ))
-    if any(item.factor == "co2_pct" or item.factor == "co2_pct_trend" for item in environment.findings):
-        actions.append(ActionItem(priority="HIGH", action="Провести контрольный анализ CO₂ и проверить динамику среды",
-                                 reason="Повышенный или растущий CO₂.", owner="field_crew/lab"))
-    if any(item.factor == "water_cut_pct" or item.factor == "water_cut_pct_trend" for item in environment.findings):
-        actions.append(ActionItem(priority="MEDIUM", action="Проверить обводнённость и отобрать пробу для лабораторного анализа",
-                                 reason="Повышенная или растущая обводнённость.", owner="field_crew/lab"))
-    if any(item.factor == "chlorides_mg_l" for item in environment.findings):
-        actions.append(ActionItem(priority="HIGH", action="Провести анализ минерализации и хлоридов",
-                                 reason="Высокая концентрация хлоридов.", owner="lab"))
-    if protection.findings:
-        actions.append(ActionItem(priority="HIGH", action="Проверить фактическую подачу и эффективность ингибиторной защиты",
-                                 reason="Недостаточная или снижающаяся защита.", owner="corrosion_service"))
-    if any(item.factor == "injection_deviation_pct" for item in technology.findings):
-        actions.append(ActionItem(priority="HIGH", action="Проверить режим закачки и отклонение от технологического баланса",
-                                 reason="Отклонение режима закачки.", owner="production_engineer"))
-    if "TECH_COMP_001" in rule_ids:
-        actions.append(ActionItem(priority="HIGH", action="Провести лабораторную проверку совместимости вод",
-                                 reason="Передан признак возможной несовместимости вод.", owner="lab"))
-    if any(item.factor == "corrosion_rate_mm_year" for item in corrosion.findings):
-        actions.append(ActionItem(priority="HIGH", action="Назначить внеплановую диагностику скорости коррозии",
-                                 reason="Высокая скорость коррозии.", owner="field_crew"))
-    if any(item.factor == "wall_thickness_mm" for item in corrosion.findings):
-        critical = any(item.factor == "wall_thickness_mm" and item.severity == "CRITICAL" for item in corrosion.findings)
-        actions.append(ActionItem(priority="CRITICAL" if critical else "HIGH",
-                                 action="Проверить остаточную толщину и рассмотреть ремонтно-восстановительные мероприятия",
-                                 reason="Снижение остаточной толщины стенки.", owner="maintenance"))
-    if not actions:
-        actions.append(ActionItem(priority="LOW", action="Продолжить плановый мониторинг",
-                                 reason="Критических диагностических отклонений не выявлено.", owner="production"))
-    return actions
+def score(points: float) -> float:
+    """Rule points as the normalised НТЦ score (0–1)."""
+    return round(min(points / CRITICAL_POINTS, 1.0), 4)

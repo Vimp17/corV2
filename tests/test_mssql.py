@@ -1,5 +1,4 @@
-"""SQL Server specifics of the MSSQL mode (standalone/mssql_compat.py): run with a mssql+pyodbc
-MAI_TEST_DATABASE_URL (see tests/conftest.py); skipped on PostgreSQL."""
+"""SQL Server specifics of app/db.py: run with MAI_TEST_DATABASE_URL (see tests/conftest.py)."""
 from __future__ import annotations
 
 import os
@@ -8,8 +7,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-pytestmark = pytest.mark.skipif(not os.environ.get("MAI_TEST_DATABASE_URL", "").startswith("mssql"),
-                                reason="set a mssql+pyodbc MAI_TEST_DATABASE_URL to run the SQL Server tests")
+pytestmark = pytest.mark.skipif(not os.environ.get("MAI_TEST_DATABASE_URL"),
+                                reason="set MAI_TEST_DATABASE_URL to run the SQL Server tests")
 
 
 @pytest.fixture(scope="module")
@@ -84,12 +83,14 @@ def test_document_queue_takes_the_oldest_once(db):
 def test_a_column_added_by_a_new_version_is_created(db):
     from sqlalchemy import inspect, text
 
-    from standalone import mssql_compat
+    from app.config import settings
 
     with db.engine().begin() as conn:
-        conn.execute(text(f"ALTER TABLE {mssql_compat.qualified('well_rating', conn.dialect)} DROP COLUMN ai_proposal_at"))
+        conn.execute(text(f"ALTER TABLE {db.qualified('well_rating')} DROP COLUMN ai_proposal_at"))
+        conn.execute(text(f"ALTER TABLE {db.qualified('well_rating')} ADD analysis_id NVARCHAR(64) NULL"))
     db.init_db()
     with db.engine().connect() as conn:
         columns = {column["name"] for column in inspect(conn).get_columns(
-            "well_rating", schema=mssql_compat.installed_schema() or None)}
+            "well_rating", schema=settings.database_schema or None)}
     assert "ai_proposal_at" in columns
+    assert "analysis_id" not in columns     # a column of an earlier version is dropped

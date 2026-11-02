@@ -1,4 +1,4 @@
-from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Query, Request, UploadFile, Form
+from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Query, UploadFile, Form
 from starlette.concurrency import run_in_threadpool
 
 from app import db
@@ -11,16 +11,13 @@ from app.schemas import HistoryIngestionRequest, IngestionRequest
 router = APIRouter(prefix="/ingestion", tags=["ingestion"])
 
 
-def _recompute(well_ids, http_request: Request, background_tasks: BackgroundTasks) -> dict:
+def _recompute(well_ids, background_tasks: BackgroundTasks) -> dict:
     """New source data changes the rating: recompute it for the wells that received data."""
-    return rating_builder.schedule_recompute(
-        well_ids, http_request.app.state, background_tasks,
-        getattr(http_request.state, "request_id", None))
+    return rating_builder.schedule_recompute(well_ids, background_tasks)
 
 
 @router.post("/telemetry", status_code=201)
-def ingest_telemetry(request: IngestionRequest, http_request: Request,
-                     background_tasks: BackgroundTasks) -> dict:
+def ingest_telemetry(request: IngestionRequest, background_tasks: BackgroundTasks) -> dict:
     try:
         profiles = load_profiles()
         profile = next((item for item in profiles.values()
@@ -33,7 +30,7 @@ def ingest_telemetry(request: IngestionRequest, http_request: Request,
                                              len(records), origin="api_push")
         return {**result, "well_id": request.well_id, "source_id": request.source_id,
                 "rows_accepted": len(records), "source_statuses": [status_row],
-                "rating": _recompute([request.well_id], http_request, background_tasks)}
+                "rating": _recompute([request.well_id], background_tasks)}
     except ExcelImportError as exc:
         raise HTTPException(status_code=500, detail="Source profiles could not be loaded") from exc
     except HTTPException:
@@ -83,7 +80,7 @@ def get_sources() -> dict:
 
 
 @router.post("/excel", status_code=201)
-async def ingest_excel(http_request: Request, background_tasks: BackgroundTasks,
+async def ingest_excel(background_tasks: BackgroundTasks,
                        file: UploadFile = File(...), profile_id: str = Form(...),
                        well_id: str | None = Form(default=None)) -> dict:
     filename = file.filename or "upload.xlsx"
@@ -108,7 +105,7 @@ async def ingest_excel(http_request: Request, background_tasks: BackgroundTasks,
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     wells = [item["well_id"] for item in result.get("imported_wells") or [] if item.get("well_id")]
-    result["rating"] = await run_in_threadpool(_recompute, wells, http_request, background_tasks)
+    result["rating"] = await run_in_threadpool(_recompute, wells, background_tasks)
     return result
 
 
@@ -211,8 +208,7 @@ def get_telemetry(well_id: str) -> dict:
 
 
 @router.post("/history", status_code=201)
-def ingest_history(request: HistoryIngestionRequest, http_request: Request,
-                   background_tasks: BackgroundTasks) -> dict:
+def ingest_history(request: HistoryIngestionRequest, background_tasks: BackgroundTasks) -> dict:
     try:
         profiles = load_profiles()
         profile = next((item for item in profiles.values()
@@ -228,7 +224,7 @@ def ingest_history(request: HistoryIngestionRequest, http_request: Request,
         return {**result, "well_id": request.well_id, "source_id": request.source_id,
                 "rows_accepted": len(request.work_history) + len(request.failure_history),
                 "source_statuses": [status_row],
-                "rating": _recompute([request.well_id], http_request, background_tasks)}
+                "rating": _recompute([request.well_id], background_tasks)}
     except ExcelImportError as exc:
         raise HTTPException(status_code=500, detail="Source profiles could not be loaded") from exc
     except HTTPException:

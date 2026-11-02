@@ -25,7 +25,6 @@ F_TITLE = Font(name=FONT, size=14, bold=True, color=NAVY)
 F_NOTE = Font(name=FONT, size=9, italic=True, color="5A6B7C")
 F_HEAD = Font(name=FONT, size=10, bold=True, color="FFFFFF")
 F_BAD = Font(name=FONT, size=10, bold=True, color="B71C1C")
-F_MUTED = Font(name=FONT, size=10, color="9AA7B4")
 FILL_HEAD = PatternFill("solid", fgColor=NAVY)
 FILL_GROUP = PatternFill("solid", fgColor=NAVY2)
 _THIN = Side(style="thin", color="DDE3EA")
@@ -62,8 +61,7 @@ COLUMNS = [
     ("base_corrosion", "Результат разбора", 14, "Демонтаж и разбор (исторические данные)"),
     ("category", "Категория скважины", 21, "Оценка"),
     ("protection", "Защита", 14, "Оценка"),
-    ("model_ntc", "Модель НТЦ (0–1)", 10, "Оценка"),
-    ("model_math", "Мат. модель (0–1)", 10, "Оценка"),
+    ("model_ntc", "Прогноз НТЦ (0–1)", 10, "Оценка"),
     ("index_raw", "Индекс без учёта защиты", 11, "Оценка"),
     ("index", "Индекс коррозии на НКТ (0–100)", 11, "Оценка"),
     ("measure", "Мероприятие", 26, "Решение и график ППР"),
@@ -117,16 +115,15 @@ def _cell_values(well: dict) -> dict[str, Any]:
         "protection": well.get("protection_label") or "Нет данных",
         "index_raw": well.get("index_raw"),
         "model_ntc": well.get("model_ntc"),
-        "model_math": well.get("model_math"),
         "index": well.get("index"),
-        "measure": well.get("measure_label") if measure else "Нет оценок моделей",
+        "measure": well.get("measure_label") if measure else "Нет оценки",
         "era": "Включить" if well.get("era_required") else "—",
         "promine_status": (well.get("promine_status_label") or "Не сформирован") if well.get("era_required")
         else (well.get("promine_status_label") or "—"),
         "deadline": _date(well.get("deadline")),
         "plan_date": _date(well.get("plan_date")),
         "plan_status": well.get("plan_status_label") or "—",
-        "comment": well.get("comment") or well.get("skip_reason"),
+        "comment": well.get("comment"),
     }
 
 
@@ -171,7 +168,7 @@ def _rating_sheet(book: Workbook, wells: list[dict], generated: datetime) -> Non
             cell = sheet.cell(row, column, values[key])
             cell.font, cell.border = F_BASE, BORDER
             cell.alignment = LEFT if key in {"field", "equipment", "measure", "comment", "category", "action", "data_gaps"} else CENTER
-            if key in {"model_ntc", "model_math"}:
+            if key == "model_ntc":
                 cell.number_format = "0.00"
             elif key in {"tonnage_t", "liquid_rate_m3_day", "oil_pct"}:
                 cell.number_format = "0.0"
@@ -312,12 +309,6 @@ def _sources_sheet(book: Workbook, wells: list[dict]) -> None:
                 cell.alignment = LEFT
             sheet.cell(row, 4).number_format = "DD.MM.YYYY HH:MM"
             row += 1
-        if well.get("skip_reason"):
-            for column, value in enumerate([well["well_id"], "Модели не запускались", "проверка готовности",
-                                            None, well["skip_reason"]], start=1):
-                cell = sheet.cell(row, column, value)
-                cell.font, cell.border, cell.alignment = F_MUTED, BORDER, LEFT
-            row += 1
     for letter, width in zip("ABCDE", (12, 24, 22, 17, 80)):
         sheet.column_dimensions[letter].width = width
     sheet.freeze_panes = "A4"
@@ -328,14 +319,8 @@ def _parameters_sheet(book: Workbook, payload: dict) -> None:
     sheet["A1"] = "Параметры рейтинга (настройки системы на момент выгрузки)"
     sheet["A1"].font = F_TITLE
     settings_block = payload.get("settings", {})
-    sheet["A3"] = "Объединение моделей НТЦ и мат."
-    sheet["C3"] = "Максимум" if settings_block.get("combine") == "max" else "Среднее"
-    sheet["A4"] = "Горизонт прогноза моделей, сут"
-    sheet["C4"] = settings_block.get("horizon_days")
-    for cell in ("A3", "A4"):
-        sheet[cell].font = F_BASE
-    _head(sheet, 6, ["Мероприятие", "Код", "Индекс от", "Индекс до", "Срок, дней", "ЭРА ремонта"])
-    for offset, item in enumerate(settings_block.get("measures", []), start=7):
+    _head(sheet, 3, ["Мероприятие", "Код", "Индекс от", "Индекс до", "Срок, дней", "ЭРА ремонта"])
+    for offset, item in enumerate(settings_block.get("measures", []), start=4):
         for column, value in enumerate([item["label"], item["code"], item["index_from"], item["index_to"],
                                         item.get("deadline_days"), "Включить" if item.get("era_required") else "—"],
                                        start=1):
@@ -343,15 +328,15 @@ def _parameters_sheet(book: Workbook, payload: dict) -> None:
             cell.font, cell.border = F_BASE, BORDER
             cell.alignment = LEFT if column == 1 else CENTER
     protection = settings_block.get("protection") or {}
-    sheet["A13"] = (f"Защита (режим {protection.get('mode', '—')}): эффективна, если ингибитор ≥ "
+    sheet["A10"] = (f"Защита (режим {protection.get('mode', '—')}): эффективна, если ингибитор ≥ "
                     f"{protection.get('min_inhibitor', '—')} при отклонении закачки < {protection.get('max_injection_dev', '—')} % "
                     f"или НКТ в защитном исполнении, и это подтверждено скоростью коррозии < {protection.get('max_rate', '—')} мм/год "
                     f"без коррозии в последнем акте. Тогда баллы среды учитываются с коэффициентом {protection.get('factor', '—')}.")
-    sheet["A13"].font = F_NOTE
-    sheet["A12"] = ("Индекс коррозии на НКТ = ОКРУГЛ(объединение оценок НТЦ и мат. модели × 100). Срок мероприятия "
-                    "отсчитывается от даты, когда скважине впервые назначено текущее мероприятие. "
-                    "Пороги и сроки задаются переменными MAI_RATING_*.")
-    sheet["A12"].font = F_NOTE
+    sheet["A10"].font = F_NOTE
+    sheet["A9"] = ("Индекс коррозии на НКТ = ОКРУГЛ(прогноз НТЦ × 100). Срок мероприятия "
+                   "отсчитывается от даты, когда скважине впервые назначено текущее мероприятие. "
+                   "Пороги и сроки задаются переменными MAI_RATING_*.")
+    sheet["A9"].font = F_NOTE
     for letter, width in zip("ABCDEF", (40, 8, 11, 11, 11, 13)):
         sheet.column_dimensions[letter].width = width
 
