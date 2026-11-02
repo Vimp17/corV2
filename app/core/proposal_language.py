@@ -109,6 +109,7 @@ def for_model(context: dict, known_gaps: list[str], examples: list[dict], act_da
             "крайний срок": rating.get("deadline"),
             "плановая дата ППР": rating.get("plan_date"),
             "прогноз модели НТЦ (0–1)": rating.get("forecast_ntc"),
+            "сработавшие правила НТЦ (значение: причина, баллы из 14)": rating.get("ntc_rules_fired"),
             "категория фонда": rating.get("category"),
             "коррозионная среда": _yes_no(rating.get("corrosive_environment")),
             "защита от коррозии": rating.get("protection"),

@@ -144,6 +144,106 @@ def test_file_kinds():
         intake.detect_kind(b"PK\x03\x04....", "letter.docx")
 
 
+def test_long_text_is_split_between_pages_then_lines():
+    pages = [f"=== Страница {number} (OCR) ===\n" + "\n".join(f"Пункт {number}.{index}: отклонений нет"
+                                                              for index in range(40)) for number in (1, 2, 3)]
+    text = "\n\n".join(pages)
+    parts = extract.split_text(text, 2 * len(pages[0]) + 10)
+    assert [part.split("\n", 1)[0] for part in parts] == ["=== Страница 1 (OCR) ===", "=== Страница 3 (OCR) ==="]
+    parts = extract.split_text(text, 300)                 # pages longer than a part: cut between lines
+    assert "".join(parts) == text and all(len(part) <= 300 and part.endswith("\n") for part in parts[:-1])
+    assert extract.split_text("а" * 2500, 1000) == ["а" * 1000, "а" * 1000, "а" * 500]
+
+
+def _long_act() -> str:
+    """A demount act whose well and date are on the first page and the corrosion finding on the last."""
+    from scripts.build_demo_documents import scan_lines
+
+    lines = scan_lines(TODAY)
+    filler = [f"Пункт {index}: осмотр трубы НКТ № {index}, отклонений нет." for index in range(150)]
+    return "\n".join(lines[:6] + filler + lines[6:])
+
+
+def test_long_document_goes_to_the_model_in_parts(monkeypatch):
+    import dataclasses
+    import json
+
+    from app.core import llm
+    from app.core.documents.types import load_document_types
+
+    spec, text, stub, sent = load_document_types()["demount_act"], _long_act(), FakeLiteLLM(), []
+
+    def chat(messages, **options):
+        payload = json.loads(messages[-1]["content"])
+        if len(payload["document_text"]) + len(payload.get("document_start", "")) > limit:
+            raise llm.ContextTooLong("Запрос не помещается в контекстное окно модели.")
+        sent.append(payload)
+        return stub.chat(messages, **options)
+
+    monkeypatch.setattr(llm, "chat", chat)
+    # MAI_DOCS_CHUNK_CHARS = 2000: parts of 2000 characters with the document start; then a model whose
+    # window takes only 1200 characters of text — the parts it refuses are halved.
+    for chunk, limit in ((2000, 2000), (6000, 1200)):
+        monkeypatch.setattr(extract, "settings", dataclasses.replace(extract.settings, docs_chunk_chars=chunk))
+        sent.clear()
+        records = extract.extract_records(text, spec)
+        assert len(sent) > 3 and "document_start" not in sent[0]
+        assert all(item["document_start"].startswith("АКТ ДЕМОНТАЖА") for item in sent[1:])
+        assert len(records) == 1
+        record = extract.check_record(records[0], spec, extract.normalize(text), ["DEMO-005"], TODAY)
+        assert record["accepted"] and record["well_id"] == "DEMO-005"          # from the first part
+        assert record["fields"]["corrosion_detected"]["value"] is True        # from the last one
+    limit = 100
+    with pytest.raises(extract.ExtractionUnavailable, match="контекстное окно"):
+        extract.extract_records(text, spec)
+
+
+def test_rows_of_a_table_read_in_two_parts_are_merged():
+    from app.core.documents.types import load_document_types
+
+    def row(**values):
+        return {name: {"value": value, "quote": "…"} for name, value in values.items()}
+
+    merged = extract._merge_parts([
+        row(well_id="DEMO-001", sample_date="2026-10-01", co2_pct=1.2),
+        row(well_id="DEMO-001", sample_date="2026-10-01", chlorides_mg_l=21000),   # the same row, next part
+        row(well_id="DEMO-001", sample_date="2026-10-01", co2_pct=1.5),            # another sample that day
+        row(well_id="DEMO-002", sample_date="2026-10-01", co2_pct=1.2),
+    ], load_document_types()["lab_protocol"])
+    assert [(item["well_id"]["value"], item["co2_pct"]["value"], extract._value(item.get("chlorides_mg_l")))
+            for item in merged] == [("DEMO-001", 1.2, 21000), ("DEMO-001", 1.5, None), ("DEMO-002", 1.2, None)]
+
+
+def test_context_window_overflow_is_recognised(monkeypatch):
+    import requests
+
+    from app.core import llm
+
+    class Response:
+        status_code, body = 400, b'{"error": {"message": "This model\'s maximum context length is 4096 tokens"}}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def iter_content(self, chunk_size):
+            yield self.body
+
+        def raise_for_status(self):
+            raise requests.HTTPError("400 Bad Request")
+
+    monkeypatch.setattr(llm.requests, "post", lambda *args, **kwargs: Response())
+    request = dict(messages=[{"role": "user", "content": "текст"}], model="m", url="http://llm.local/v1/chat/completions")
+    with pytest.raises(llm.ContextTooLong):
+        llm.chat(**request)
+    Response.body = b'{"error": {"message": "Unknown model m"}}'
+    with pytest.raises(llm.LLMError) as error:
+        llm.chat(**request)
+    assert not isinstance(error.value, llm.ContextTooLong)
+
+
 # --------------------------------------------------------------------------- with the database
 needs_db = pytest.mark.skipif(not os.environ.get("MAI_TEST_DATABASE_URL"),
                               reason="set MAI_TEST_DATABASE_URL to run the SQL Server tests")
@@ -420,6 +520,12 @@ def test_card_lists_every_ntc_rule(client):
     # The rating list stays light: the rules come with the well card only.
     listed = next(item for item in client.get("/api/v1/rating").json()["wells"] if item["well_id"] == "DEMO-001")
     assert "rules" not in listed["provenance"]["model_ntc"]
+    # The AI agent reads only the rules that fired, one line each.
+    from app.core.proposal_agent import build_context
+
+    fired = build_context("DEMO-001")["rating"]["ntc_rules_fired"]
+    assert len(fired) == sum(1 for rule in rules if rule["points"]) > 0
+    assert all(line.endswith(f", +{rule['points']}") for line, rule in zip(fired, [r for r in rules if r["points"]]))
 
 
 def _proposal_context(**rating):
@@ -432,7 +538,8 @@ def _proposal_context(**rating):
                    "base_act_recent": False, "base_corrosion": None,
                    "data_gaps": ["Демонтаж и разбор: нет: акт разбора на базе после демонтажа 02.09.2026",
                                  "Среда: нет: CO₂"],
-                   "notes": {"base_act": "Нет акта"}, **rating},
+                   "notes": {"base_act": "Нет акта"},
+                   "ntc_rules_fired": ["Обводнённость (91 %): Критическая обводнённость, +7"], **rating},
         "acts": [{"date": "2026-09-02", "type": "Демонтаж", "corrosion_detected": None}],
         "failures": [], "lab_samples": [], "other_measurements": [], "nkt_registry": None, "documents": [],
         "latest_measurements": {"обводнённость, %": 91, "хлориды, мг/л": 21000},
@@ -454,6 +561,8 @@ def test_ai_proposal_payload_is_russian():
     assert not latin, latin
     assert payload["бригады"][0]["статус"] == "свободна"
     assert payload["рейтинг"]["код мероприятия"] == "РИ"
+    assert payload["рейтинг"]["сработавшие правила НТЦ (значение: причина, баллы из 14)"] == [
+        "Обводнённость (91 %): Критическая обводнённость, +7"]
     assert payload["исторические акты демонтажа и разбора (последние за 365 сут.)"]["акт демонтажа"] == "есть"
     assert proposal_language.clean("measure_code РИ, crew available, water cut 91 %, CO₂ 1,9 %") == \
         "код мероприятия РИ, бригада свободна, обводнённость 91 %, CO₂ 1,9 %"

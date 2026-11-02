@@ -4,7 +4,8 @@ The LLM (LiteLLM Chat Completions, MAI_DOCS_LLM_MODEL or MAI_LLM_MODEL) returns 
 with a quote copied from the document. A value is kept only when its quote is found in the
 document text and agrees with the value; a record is accepted only when its required fields
 survive, the well is known and the date is plausible. Nothing is guessed: a document whose
-data cannot be confirmed loads nothing and its data counts as missing.
+data cannot be confirmed loads nothing and its data counts as missing. A long text (after OCR)
+goes to the model in parts of at most MAI_DOCS_CHUNK_CHARS characters (extract_records).
 """
 from __future__ import annotations
 
@@ -17,11 +18,19 @@ from typing import Any
 
 from app.config import settings
 from app.core import llm
+from app.core.documents.types import DATE_FIELD
 
 logger = logging.getLogger(__name__)
 
 EARLIEST_DATE = date(2000, 1, 1)
 MAX_QUOTE_CHARS = 300
+# Characters of the document start the classification reads.
+CLASSIFY_CHARS = 6000
+# The start of the document (title, well, date) given with every later part of a long text.
+HEAD_CHARS = 800
+# A part the model refuses as too long for its context window is halved, down to this size.
+MIN_PART_CHARS = 500
+_PAGE_START = re.compile(r"(?m)^(?==== Страница)")
 _WELL_PREFIX = re.compile(r"^(?:скв(?:ажина)?\.?|well)\s*", re.IGNORECASE)
 _NUMBER = re.compile(r"[-+]?\d+(?:[.,]\d+)?")
 # A space (also non-breaking or thin) between digit groups: «18 500».
@@ -223,6 +232,8 @@ def _llm_chat(messages: list[dict]) -> str:
         raise ExtractionUnavailable("Языковая модель не настроена (MAI_LLM_API_URL и MAI_DOCS_LLM_MODEL / MAI_LLM_MODEL).")
     try:
         return llm.chat(messages, model=settings.extraction_model, temperature=0.0)
+    except llm.ContextTooLong:
+        raise
     except llm.LLMError as exc:
         raise ExtractionUnavailable(f"Языковая модель недоступна: {exc}") from exc
 
@@ -230,17 +241,24 @@ def _llm_chat(messages: list[dict]) -> str:
 def classify_by_llm(text: str, types: dict) -> str | None:
     catalogue = {type_id: f"{spec.get('title')}: {spec.get('description', '')}" for type_id, spec in types.items()
                  if not spec.get("fallback")}
-    messages = [
-        {"role": "system", "content": (
-            "Определи тип документа нефтедобывающего предприятия по его тексту. Ответь только JSON "
-            '{"type": "<код типа>"} с одним из кодов из списка или {"type": "other"}, если документ '
-            "не относится ни к одному типу или текст нечитаем.")},
-        {"role": "user", "content": json.dumps({"types": catalogue, "text": text[:6000]}, ensure_ascii=False)},
-    ]
-    try:
-        answer = llm.parse_json_object(_llm_chat(messages))
-    except ValueError:
-        return None
+    limit = min(CLASSIFY_CHARS, settings.docs_chunk_chars)
+    while True:
+        messages = [
+            {"role": "system", "content": (
+                "Определи тип документа нефтедобывающего предприятия по его тексту. Ответь только JSON "
+                '{"type": "<код типа>"} с одним из кодов из списка или {"type": "other"}, если документ '
+                "не относится ни к одному типу или текст нечитаем.")},
+            {"role": "user", "content": json.dumps({"types": catalogue, "text": text[:limit]}, ensure_ascii=False)},
+        ]
+        try:
+            answer = llm.parse_json_object(_llm_chat(messages))
+            break
+        except llm.ContextTooLong:
+            if limit <= MIN_PART_CHARS:
+                return None
+            limit //= 2
+        except ValueError:
+            return None
     type_id = str(answer.get("type") or "").strip()
     return type_id if type_id in catalogue else None
 
@@ -257,7 +275,10 @@ EXTRACTION_SYSTEM_PROMPT = (
     "4. Даты — в формате ГГГГ-ММ-ДД; числа — числом с точкой; логические поля — true, false или null.\n"
     "5. Если в документе несколько скважин или проб, верни отдельную запись на каждую.\n"
     "6. Ищи все поля из списка, а не только типичные для этого вида документа: например, тоннаж или "
-    "дебит в протоколе анализа тоже нужно извлечь."
+    "дебит в протоколе анализа тоже нужно извлечь.\n"
+    "7. Длинный документ приходит частями: извлекай данные из document_text. Если передано document_start "
+    "(начало документа), номер скважины, дату и другие реквизиты, которых нет в части, бери оттуда с "
+    "цитатой оттуда же; показатели из него не повторяй."
 )
 
 
@@ -266,9 +287,59 @@ def _field_catalogue(spec: dict) -> dict:
             for name, field in spec["fields"].items()}
 
 
+def split_text(text: str, size: int) -> list[str]:
+    """The text in parts of at most `size` characters: whole pages where they fit, else whole lines
+    (a longer line is cut)."""
+    pieces: list[str] = []
+    for page in _PAGE_START.split(text):
+        if len(page) <= size:
+            pieces.append(page)
+            continue
+        for line in page.splitlines(keepends=True):
+            pieces += [line[start:start + size] for start in range(0, len(line), size)]
+    parts = [""]
+    for piece in pieces:
+        if parts[-1] and len(parts[-1]) + len(piece) > size:
+            parts.append("")
+        parts[-1] += piece
+    return [part for part in parts if part.strip()]
+
+
+def _first_part(text: str, size: int) -> str:
+    """The start of the text: at most `size` characters, in whole lines."""
+    parts = split_text(text, size)
+    return parts[0] if parts else ""
+
+
 def extract_records(text: str, spec: dict) -> list[dict]:
-    """Raw records from the LLM: [{field: {"value": ..., "quote": ...}}]."""
-    excerpt = text[:settings.docs_max_text_chars]
+    """Raw records from the LLM: [{field: {"value": ..., "quote": ...}}].
+
+    A text longer than MAI_DOCS_CHUNK_CHARS (a model with a small context window) is sent in parts,
+    cut between pages, else between lines; every later part comes with the start of the document
+    (its well and date). A part the model refuses as too long for its context window is halved, and
+    so is the start sent with it. Each quote is checked against the whole text (check_record),
+    whichever part it came from."""
+    text = text[:settings.docs_max_text_chars]
+    size = settings.docs_chunk_chars
+    head = _first_part(text, min(HEAD_CHARS, size // 4))
+    queue = [(part, head if index else "") for index, part in
+             enumerate(split_text(text, size if len(text) <= size else size - len(head)))]
+    records: list[dict] = []
+    while queue:
+        part, start = queue.pop(0)
+        try:
+            records += _extract_part(part, spec, start)
+        except llm.ContextTooLong:
+            if len(part) + len(start) <= MIN_PART_CHARS:
+                raise ExtractionUnavailable("Текст не помещается в контекстное окно модели даже частями по "
+                                            f"{MIN_PART_CHARS} символов.") from None
+            shorter = _first_part(start or head, len(start or head) // 2 + 1)
+            queue[:0] = [(half, shorter if start or index else "")
+                         for index, half in enumerate(split_text(part, len(part) // 2 + 1))]
+    return _merge_parts(records, spec)
+
+
+def _extract_part(part: str, spec: dict, head: str) -> list[dict]:
     example = {name: ({"value": [{"name": "название, единица", "value": None, "quote": None}]}
                       if field["type"] == "measurements" else {"value": None, "quote": None})
                for name, field in spec["fields"].items()}
@@ -278,7 +349,8 @@ def extract_records(text: str, spec: dict) -> list[dict]:
         "multiple_records": bool(spec.get("multi")),
         "fields": _field_catalogue(spec),
         "answer_format": {"records": [example]},
-        "document_text": excerpt,
+        **({"document_start": head} if head else {}),
+        "document_text": part,
     }
     messages = [{"role": "system", "content": EXTRACTION_SYSTEM_PROMPT},
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}]
@@ -292,8 +364,41 @@ def extract_records(text: str, spec: dict) -> list[dict]:
         records = [records]
     if not isinstance(records, list):
         return []
-    limit = 500 if spec.get("multi") else 1
-    return [record for record in records if isinstance(record, dict)][:limit]
+    return [record for record in records if isinstance(record, dict)][:None if spec.get("multi") else 1]
+
+
+def _value(item: Any) -> Any:
+    return item.get("value") if isinstance(item, dict) else item
+
+
+def _merge_parts(records: list[dict], spec: dict) -> list[dict]:
+    """The answers for the parts of a text as the records of the document. A single-record type is one
+    record: each field from the first part that has it. A table type keeps its records, but a record
+    with the well and date of an earlier one and no value against it (a row read twice, or split
+    between parts) completes that one. Other indicators of merged records are joined."""
+    keys = ("well_id", DATE_FIELD[spec["target"]])
+    merged: list[dict] = []
+    for record in records:
+        target = next((other for other in merged if not spec.get("multi") or (
+            all(_value(record.get(key)) not in (None, "") and _value(record.get(key)) == _value(other.get(key))
+                for key in keys) and _agree(record, other, spec))), None)
+        if target is None:
+            merged.append(dict(record))
+            continue
+        for name, item in record.items():
+            if spec["fields"].get(name, {}).get("type") == "measurements":
+                found = [entry for entry in (_value(target.get(name)), _value(item)) if isinstance(entry, list)]
+                target[name] = {"value": [entry for items in found for entry in items] or None}
+            elif _value(target.get(name)) in (None, ""):
+                target[name] = item
+    return merged[:500]
+
+
+def _agree(one: dict, other: dict, spec: dict) -> bool:
+    """No field has two different values in the two records."""
+    return all(_value(one.get(name)) in (None, "") or _value(other.get(name)) in (None, "")
+               or _value(one.get(name)) == _value(other.get(name))
+               for name, field in spec["fields"].items() if field["type"] != "measurements")
 
 
 # --------------------------------------------------------------------------- checks

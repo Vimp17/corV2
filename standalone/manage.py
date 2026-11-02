@@ -796,17 +796,13 @@ def cmd_check(args) -> int:
     from app.config import settings
 
     try:
-        app_db.init_db()
-        with app_db.engine().connect() as conn:
-            from sqlalchemy import text
-
-            tables = conn.execute(text("SELECT count(*) FROM sys.tables WHERE schema_id = "
-                                       "SCHEMA_ID(COALESCE(NULLIF(:schema, ''), SCHEMA_NAME()))"),
-                                  {"schema": schema_of(values)}).scalar()
-        ok(f"таблицы приложения созданы или обновлены (в схеме {tables} таблиц)")
+        changes = app_db.init_db()
     except Exception as exc:  # noqa: BLE001
-        fail(f"создать таблицы не удалось: {str(exc).strip()[:300]}")
+        fail(f"таблицы приложения: {str(exc).strip()[:500]}")
         return 1
+    total = len(app_db.metadata.tables)
+    ok(f"таблицы приложения на месте: {total} из {total}"
+       + (f" ({app_db.describe_changes(changes)})" if any(changes.values()) else ""))
 
     say("\nЯзыковая модель")
     if not (settings.llm_api_url and settings.llm_model):
@@ -908,10 +904,12 @@ def _check_mssql(values: dict[str, str]) -> str | None:
             rights = conn.execute(text(
                 "SELECT HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'CREATE TABLE'), "
                 "HAS_PERMS_BY_NAME(:schema, 'SCHEMA', 'ALTER')"), {"schema": schema}).one()
-            if not all(rights):
-                note(f"Администратору: GRANT CREATE TABLE TO [{login}]; GRANT ALTER ON SCHEMA::[{schema}] TO [{login}];")
-                return f"нет права создавать таблицы в схеме {schema}"
-            ok(f"есть право создавать таблицы в схеме {schema}")
+            if all(rights):
+                ok(f"есть право создавать таблицы в схеме {schema}")
+            else:
+                # Enough when the tables are already there: the start then creates nothing.
+                warn(f"нет права создавать таблицы в схеме {schema}: хватит, если таблицы уже созданы")
+                note(f"Иначе администратору: GRANT CREATE TABLE TO [{login}]; GRANT ALTER ON SCHEMA::[{schema}] TO [{login}];")
     except Exception as exc:  # noqa: BLE001
         note("Проверьте сервер, порт, базу, вход и пароль (mai.cmd setup), доступ с этого компьютера к порту SQL")
         note("Server и сертификат («Доверять сертификату сервера» в mai.cmd setup).")
