@@ -108,6 +108,32 @@ def test_keywords_classify_demo_texts():
     assert extract.classify_by_keywords("\n".join(memo_lines(TODAY)), types) is None
 
 
+def test_ocr_request_is_one_png_data_url_in_json(monkeypatch):
+    import base64
+
+    from PIL import Image
+
+    from app.core import llm
+    from app.core.documents import text
+
+    sent = {}
+
+    def chat(messages, **options):
+        sent.update(messages=messages, **options)
+        return "MAI 4721"
+
+    monkeypatch.setattr(llm, "chat", chat)
+    assert text.ocr_image(Image.new("RGBA", (3000, 1000), "white"), "Страница 1") == "MAI 4721"
+    images = [part for message in sent["messages"] if isinstance(message["content"], list)
+              for part in message["content"] if part["type"] == "image_url"]
+    assert len(images) == 1                       # one image per request
+    url = images[0]["image_url"]["url"]
+    assert url.startswith("data:image/png;base64,")
+    png = base64.b64decode(url.split(",", 1)[1], validate=True)
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+    assert max(Image.open(BytesIO(png)).size) == 2000   # MAI_OCR_MAX_SIDE_PX
+
+
 def test_file_kinds():
     assert intake.detect_kind(b"%PDF-1.7 ...", "a.pdf") == "pdf"
     assert intake.detect_kind(b"\x89PNG\r\n\x1a\n....", "scan.png") == "image"
@@ -366,7 +392,9 @@ def test_data_gaps_name_the_fields_of_each_column():
     empty = {gap["key"]: gap for gap in _data_gaps({}, [fresh], {}, short, [], [], [], now)}
     note = empty["forecast"]["note"]
     assert note.startswith("модели не рассчитаны: замеров с разными датами — 2 из ")
-    assert "(есть: обводнённость); подходят: CO₂, хлориды" in note
+    # The index inputs by name: never measured, and measured but not current (with the date).
+    assert "(есть: обводнённость); нет значений: CO₂, отклонение закачки, скорость коррозии, толщина стенки" in note
+    assert "устарели: хлориды (последнее значение 29.10.2026), эффективность ингибитора" in note
     assert set(empty) == {"well", "forecast", "category", "environment", "sampling", "protection", "run_days", "liquid"}
     assert empty["run_days"]["note"] == "нет: дата спуска оборудования"
     assert empty["well"]["note"] == "нет: месторождение, статус работы (в работе или нет)"
@@ -452,6 +480,70 @@ def test_scanned_pdf_and_source_table(client, generated, tmp_path):
     assert table["doc_type"] == "source:khimik"
     assert table["type_title"] == "Выгрузка KHIMIK"
     assert len(table["well_ids"]) >= 10
+
+
+# --------------------------------------------------------------------------- card fields of any document
+def _pdf(path, lines):
+    from scripts.build_demo_documents import _font_path, write_pdf
+
+    write_pdf(path, lines, _font_path())
+    return path
+
+
+@needs_db
+def test_protocol_pdf_keeps_tonnage_and_noo(client, tmp_path):
+    # A lab protocol has no tonnage field of its own: the card fields of every type keep it.
+    path = _pdf(tmp_path / "protokol.pdf", [
+        "ПРОТОКОЛ ХИМИЧЕСКОГО АНАЛИЗА № 7", "",
+        "Скважина | Дата отбора | Обводнённость, % | Хлориды, мг/л | Тоннаж, т | НОО, сут",
+        f"DEMO-012 | {TODAY:%d.%m.%Y} | 44 | 21500 | 7.5 | 41"])
+    document = _upload(client, path)
+    assert document["status"] == "loaded", document["status_message"]
+    assert document["doc_type"] == "lab_protocol"
+    well = _well(client, "DEMO-012")
+    assert well["tonnage_t"] == 7.5 and well["noo_days"] == 41
+    assert well["provenance"]["tonnage_t"]["source"] == "Протокол хим. анализа (документ)"
+
+
+@needs_db
+def test_document_without_template_fills_the_card(client, tmp_path, fake):
+    path = _pdf(tmp_path / "spravka.pdf", [
+        "СПРАВКА О РАБОТЕ СКВАЖИНЫ", "", "Скважина № DEMO-011", f"Дата замера: {TODAY:%d.%m.%Y}",
+        "Дебит жидкости: 63,5 м3/сут", "Тоннаж: 2,5 т"])
+    document = _upload(client, path)
+    assert document["status"] == "loaded", document["status_message"]
+    assert document["doc_type"] == "well_document"
+    assert any(call["kind"] == "classify" for call in fake.calls)       # no template matched
+    detail = client.get(f"/api/v1/documents/{document['document_id']}").json()
+    assert detail["extraction"]["type_method"] == "fallback"
+    well = _well(client, "DEMO-011")
+    assert well["liquid_rate_m3_day"] == 63.5 and well["tonnage_t"] == 2.5
+    assert well["provenance"]["tonnage_t"]["source"] == "Документ по скважине (документ)"
+
+
+def test_a_place_name_alone_is_no_measurement():
+    from app.core.documents import load
+
+    assert load._point({"field": "Южное"}, "2026-10-01", "DOC_DEMOUNT") is None
+    point = load._point({"field": "Южное", "tonnage_t": 3.0}, "2026-10-01", "DOC_DEMOUNT")
+    assert point.tonnage_t == 3.0 and point.field == "Южное"
+
+
+@needs_db
+def test_source_import_recognises_a_column_by_its_name(client, tmp_path):
+    from openpyxl import Workbook
+
+    book = Workbook()
+    book.active.append(["Скважина", "Дата отбора", "CO2, %", "Тоннаж реагента, т", "Эффективность ингибитора, %", "pH"])
+    book.active.append(["DEMO-012", TODAY.strftime("%d.%m.%Y"), 1.4, 6.5, 85, 6.8])
+    book.save(tmp_path / "khimik.xlsx")
+    with open(tmp_path / "khimik.xlsx", "rb") as handle:
+        result = client.post("/api/v1/ingestion/excel", data={"profile_id": "khimik"},
+                             files={"file": ("khimik.xlsx", handle)}).json()
+    assert result["source_columns"]["tonnage_t"] == "Тоннаж реагента, т"
+    assert result["extra_columns"] == ["pH"]                # only what has no field stays additional
+    well = _well(client, "DEMO-012")
+    assert well["tonnage_t"] == 6.5
 
 
 # --------------------------------------------------------------------------- mixed chemistry tables

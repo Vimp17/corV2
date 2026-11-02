@@ -711,8 +711,9 @@
     }
     function equipCell(w) {
       const means = w.protection_means || [];
+      // Two lines: the equipment run in, then the protection means — say which one has no data.
       return el('div', { style: 'display:flex; flex-direction:column' },
-        el('span', { text: w.equipment || 'Нет данных' }),
+        el('span', { style: w.equipment ? null : 'color:var(--muted)', text: w.equipment || 'Оборудование: нет данных' }),
         el('span', { class: `protline ${means.length ? 'yes' : 'no'}`,
           text: means.length ? `Есть защита от коррозии: ${means.join(', ')}` : 'Нет защиты от коррозии' }));
     }
@@ -926,6 +927,10 @@
       body.push(el('div', { class: 'bars' }, barLine('Прогноз НТЦ', w.model_ntc, '', true), provLine(w, 'model_ntc')));
       const prop = el('div', { class: `prop ${key}` }, el('h3', { text: `Предложение рейтинга: ${w.measure_label}` }), el('div', { style: 'font-size:13px', text: w.action }));
       if (w.protection_adjusted) prop.append(el('div', { style: 'font-size:13px', text: `С учётом подтверждённой защиты индекс снижен с ${w.index_raw} до ${w.index}.` }));
+      // No index: what the forecast lacks — counts of measurements and the fields by name.
+      const forecastGap = w.index === null || w.index === undefined ? (w.data_gaps || []).find(g => g.key === 'forecast') : null;
+      if (forecastGap?.items?.length) prop.append(el('div', { style: 'font-size:13px' }, el('b', { text: 'Для индекса не хватает:' }),
+        el('ul', { style: 'margin:4px 0 0; padding-left:18px' }, forecastGap.items.map(i => el('li', { text: i.field })))));
       body.push(prop);
       const [aiBox, docsBox, extrasBox] = aiBoxes(w);
       body.push(aiBox);
@@ -1250,16 +1255,22 @@
         if (box) { box.append(el('summary', { class: `rec-title${record.accepted ? '' : ' bad'}`, text: title })); parts.push(box); }
         else parts.push(el('div', { class: `rec-title${record.accepted ? '' : ' bad'}`, text: title }));
         if (record.issues?.length) add(el('div', { class: 'hint warn', text: record.issues.join(' ') }));
-        add(el('dl', { class: 'fields' }, Object.entries(record.fields).map(([name, field]) => [
+        // Every document is searched for all the card fields: show what was found (and the well), list the rest.
+        const shown = Object.entries(record.fields).filter(([name, field]) => field.status !== 'missing' || name === 'well_id');
+        const absent = Object.entries(record.fields).filter(([name, field]) => field.status === 'missing' && name !== 'well_id');
+        add(el('dl', { class: 'fields' }, shown.map(([name, field]) => [
           el('dt', { text: labels[name] || name }),
           el('dd', {}, field.status === 'ok' ? fmtValue(field.value) : el('span', { class: 'na', text: '—' }),
             field.status !== 'ok' && field.status !== 'missing' ? el('span', { class: 'rej', text: field.note || FIELD_STATUS_NOTE[field.status] }) : null,
             field.quote ? el('span', { class: 'q', text: `«${field.quote}»` }) : null,
             Array.isArray(field.value) ? [...new Set(field.value.map(item => item.quote))].map(quote => el('span', { class: 'q', text: `«${quote}»` })) : null)])));
+        if (absent.length) add(el('div', { class: 'hint', text: `Нет в документе: ${absent.map(([name]) => labels[name] || name).join('; ')}.` }));
       });
       const meta = [doc.text_method ? `Текст: ${{ text_layer: 'текстовый слой PDF', ocr: 'OCR', mixed: 'текстовый слой и OCR', image_ocr: 'OCR изображения', excel_table: 'таблица Excel', excel_form: 'форма Excel', excel_profile: 'импорт выгрузки', excel_registry: 'реестр Excel' }[doc.text_method] || doc.text_method}` : null,
         doc.pages ? `${doc.file_kind === 'xlsx' ? 'листов' : 'страниц'}: ${doc.pages}` : null,
-        extraction.type_method === 'rules' ? 'разобран без ИИ — по названиям столбцов и строк' : extraction.type_method ? `тип определён ${extraction.type_method === 'keywords' ? 'по ключевым словам' : 'языковой моделью'}` : null,
+        extraction.type_method === 'rules' ? 'разобран без ИИ — по названиям столбцов и строк'
+          : extraction.type_method === 'fallback' ? 'шаблон не подошёл — взяты все сведения для карточки скважины'
+          : extraction.type_method ? `тип определён ${extraction.type_method === 'keywords' ? 'по ключевым словам' : 'языковой моделью'}` : null,
         doc.attempts ? `попыток: ${doc.attempts}` : null].filter(Boolean).join(' · ');
       if (meta) parts.push(el('div', { class: 'hint', text: meta }));
       if (doc.text) {

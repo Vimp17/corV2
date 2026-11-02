@@ -17,6 +17,12 @@ from pydantic import ValidationError
 from app.config import settings
 from app.schemas import FailureHistoryItem, TelemetryPoint, WorkHistoryItem
 
+
+def _adjust(field: str, header: str, value: float) -> float:
+    from app.core.documents.excel_reader import _adjust as adjust
+
+    return adjust(field, header, value)
+
 MEASUREMENT_FIELDS = {
     "water_cut_pct", "co2_pct", "chlorides_mg_l", "inhibitor_efficiency",
     "injection_deviation_pct", "corrosion_rate_mm_year", "wall_thickness_mm",
@@ -176,6 +182,31 @@ def _source_field_metadata(profile: dict, headers: list[Any]) -> dict[str, str]:
     return resolved
 
 
+def _sheet_field_map(profile: dict, headers: list[Any]) -> tuple[dict, dict[str, str]]:
+    """The profile's columns plus, for telemetry, the columns its aliases miss but the indicator name
+    patterns recognise («Тоннаж реагента, т» → tonnage_t), so the value fills its field instead of
+    becoming an additional indicator. Returns (field_map, {field: header} of the recognised columns)."""
+    field_map = profile.get("field_map", {})
+    if profile.get("kind") != "telemetry":
+        return field_map, {}
+    from app.core.documents.excel_reader import field_for
+
+    known = _source_field_metadata(profile, headers)
+    recognised: dict[str, str] = {}
+    for header in headers:
+        if header is None or str(header) in known.values():
+            continue
+        field = field_for(header, {})
+        if field in (MEASUREMENT_FIELDS | TEXT_FIELDS) and field not in known and field not in recognised:
+            recognised[field] = str(header)
+    if not recognised:
+        return field_map, {}
+    merged = {name: list(aliases) for name, aliases in field_map.items()}
+    for field, header in recognised.items():
+        merged.setdefault(field, []).append(header)
+    return merged, recognised
+
+
 # Columns that are identifiers, not indicators, even when they hold numbers.
 _EXTRA_EXCLUDE_DEFAULT = ["№", "номер", "куст", "цех", "участок", "код", "id", "пласт", "бригада", "примечание"]
 
@@ -276,7 +307,7 @@ def parse_excel(content: bytes, filename: str, profile_id: str, supplied_well_id
         else:
             candidate_sheets = list(workbook.worksheets)
 
-        selected_sheets: list[tuple[Any, int, list[Any], dict[str, str]]] = []
+        selected_sheets: list[tuple[Any, int, list[Any], dict[str, str], dict, dict[str, str]]] = []
         skipped_sheets: list[str] = []
         source_columns_by_sheet: dict[str, dict[str, str]] = {}
         ignored_columns_by_sheet: dict[str, list[str]] = {}
@@ -300,7 +331,8 @@ def parse_excel(content: bytes, filename: str, profile_id: str, supplied_well_id
                 header_values = next(sheet.iter_rows(min_row=header_row_number, max_row=header_row_number,
                                                      values_only=True), None)
                 headers = list(header_values or [])
-            source_fields = _source_field_metadata(profile, headers)
+            field_map, recognised = _sheet_field_map(profile, headers)
+            source_fields = _source_field_metadata({**profile, "field_map": field_map}, headers)
             missing_headers = [field for field in profile.get("required_columns", []) if field not in source_fields]
             if "well_id" not in source_fields and not supplied_well_id:
                 missing_headers.append("well_id (or supply the well_id form field)")
@@ -313,7 +345,7 @@ def parse_excel(content: bytes, filename: str, profile_id: str, supplied_well_id
                     )
                 skipped_sheets.append(sheet.title)
                 continue
-            selected_sheets.append((sheet, header_row_number, headers, source_fields))
+            selected_sheets.append((sheet, header_row_number, headers, source_fields, field_map, recognised))
             source_columns_by_sheet[sheet.title] = source_fields
             ignored_columns_by_sheet[sheet.title] = [
                 str(header) for header in headers if header is not None and str(header) not in source_fields.values()
@@ -341,7 +373,7 @@ def parse_excel(content: bytes, filename: str, profile_id: str, supplied_well_id
             raise ExcelImportError(f"Profile '{profile_id}' contains an invalid scale_fields multiplier") from exc
 
         extra_columns: dict[str, None] = {}
-        for sheet, header_row_number, headers, _source_fields in selected_sheets:
+        for sheet, header_row_number, headers, _source_fields, field_map, recognised in selected_sheets:
             for excel_row, values in enumerate(
                 sheet.iter_rows(min_row=header_row_number + 1,
                                 max_row=header_row_number + settings.max_excel_rows + 1,
@@ -354,7 +386,7 @@ def parse_excel(content: bytes, filename: str, profile_id: str, supplied_well_id
                     break
                 if not any(value is not None and str(value).strip() for value in values):
                     continue
-                row = _row_values(headers, values, profile.get("field_map", {}))
+                row = _row_values(headers, values, field_map)
                 # Notes or totals typed beside the table fill only unmapped columns: not a data row.
                 if not any(value is not None and str(value).strip() for value in row.values()):
                     continue
@@ -382,6 +414,10 @@ def parse_excel(content: bytes, filename: str, profile_id: str, supplied_well_id
                         for field in MEASUREMENT_FIELDS - {"water_compatibility_issue"}:
                             if field in normalized:
                                 normalized[field] = _number(normalized[field])
+                        for field, header in recognised.items():
+                            # A column found by its name: inhibitor efficiency in percent → fraction.
+                            if field in MEASUREMENT_FIELDS and normalized.get(field) is not None:
+                                normalized[field] = _adjust(field, header, normalized[field])
                         if "water_compatibility_issue" in normalized:
                             normalized["water_compatibility_issue"] = _boolean(normalized["water_compatibility_issue"])
                         for field in TEXT_FIELDS & normalized.keys():

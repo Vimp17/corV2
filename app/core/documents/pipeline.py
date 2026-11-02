@@ -270,6 +270,10 @@ def process_document(document_id: str) -> dict:
             type_id = extract.classify_by_llm(text, types)
             type_method = "llm"
         if type_id is None:
+            # No template fits: the fallback type takes whatever the card can use from the document.
+            type_id = next((key for key, spec in types.items() if spec.get("fallback")), None)
+            type_method = "fallback"
+        if type_id is None:
             return _finish(document_id, "not_recognized",
                            "Тип документа не определён: это не акт демонтажа, акт разбора, протокол "
                            "хим. анализа или паспорт скважины.",

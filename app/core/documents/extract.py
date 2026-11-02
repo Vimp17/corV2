@@ -197,6 +197,8 @@ def classify_by_keywords(text: str, types: dict) -> str | None:
     head = body[:1500]
     scores = {}
     for type_id, spec in types.items():
+        if spec.get("fallback"):
+            continue
         score = 0
         for keyword in spec.get("keywords", []):
             word = normalize(keyword)
@@ -226,7 +228,8 @@ def _llm_chat(messages: list[dict]) -> str:
 
 
 def classify_by_llm(text: str, types: dict) -> str | None:
-    catalogue = {type_id: f"{spec.get('title')}: {spec.get('description', '')}" for type_id, spec in types.items()}
+    catalogue = {type_id: f"{spec.get('title')}: {spec.get('description', '')}" for type_id, spec in types.items()
+                 if not spec.get("fallback")}
     messages = [
         {"role": "system", "content": (
             "Определи тип документа нефтедобывающего предприятия по его тексту. Ответь только JSON "
@@ -239,12 +242,12 @@ def classify_by_llm(text: str, types: dict) -> str | None:
     except ValueError:
         return None
     type_id = str(answer.get("type") or "").strip()
-    return type_id if type_id in types else None
+    return type_id if type_id in catalogue else None
 
 
 # --------------------------------------------------------------------------- extraction
 EXTRACTION_SYSTEM_PROMPT = (
-    "Ты извлекаешь данные из документа нефтедобывающего предприятия (акт, протокол, паспорт). "
+    "Ты извлекаешь данные из документа нефтедобывающего предприятия (акт, протокол, паспорт, справка). "
     "Отвечай только JSON без пояснений. Правила:\n"
     "1. Бери значения только из текста документа. Ничего не додумывай и не вычисляй, кроме перевода "
     "единиц, прямо указанного в подсказке поля.\n"
@@ -252,7 +255,9 @@ EXTRACTION_SYSTEM_PROMPT = (
     "символов), где это значение записано; копируй символ в символ, без исправлений.\n"
     "3. Если значения в документе нет или оно нечитаемо — value: null и quote: null.\n"
     "4. Даты — в формате ГГГГ-ММ-ДД; числа — числом с точкой; логические поля — true, false или null.\n"
-    "5. Если в документе несколько скважин или проб, верни отдельную запись на каждую."
+    "5. Если в документе несколько скважин или проб, верни отдельную запись на каждую.\n"
+    "6. Ищи все поля из списка, а не только типичные для этого вида документа: например, тоннаж или "
+    "дебит в протоколе анализа тоже нужно извлечь."
 )
 
 
@@ -348,8 +353,9 @@ def check_record(raw: dict, spec: dict, normalized_text: str, known_wells: list[
                     issues.append(f"Неправдоподобная дата «{field.get('label', name)}»: {value:%d.%m.%Y}.")
     informative = spec.get("informative_fields") or []
     if informative and not any(fields[name]["status"] == "ok" for name in informative):
-        labels = ", ".join(spec["fields"][name].get("label", name) for name in informative)
-        issues.append(f"В документе нет данных по существу ({labels}).")
+        labels = [spec["fields"][name].get("label", name) for name in informative]
+        issues.append("В документе нет данных по существу (" + ", ".join(labels[:5])
+                      + (f" и ещё {len(labels) - 5} полей карточки" if len(labels) > 5 else "") + ").")
     return {"well_id": well, "new_well": new_well, "fields": fields, "accepted": not issues, "issues": issues}
 
 

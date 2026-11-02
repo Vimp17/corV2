@@ -18,7 +18,7 @@ from datetime import date, datetime
 ALIASES = {
     "well_id": ["скважина №", "номер скважины", "скв. №", "скважина"],
     "act_date": ["дата разбора", "дата демонтажа", "дата акта"],
-    "sample_date": ["дата отбора пробы", "дата отбора"],
+    "sample_date": ["дата отбора пробы", "дата отбора", "дата замера"],
     "passport_date": ["дата составления паспорта", "дата паспорта"],
     "install_date": ["дата спуска оборудования", "дата спуска"],
     "field": ["месторождение"],
@@ -29,10 +29,14 @@ ALIASES = {
     "corrosion_type": ["вид коррозии"],
     "corrosion_location": ["место обнаружения"],
     "initial_wall_thickness_mm": ["толщина стенки нкт"],
+    "liquid_rate_m3_day": ["дебит жидкости"],
+    "tonnage_t": ["тоннаж"],
+    "noo_days": ["ноо"],
 }
 TABLE_COLUMNS = {
     "well_id": "скважина", "sample_date": "дата", "water_cut_pct": "обводн", "chlorides_mg_l": "хлорид",
     "co2_pct": "co2", "corrosion_rate_mm_year": "скорость коррозии", "inhibitor_efficiency": "эффективность ингибитора",
+    "tonnage_t": "тоннаж", "noo_days": "ноо", "liquid_rate_m3_day": "дебит",
 }
 
 
@@ -137,7 +141,7 @@ class FakeLiteLLM:
         if "Ты извлекаешь данные" in system:
             self.calls.append({"kind": "extract", "type": payload["document_type"]})
             text, fields = payload["document_text"], payload["fields"]
-            records = _from_table(text, fields) if payload["multiple_records"] else [_from_lines(text, fields)]
+            records = (_from_table(text, fields) if payload["multiple_records"] else []) or [_from_lines(text, fields)]
             return "```json\n" + json.dumps({"records": records}, ensure_ascii=False) + "\n```"
         if "инженер-технолог" in system:
             self.calls.append({"kind": "proposal", "well_id": payload["скважина"]})
