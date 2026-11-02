@@ -926,6 +926,10 @@
       body.push(el('div', { class: 'bars' }, barLine('Прогноз НТЦ', w.model_ntc, '', true), provLine(w, 'model_ntc')));
       const prop = el('div', { class: `prop ${key}` }, el('h3', { text: `Предложение рейтинга: ${w.measure_label}` }), el('div', { style: 'font-size:13px', text: w.action }));
       if (w.protection_adjusted) prop.append(el('div', { style: 'font-size:13px', text: `С учётом подтверждённой защиты индекс снижен с ${w.index_raw} до ${w.index}.` }));
+      // No index: what the forecast lacks — counts of measurements and the fields by name.
+      const forecastGap = w.index === null || w.index === undefined ? (w.data_gaps || []).find(g => g.key === 'forecast') : null;
+      if (forecastGap?.items?.length) prop.append(el('div', { style: 'font-size:13px' }, el('b', { text: 'Для индекса не хватает:' }),
+        el('ul', { style: 'margin:4px 0 0; padding-left:18px' }, forecastGap.items.map(i => el('li', { text: i.field })))));
       body.push(prop);
       const [aiBox, docsBox, extrasBox] = aiBoxes(w);
       body.push(aiBox);

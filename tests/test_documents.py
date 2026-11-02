@@ -366,7 +366,9 @@ def test_data_gaps_name_the_fields_of_each_column():
     empty = {gap["key"]: gap for gap in _data_gaps({}, [fresh], {}, short, [], [], [], now)}
     note = empty["forecast"]["note"]
     assert note.startswith("модели не рассчитаны: замеров с разными датами — 2 из ")
-    assert "(есть: обводнённость); подходят: CO₂, хлориды" in note
+    # The index inputs by name: never measured, and measured but not current (with the date).
+    assert "(есть: обводнённость); нет значений: CO₂, отклонение закачки, скорость коррозии, толщина стенки" in note
+    assert "устарели: хлориды (последнее значение 29.10.2026), эффективность ингибитора" in note
     assert set(empty) == {"well", "forecast", "category", "environment", "sampling", "protection", "run_days", "liquid"}
     assert empty["run_days"]["note"] == "нет: дата спуска оборудования"
     assert empty["well"]["note"] == "нет: месторождение, статус работы (в работе или нет)"

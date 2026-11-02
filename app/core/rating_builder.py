@@ -201,14 +201,26 @@ def _forecast_gap(values: dict, records: list[TelemetryPoint], ready: readiness.
             reasons.append(f"замеров за последние {settings.trend_window_days} сут. — {ready.recent_observations} "
                            f"из {settings.min_trend_observations} нужных")
         signals = ready.current_signals
+        names = readiness.SIGNAL_NAMES
         if len(signals) < settings.min_current_signals:
-            names = readiness.SIGNAL_NAMES
             present = [names[field] for field in signals]
-            suitable = [name for field, name in list(names.items())[:readiness.MAIN_SIGNALS] if field not in signals]
             reasons.append(f"показателей за последние {settings.max_forward_fill_days} сут. — "
                            f"{len(signals)} из {settings.min_current_signals} нужных"
-                           + (f" (есть: {', '.join(present)})" if present else "")
-                           + f"; подходят: {', '.join(suitable)}")
+                           + (f" (есть: {', '.join(present)})" if present else ""))
+        # The index inputs by name: never measured, or measured but too long ago to count.
+        absent, old = [], []
+        for field in list(names)[:readiness.MAIN_SIGNALS]:
+            if field in signals:
+                continue
+            _, point = _latest(records, field)
+            if point is None:
+                absent.append(names[field])
+            elif len(signals) < settings.min_current_signals:
+                old.append(f"{names[field]} (последнее значение {_local(point.timestamp):%d.%m.%Y})")
+        if absent:
+            reasons.append("нет значений: " + ", ".join(absent))
+        if old:
+            reasons.append("устарели: " + ", ".join(old))
         if ready.ahead_hours is not None:
             reasons.append(f"Последнее измерение датировано будущим временем (+{ready.ahead_hours:.1f} ч.; "
                            f"допустимо до {settings.max_future_skew_hours:g} ч.); проверьте часы и часовой пояс "
