@@ -17,17 +17,11 @@ from typing import Any
 from app import db
 from app.config import settings
 from app.core import llm, proposal_language, rating
+from app.core.indicators import INDICATORS, MAIN
 
 logger = logging.getLogger(__name__)
 
 MEASURE_CODES = ("ППР", "РИ", "УДР", "—")
-LAB_FIELDS = ("water_cut_pct", "co2_pct", "chlorides_mg_l", "inhibitor_efficiency", "injection_deviation_pct",
-              "corrosion_rate_mm_year", "wall_thickness_mm")
-FIELD_LABELS = {
-    "water_cut_pct": "обводнённость, %", "co2_pct": "CO₂, %", "chlorides_mg_l": "хлориды, мг/л",
-    "inhibitor_efficiency": "эффективность ингибитора (доля)", "injection_deviation_pct": "отклонение закачки, %",
-    "corrosion_rate_mm_year": "скорость коррозии, мм/год", "wall_thickness_mm": "толщина стенки, мм",
-}
 
 SYSTEM_PROMPT = (
     "Ты — инженер-технолог по защите скважинного оборудования от коррозии. По данным одной скважины "
@@ -157,7 +151,7 @@ def build_context(well_id: str) -> dict | None:
 
     samples, latest = [], {}
     for point in db.load_telemetry(well_id):
-        values = {FIELD_LABELS[name]: getattr(point, name) for name in LAB_FIELDS if getattr(point, name, None) is not None}
+        values = {INDICATORS[name].label: getattr(point, name) for name in MAIN if getattr(point, name, None) is not None}
         for name, value in values.items():
             latest[name] = value
         point_sources = set(str(getattr(point, "source_id", "") or "").split("+"))

@@ -23,9 +23,10 @@ from app.config import settings
 from app.core import rating, readiness
 from app.core.excel_ingestion import load_profiles
 from app.core.features import Features, build_features
+from app.core.indicators import INDICATORS, MAIN
 from app.core.normalization import normalize_records
 from app.core.rules import CRITICAL_POINTS, ENVIRONMENT_PREFIX, THRESHOLDS, Check, evaluate_rules, score
-from app.core.source_kinds import lab_source_ids, snapshot_source_ids
+from app.core.source_kinds import is_snapshot, lab_source_ids, snapshot_source_ids
 from app.schemas import TelemetryPoint
 
 logger = logging.getLogger(__name__)
@@ -158,7 +159,7 @@ def _environment(features: Features) -> tuple[bool | None, list[str]]:
 
 # «Полнота данных» is judged on the columns of the rating table (rating.GAP_LABELS), by the values the
 # well actually has — whatever brought them (ДАРС, ХИМИК, a protocol, the НКТ registry, a passport).
-ENVIRONMENT_FIELDS = (("co2_pct", "CO₂"), ("water_cut_pct", "обводнённость"), ("chlorides_mg_l", "хлориды"))
+ENVIRONMENT_FIELDS = ("co2_pct", "water_cut_pct", "chlorides_mg_l")
 
 
 def _fresh_window() -> timedelta:
@@ -201,22 +202,21 @@ def _forecast_gap(values: dict, records: list[TelemetryPoint], ready: readiness.
             reasons.append(f"замеров за последние {settings.trend_window_days} сут. — {ready.recent_observations} "
                            f"из {settings.min_trend_observations} нужных")
         signals = ready.current_signals
-        names = readiness.SIGNAL_NAMES
         if len(signals) < settings.min_current_signals:
-            present = [names[field] for field in signals]
+            present = [INDICATORS[field].name for field in signals]
             reasons.append(f"показателей за последние {settings.max_forward_fill_days} сут. — "
                            f"{len(signals)} из {settings.min_current_signals} нужных"
                            + (f" (есть: {', '.join(present)})" if present else ""))
         # The index inputs by name: never measured, or measured but too long ago to count.
         absent, old = [], []
-        for field in list(names)[:readiness.MAIN_SIGNALS]:
+        for field in MAIN:
             if field in signals:
                 continue
             _, point = _latest(records, field)
             if point is None:
-                absent.append(names[field])
+                absent.append(INDICATORS[field].name)
             elif len(signals) < settings.min_current_signals:
-                old.append(f"{names[field]} (последнее значение {_local(point.timestamp):%d.%m.%Y})")
+                old.append(f"{INDICATORS[field].name} (последнее значение {_local(point.timestamp):%d.%m.%Y})")
         if absent:
             reasons.append("нет значений: " + ", ".join(absent))
         if old:
@@ -245,14 +245,14 @@ def _data_gaps(values: dict, records: list[TelemetryPoint], current: dict, ready
     forecast = _forecast_gap(values, records, ready)
     if forecast:
         gaps.append(forecast)
-    rate = _measured("corrosion_rate_mm_year", "скорость коррозии", records, current, now)
+    rate = _measured("corrosion_rate_mm_year", INDICATORS["corrosion_rate_mm_year"].name, records, current, now)
     if values.get("category") is None:
         add("category", [rate or {"field": "признаки коррозии", "last": None}],
             "не определена: нет оценки среды, скорости коррозии и актов с признаком коррозии")
     elif rate:
         add("category", [rate])
-    add("environment", [item for field, name in ENVIRONMENT_FIELDS
-                        if (item := _measured(field, name, records, current, now))])
+    add("environment", [item for field in ENVIRONMENT_FIELDS
+                        if (item := _measured(field, INDICATORS[field].name, records, current, now))])
     if values.get("sampling") is not True:
         last = f"{_local(lab_points[-1].timestamp):%d.%m.%Y}" if lab_points else None
         add("sampling", [{"field": f"лабораторная проба за {settings.rating_sampling_days} сут.", "last": last}],
@@ -272,10 +272,10 @@ def _data_gaps(values: dict, records: list[TelemetryPoint], current: dict, ready
     if not values.get("equipment"):
         protection.append({"field": "спущенное оборудование (насос, НКТ, исполнение)", "last": None})
     if values.get("protection") is None:
-        protection.append(_measured("inhibitor_efficiency", "эффективность ингибитора", records, current, now)
-                          or {"field": "эффективность ингибитора", "last": None})
+        protection.append(_measured("inhibitor_efficiency", INDICATORS["inhibitor_efficiency"].name, records, current, now)
+                          or {"field": INDICATORS["inhibitor_efficiency"].name, "last": None})
     elif current.get("inhibitor_efficiency") is not None:
-        deviation = _measured("injection_deviation_pct", "отклонение закачки ингибитора", records, current, now)
+        deviation = _measured("injection_deviation_pct", INDICATORS["injection_deviation_pct"].name, records, current, now)
         if deviation:
             protection.append(deviation)
     if values.get("protection") == "unconfirmed" and rate:
@@ -351,77 +351,71 @@ def well_passports(well_id: str) -> list[tuple[str, dict, datetime | None]]:
     return result
 
 
-def build_values(records: list[TelemetryPoint], events: list[dict], now: datetime | None = None,
-                 passports: list[tuple[str, dict, datetime | None]] | None = None) -> tuple[dict, dict]:
-    """Rating field values and their provenance for one well."""
-    now = now or datetime.now(timezone.utc)
-    sources = _Sources()
-    records = sorted(records, key=lambda point: _utc(point.timestamp))
-    prepared = prepare(records) if records else None
-    ready = readiness.assess(records)
+Part = tuple[dict, dict]   # values and their provenance for some columns of the rating
+
+
+def _reported(records: list[TelemetryPoint], passports: list[tuple[str, dict, datetime | None]],
+              sources: _Sources) -> Part:
+    """Field, tonnage, НОО and liquid rate: the latest reported value (the field also from a passport);
+    the oil share from the latest water cut."""
     values: dict[str, Any] = {}
     prov: dict[str, dict] = {}
-
-    # Field, tonnage, НОО and liquid rate: the latest reported value.
     for field in ("field", "tonnage_t", "noo_days", "liquid_rate_m3_day"):
         value, point = _latest(records, field)
         values[field] = value
         if point is not None:
             prov[field] = _prov(sources, _record_sources(point), point.timestamp)
-    # A field missing from telemetry is taken from the well passport document.
-    for source_id, fields, when in passports or []:
+    for source_id, fields, when in passports:
         if values.get("field") is None and fields.get("field"):
             values["field"] = str(fields["field"])[:256]
             prov["field"] = _prov(sources, source_id, when, "Из паспорта скважины.")
-
-    # Oil share from the latest water cut (by volume).
     water_cut, point = _latest(records, "water_cut_pct")
     values["oil_pct"] = round(max(0.0, min(100.0, 100.0 - water_cut)), 1) if water_cut is not None else None
     if point is not None:
         prov["oil_pct"] = _prov(sources, _record_sources(point), point.timestamp,
                                 f"100 % − обводнённость {water_cut:g} %.")
+    return values, prov
 
-    # Operating status: the latest DARS status, else a fresh measurement implies the well runs.
-    # A registry row (snapshot) is not a measurement and says nothing about the status.
-    from app.core.source_kinds import is_snapshot, snapshot_source_ids
 
+def _operation(records: list[TelemetryPoint], now: datetime, sources: _Sources) -> Part:
+    """Operating status: the latest DARS status, else a fresh measurement implies the well runs.
+    A registry row (snapshot) is not a measurement and says nothing about the status."""
     snapshot_ids = snapshot_source_ids()
     measured = [point for point in records if not is_snapshot(point, snapshot_ids)]
     value, point = _latest(records, "in_operation")
     if point is not None:
-        values["in_operation"] = bool(value)
-        prov["in_operation"] = _prov(sources, _record_sources(point), point.timestamp)
-    elif measured:
-        last = measured[-1]
-        age_hours = (now - _utc(last.timestamp)).total_seconds() / 3600
-        fresh = age_hours <= settings.max_telemetry_age_hours
-        values["in_operation"] = True if fresh else None
-        prov["in_operation"] = _prov(sources, _record_sources(last), last.timestamp,
-                                     "Статус не передан; скважина считается в работе по свежей телеметрии."
-                                     if fresh else "Статус не передан, телеметрия устарела.")
-    else:
-        values["in_operation"] = None
+        return {"in_operation": bool(value)}, {"in_operation": _prov(sources, _record_sources(point), point.timestamp)}
+    if not measured:
+        return {"in_operation": None}, {}
+    last = measured[-1]
+    fresh = (now - _utc(last.timestamp)).total_seconds() / 3600 <= settings.max_telemetry_age_hours
+    return {"in_operation": True if fresh else None}, {"in_operation": _prov(
+        sources, _record_sources(last), last.timestamp,
+        "Статус не передан; скважина считается в работе по свежей телеметрии." if fresh
+        else "Статус не передан, телеметрия устарела.")}
 
-    # Sampling: a laboratory sample within the configured window.
-    lab_points = [point for point in records
-                  if sources.lab_ids & set(_record_sources(point).split("+"))]
+
+def _sampling(records: list[TelemetryPoint], now: datetime, sources: _Sources) -> tuple[dict, dict, list]:
+    """A laboratory sample within the configured window; also the laboratory points themselves."""
+    lab_points = [point for point in records if sources.lab_ids & set(_record_sources(point).split("+"))]
     if lab_points:
         last = lab_points[-1]
-        recent = now - _utc(last.timestamp) <= timedelta(days=settings.rating_sampling_days)
-        values["sampling"] = recent
-        prov["sampling"] = _prov(sources, _record_sources(last), last.timestamp,
-                                 f"Последняя проба; окно {settings.rating_sampling_days} сут.")
-    else:
-        values["sampling"] = False if records else None
-        if records:
-            lab_titles = ", ".join(sorted(sources.title(item) for item in sources.lab_ids)) or "лаборатории"
-            prov["sampling"] = _prov(sources, None, None, f"Проб {lab_titles} нет.")
+        return ({"sampling": now - _utc(last.timestamp) <= timedelta(days=settings.rating_sampling_days)},
+                {"sampling": _prov(sources, _record_sources(last), last.timestamp,
+                                   f"Последняя проба; окно {settings.rating_sampling_days} сут.")}, lab_points)
+    if not records:
+        return {"sampling": None}, {}, lab_points
+    lab_titles = ", ".join(sorted(sources.title(item) for item in sources.lab_ids)) or "лаборатории"
+    return {"sampling": False}, {"sampling": _prov(sources, None, None, f"Проб {lab_titles} нет.")}, lab_points
 
-    # ERA: equipment run, demount and base-inspection acts.
-    work = [event for event in events if event["event_type"] == "work"]
+
+def _history(events: list[dict], now: datetime, sources: _Sources) -> tuple[dict, dict, dict[str, list[dict]]]:
+    """ERA: the equipment and its run, demount and base-inspection acts; also the events by kind."""
+    values: dict[str, Any] = {}
+    prov: dict[str, dict] = {}
     by_kind: dict[str, list[dict]] = {"install": [], "demount": [], "base_inspection": []}
-    for event in work:
-        kind = sources.classify(event["payload"].get("work_type"))
+    for event in events:
+        kind = sources.classify(event["payload"].get("work_type")) if event["event_type"] == "work" else None
         if kind:
             by_kind[kind].append(event)
     install = next((event for event in reversed(by_kind["install"]) if event["payload"].get("equipment")), None)
@@ -439,11 +433,11 @@ def build_values(records: list[TelemetryPoint], events: list[dict], now: datetim
     if last_run:
         prov["run_days"] = _prov(sources, last_run["source_id"], last_run["event_date"],
                                  "Наработка считается от даты последнего спуска оборудования.")
-
     window_start = now - timedelta(days=settings.rating_act_days)
     for kind, act_field, corrosion_field in (("demount", "demount_act", "demount_corrosion"),
                                              ("base_inspection", "base_act", "base_corrosion")):
         recent = [event for event in by_kind[kind] if _utc(event["event_date"]) >= window_start]
+        values[corrosion_field] = None
         if recent:
             last = recent[-1]
             values[act_field] = True
@@ -455,73 +449,99 @@ def build_values(records: list[TelemetryPoint], events: list[dict], now: datetim
                                               if last["payload"].get("corrosion_detected") is None else None))
         else:
             values[act_field] = False if events else None
-            values[corrosion_field] = None
             if events:
-                prov[act_field] = _prov(sources, None, None,
-                                        f"Актов за последние {settings.rating_act_days} сут. нет.")
+                prov[act_field] = _prov(sources, None, None, f"Актов за последние {settings.rating_act_days} сут. нет.")
+    by_kind["demount"] = [event for event in by_kind["demount"] if _utc(event["event_date"]) >= window_start]
+    return values, prov, by_kind
 
-    # Environment: CO₂, water cut and chlorides of the latest values.
+
+def _condition(records: list[TelemetryPoint], prepared: Prepared | None, acts: dict,
+               sources: _Sources) -> tuple[dict, dict, float | None]:
+    """Environment (CO₂, water cut, chlorides of the latest values) and the category from the corrosion
+    evidence (approved rule); also the current corrosion rate."""
+    values: dict[str, Any] = {"corrosive_environment": None}
+    prov: dict[str, dict] = {}
     rate = None
     if prepared is not None:
         values["corrosive_environment"], found = _environment(prepared.features)
-        reasons = "; ".join(found)
-        when = prepared.features.latest_timestamp
         contributing = {_record_sources(point) for point in
                         (_latest(records, name)[1] for name in ("co2_pct", "water_cut_pct", "chlorides_mg_l"))
                         if point is not None}
         source_id = "+".join(sorted({part for item in contributing for part in item.split("+") if part}))
         prov["corrosive_environment"] = _prov(
-            sources, source_id or None, when,
-            reasons or ("Показатели CO₂, обводнённости и хлоридов ниже порогов."
-                        if values["corrosive_environment"] is False else "Нет показателей среды."))
+            sources, source_id or None, prepared.features.latest_timestamp,
+            "; ".join(found) or ("Показатели CO₂, обводнённости и хлоридов ниже порогов."
+                                 if values["corrosive_environment"] is False else "Нет показателей среды."))
         rate = prepared.features.current_values.get("corrosion_rate_mm_year")
-    else:
-        values["corrosive_environment"] = None
-
-    # Category from the corrosion evidence (approved rule).
     high_rate = rate is not None and rate >= THRESHOLDS["corrosion_rate_high"]
     environment = values["corrosive_environment"]
-    evidence = [environment, values.get("demount_corrosion"), values.get("base_corrosion"), rate]
-    if values.get("base_corrosion") is True or (environment is True and high_rate):
+    if acts.get("base_corrosion") is True or (environment is True and high_rate):
         category = "corrosive"
-    elif environment is True or values.get("demount_corrosion") is True or high_rate:
+    elif environment is True or acts.get("demount_corrosion") is True or high_rate:
         category = "medium"
-    elif any(item is not None for item in evidence):
+    elif any(item is not None for item in (environment, acts.get("demount_corrosion"), acts.get("base_corrosion"), rate)):
         category = "noncorrosive"
     else:
         category = None
     values["category"] = category
     if category is not None:
-        parts = []
-        if values.get("base_corrosion") is True:
-            parts.append("коррозия по акту разбора")
-        if environment is True:
-            parts.append("коррозионная среда")
-        if values.get("demount_corrosion") is True:
-            parts.append("коррозия при демонтаже")
+        parts = [text for flag, text in ((acts.get("base_corrosion") is True, "коррозия по акту разбора"),
+                                         (environment is True, "коррозионная среда"),
+                                         (acts.get("demount_corrosion") is True, "коррозия при демонтаже")) if flag]
         if rate is not None:
             parts.append(f"скорость коррозии {rate:g} мм/год (порог {THRESHOLDS['corrosion_rate_high']:g})")
         prov["category"] = _prov(sources, None, None, "; ".join(parts) or "признаков коррозии нет")
+    return values, prov, rate
 
-    protection, protection_note = _assess_protection(values, prepared, rate, sources)
-    values["protection"] = protection
+
+def _protection(values: dict, prepared: Prepared | None, rate: float | None, sources: _Sources) -> Part:
+    protection, note = _assess_protection(values, prepared, rate, sources)
     current = prepared.features.current_values if prepared is not None else {}
     means = (["ингибитор"] if current.get("inhibitor_efficiency") is not None else []) + (
         ["защитное исполнение НКТ"] if sources.protective_equipment(values.get("equipment")) else [])
-    if protection_note or means:
-        when = prepared.features.latest_timestamp if prepared is not None else None
-        prov["protection"] = {**_prov(sources, None, when, protection_note), "means": means}
+    if not (note or means):
+        return {"protection": protection}, {}
+    when = prepared.features.latest_timestamp if prepared is not None else None
+    return {"protection": protection}, {"protection": {**_prov(sources, None, when, note), "means": means}}
 
-    values.update(model_ntc=None, model_ntc_raw=None)
-    if prepared is not None and ready.ready:
-        scores, score_prov = _ntc_score(evaluate_rules(prepared.features, prepared.normalized),
-                                        prepared.features.latest_timestamp, sources, protection)
-        values.update(scores)
-        prov.update(score_prov)
 
+def _models(prepared: Prepared | None, ready: readiness.Readiness, protection: str | None,
+            sources: _Sources) -> Part:
+    """The НТЦ forecast when the well has enough measurements (app.core.readiness)."""
+    if prepared is None or not ready.ready:
+        return {"model_ntc": None, "model_ntc_raw": None}, {}
+    return _ntc_score(evaluate_rules(prepared.features, prepared.normalized),
+                      prepared.features.latest_timestamp, sources, protection)
+
+
+def build_values(records: list[TelemetryPoint], events: list[dict], now: datetime | None = None,
+                 passports: list[tuple[str, dict, datetime | None]] | None = None) -> tuple[dict, dict]:
+    """Rating field values and their provenance for one well, column by column."""
+    now = now or datetime.now(timezone.utc)
+    sources = _Sources()
+    records = sorted(records, key=lambda point: _utc(point.timestamp))
+    prepared = prepare(records) if records else None
+    ready = readiness.assess(records)
+    values: dict[str, Any] = {}
+    prov: dict[str, dict] = {}
+
+    def take(part: Part) -> None:
+        values.update(part[0])
+        prov.update(part[1])
+
+    take(_reported(records, passports or [], sources))
+    take(_operation(records, now, sources))
+    *sampling, lab_points = _sampling(records, now, sources)
+    take(sampling)
+    *history, by_kind = _history(events, now, sources)
+    take(history)
+    *condition, rate = _condition(records, prepared, values, sources)
+    take(condition)
+    take(_protection(values, prepared, rate, sources))
+    take(_models(prepared, ready, values["protection"], sources))
     # «Полнота данных»: per column of the rating, the values the well lacks (not the sources).
-    demounts = [event for event in by_kind["demount"] if _utc(event["event_date"]) >= window_start]
-    values["data_gaps"] = _data_gaps(values, records, current, ready, lab_points, demounts,
+    current = prepared.features.current_values if prepared is not None else {}
+    values["data_gaps"] = _data_gaps(values, records, current, ready, lab_points, by_kind["demount"],
                                      by_kind["base_inspection"], now)
     return values, prov
 

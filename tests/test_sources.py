@@ -198,7 +198,7 @@ def test_push_json(client):
 
 def test_liquid_rate_headers():
     from app.core.documents import nkt_registry
-    from app.core.documents.excel_reader import field_for
+    from app.core.excel_cells import field_for
 
     for header in ("Средний дебит по жидкости, м3/сут", "Дебит жидкости, м3/сут", "Qж, м3/сут", "Дебит, м3/сут"):
         assert field_for(header, {}) == "liquid_rate_m3_day", header

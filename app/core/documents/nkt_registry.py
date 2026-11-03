@@ -32,7 +32,7 @@ from openpyxl.utils import get_column_letter
 
 from app import db
 from app.config import settings
-from app.core.documents.excel_reader import DATE_TEXT, LIQUID_RATE, _cell, _moment, _norm, _number, _well_text
+from app.core import excel_cells as cells
 from app.core.documents.extract import EARLIEST_DATE, resolve_well
 from app.schemas import TelemetryPoint
 
@@ -74,7 +74,7 @@ COLUMNS: list[tuple[str, str, str, str | None, str | None, str | None, str | Non
     ("reservoir_temp_c", "Температура пластовая, °C", "number", None,
      r"температур.*пласт|пластов\w*\s+температур", None, None),
     ("wellhead_pressure_atm", "Давление на устье, атм", "number", None, r"давлен.*усть", None, None),
-    ("liquid_rate_m3_day", "Средний дебит жидкости, м³/сут", "number", "liquid_rate_m3_day", LIQUID_RATE, None, None),
+    ("liquid_rate_m3_day", "Средний дебит жидкости, м³/сут", "number", "liquid_rate_m3_day", cells.LIQUID_RATE, None, None),
     ("water_cut_pct", "Средняя обводнённость, %", "number", "water_cut_pct", r"обводн", None, None),
     ("water_density", "Плотность воды, кг/м³", "number", None, r"плотност", None, None),
     ("mineralization_mg_l", "Общая минерализация, мг/л", "number", None, r"минерализ", None, None),
@@ -117,7 +117,7 @@ _LATIN = str.maketrans({"а": "a", "с": "c", "о": "o", "е": "e", "к": "k", "
 
 
 def _is_well_header(text: str) -> bool:
-    norm = _norm(text)
+    norm = cells.norm(text)
     return bool(WELL_HEADER.search(norm) or WELL_HEADER.search(norm.translate(_CYRILLIC)))
 
 
@@ -127,7 +127,7 @@ def _formula(text: str) -> str:
 
 def column_key(label: str, used: set[str]) -> str | None:
     """Registry column of a header, None for a column the registry does not know."""
-    text = _norm(label)
+    text = cells.norm(label)
     compact = _formula(text)
     for key, _label, _kind, _system, words, formula, unit in COLUMNS:
         if key in used:
@@ -176,7 +176,7 @@ def find_header(rows: list[list[Any]]) -> dict | None:
             continue
         used: set[str] = set()
         columns: dict[int, str] = {}
-        markers = {"suspension"} if any(SUSPENSION.search(_norm(text)) for text in labels.values()) else set()
+        markers = {"suspension"} if any(SUSPENSION.search(cells.norm(text)) for text in labels.values()) else set()
         for c, text in sorted(labels.items()):
             if c == well:
                 continue
@@ -191,13 +191,7 @@ def find_header(rows: list[list[Any]]) -> dict | None:
 
 
 def _read_rows(content: bytes) -> list[tuple[str, list[list[Any]]]]:
-    workbook = load_workbook(BytesIO(content), read_only=True, data_only=True)
-    try:
-        return [(sheet.title, [list(values)[:MAX_COLUMNS] for values in
-                               sheet.iter_rows(max_row=MAX_ROWS, values_only=True)])
-                for sheet in workbook.worksheets]
-    finally:
-        workbook.close()
+    return cells.sheet_rows(content, MAX_ROWS, MAX_COLUMNS)
 
 
 def detect(content: bytes) -> bool:
@@ -224,9 +218,9 @@ def _registry_date(title: str, rows: list[list[Any]], header_row: int) -> tuple[
         for c, value in enumerate(row):
             if isinstance(value, (datetime, date)):
                 moment = value if isinstance(value, datetime) else datetime.combine(value, time.min)
-                return moment.date(), _cell(title, r, c, "Дата", value)
-            if isinstance(value, str) and DATE_TEXT.search(value) and (REGISTRY_DATE.search(value) or r == 1):
-                moment = _moment(value)
+                return moment.date(), cells.cell_ref(title, r, c, "Дата", value)
+            if isinstance(value, str) and cells.DATE_TEXT.search(value) and (REGISTRY_DATE.search(value) or r == 1):
+                moment = cells.moment(value)
                 if moment is not None:
                     local = moment.astimezone(ZoneInfo(settings.source_timezone)).date()
                     return local, f"Лист «{title}», {get_column_letter(c + 1)}{r}: {value.strip()}"[:300]
@@ -237,11 +231,11 @@ def _value(raw: Any, kind: str) -> Any:
     if raw is None or (isinstance(raw, str) and not raw.strip()):
         return None
     if kind == "number":
-        return _number(raw)
+        return cells.number(raw)
     if isinstance(raw, (datetime, date)):
         return raw.strftime("%d.%m.%Y")
     if kind == "any":
-        number = _number(raw)
+        number = cells.number(raw)
         if number is not None:
             return int(number) if number.is_integer() else number
     if isinstance(raw, float) and raw.is_integer():
@@ -282,17 +276,17 @@ def read_workbook(content: bytes, known_wells: list[str], received: date) -> dic
         filled: set[int] = set()
         for r in range(header["data_from"], len(rows) + 1):
             row = rows[r - 1]
-            well_raw = _well_text(row[header["well"]]) if header["well"] < len(row) else ""
+            well_raw = cells.well_text(row[header["well"]]) if header["well"] < len(row) else ""
             if not well_raw:
                 empty += 1
                 if empty > 20:
                     break
                 continue
             empty = 0
-            if _norm(well_raw) in {"итого", "всего"}:
+            if cells.norm(well_raw) in {"итого", "всего"}:
                 continue
             fields = {"well_id": {"value": well_raw, "status": "ok",
-                                  "quote": _cell(title, r, header["well"], titles[header["well"]], row[header["well"]])}}
+                                  "quote": cells.cell_ref(title, r, header["well"], titles[header["well"]], row[header["well"]])}}
             for c, key in columns.items():
                 if kinds[key] == "skip" or c >= len(row):
                     continue
@@ -300,7 +294,7 @@ def read_workbook(content: bytes, known_wells: list[str], received: date) -> dic
                 if value is None:
                     continue
                 filled.add(c)
-                fields[key] = {"value": value, "quote": _cell(title, r, c, titles[c], row[c]), "status": "ok"}
+                fields[key] = {"value": value, "quote": cells.cell_ref(title, r, c, titles[c], row[c]), "status": "ok"}
             records.append({"well_raw": well_raw, "fields": fields, "sheet": title, "row": r})
         for c, key in columns.items():
             if kinds[key] == "skip" or key in SYSTEM_FIELDS:
@@ -337,7 +331,7 @@ def _check(records: list[dict], known: list[str]) -> None:
             issues.append("В строке нет данных, кроме расположения скважины.")
         field = (record["fields"].get("field") or {}).get("value")
         if well and field:
-            fields_of[well].add(_norm(field))
+            fields_of[well].add(cells.norm(field))
         record["issues"] = issues
     for record in records:
         well = record["well_id"]

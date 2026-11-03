@@ -77,6 +77,16 @@ COLUMNS = [
 FIELD_LABELS = {key: header for key, header, *_ in COLUMNS}
 
 
+# Number formats and left-aligned (text) columns of «Рейтинг»; the rest are centred.
+NUMBER_FORMATS = {"model_ntc": "0.00", "tonnage_t": "0.0", "liquid_rate_m3_day": "0.0", "oil_pct": "0.0",
+                  "noo_days": "0", "index": "0", "index_raw": "0", "oil_l_day": "0",
+                  "deadline": "DD.MM.YYYY", "plan_date": "DD.MM.YYYY"}
+TEXT_COLUMNS = {"field", "equipment", "measure", "comment", "category", "action", "data_gaps"}
+# Values shown in red bold on «Рейтинг».
+BAD_VALUES = {"corrosive_environment": "Коррозионная", "demount_corrosion": "Есть коррозия",
+              "base_corrosion": "Есть коррозия", "category": "Коррозионная", "protection": "Недостаточна"}
+
+
 def _yn(value: Any, yes: str, no: str) -> str:
     return "—" if value is None else (yes if value else no)
 
@@ -87,112 +97,98 @@ def _date(value: Any) -> date | None:
     return value if isinstance(value, date) else date.fromisoformat(str(value)[:10])
 
 
+def _fill(color: str) -> PatternFill:
+    return PatternFill("solid", fgColor=color)
+
+
+def _put(sheet, row: int, column: int, value: Any = None, font: Font = F_BASE, align: Alignment | None = CENTER,
+         fill: PatternFill | None = None, number_format: str | None = None):
+    """A bordered cell with its value and style."""
+    cell = sheet.cell(row, column, value)
+    cell.font, cell.border = font, BORDER
+    if align is not None:
+        cell.alignment = align
+    if fill is not None:
+        cell.fill = fill
+    if number_format:
+        cell.number_format = number_format
+    return cell
+
+
+def _title(sheet, title: str, note: str | None = None) -> None:
+    sheet["A1"] = title
+    sheet["A1"].font = F_TITLE
+    if note:
+        sheet["A2"] = note
+        sheet["A2"].font = F_NOTE
+
+
 def _cell_values(well: dict) -> dict[str, Any]:
-    measure = well.get("measure")
-    return {
-        "rank": well.get("rank"),
-        "well_id": well["well_id"],
-        "field": well.get("field"),
-        "equipment": well.get("equipment"),
+    """The «Рейтинг» row of a well: values as they are, yes/no and dates in words."""
+    measure, era = well.get("measure"), well.get("era_required")
+    return {key: well.get(key) for key, *_ in COLUMNS} | {
         "in_operation": _yn(well.get("in_operation"), "В работе", "Не в работе"),
-        "run_days": well.get("run_days"),
-        "liquid_rate_m3_day": well.get("liquid_rate_m3_day"),
-        "oil_pct": well.get("oil_pct"),
-        "oil_l_day": well.get("oil_l_day"),
-        "action": well.get("action"),
         "data_gaps": "\n".join(f"{rating.GAP_LABELS.get(gap['key'], gap['key'])}: {gap.get('note') or ''}"
                                for gap in well.get("data_gaps") or []) or "полные",
         "sampling": _yn(well.get("sampling"), "Да", "Нет"),
         "corrosive_environment": _yn(well.get("corrosive_environment"), "Коррозионная", "Некоррозионная"),
-        "tonnage_t": well.get("tonnage_t"),
-        "noo_days": well.get("noo_days"),
         "demount_act": _yn(well.get("demount_act"), "Есть", "Нет"),
         "demount_corrosion": _yn(well.get("demount_corrosion"), "Есть коррозия", "Коррозии нет") if well.get("demount_act") else "—",
         "base_act": _yn(well.get("base_act"), "Есть", "Нет"),
-        "base_corrosion": (_yn(well.get("base_corrosion"), "Есть коррозия", "Коррозии нет")
-                           if well.get("base_act") else "—"),
+        "base_corrosion": _yn(well.get("base_corrosion"), "Есть коррозия", "Коррозии нет") if well.get("base_act") else "—",
         "category": well.get("category_label") or "—",
         "protection": well.get("protection_label") or "Нет данных",
-        "index_raw": well.get("index_raw"),
-        "model_ntc": well.get("model_ntc"),
-        "index": well.get("index"),
         "measure": well.get("measure_label") if measure else "Нет оценки",
-        "era": "Включить" if well.get("era_required") else "—",
-        "promine_status": (well.get("promine_status_label") or "Не сформирован") if well.get("era_required")
-        else (well.get("promine_status_label") or "—"),
+        "era": "Включить" if era else "—",
+        "promine_status": well.get("promine_status_label") or ("Не сформирован" if era else "—"),
         "deadline": _date(well.get("deadline")),
         "plan_date": _date(well.get("plan_date")),
         "plan_status": well.get("plan_status_label") or "—",
-        "comment": well.get("comment"),
     }
 
 
 def _head(sheet, row: int, labels: list[str]) -> None:
     for column, label in enumerate(labels, start=1):
-        cell = sheet.cell(row, column, label)
-        cell.font, cell.fill, cell.alignment, cell.border = F_HEAD, FILL_HEAD, CENTER, BORDER
+        _put(sheet, row, column, label, F_HEAD, fill=FILL_HEAD)
 
 
 def _rating_sheet(book: Workbook, wells: list[dict], generated: datetime) -> None:
     sheet = book.active
     sheet.title = "Рейтинг"
-    sheet["A1"] = "Рейтинг скважин по риску коррозии"
-    sheet["A1"].font = F_TITLE
-    sheet["A2"] = (f"Выгрузка из системы «Контроль коррозии скважин» {generated:%d.%m.%Y %H:%M} UTC. "
-                   "Значения рассчитаны по данным ДАРС, ХИМИК и ЭРА ремонта; источники — на листе "
-                   "«Источники данных».")
-    sheet["A2"].font = F_NOTE
-    groups: list[list] = []
-    for index, (_key, _header, _width, group) in enumerate(COLUMNS, start=1):
-        if groups and groups[-1][0] == group:
-            groups[-1][2] = index
-        else:
-            groups.append([group, index, index])
-    for group, first, last in groups:
-        sheet.cell(3, first, group)
-        for column in range(first, last + 1):
-            cell = sheet.cell(3, column)
-            cell.font, cell.fill, cell.alignment, cell.border = F_HEAD, FILL_GROUP, CENTER, BORDER
-        if last > first:
-            sheet.merge_cells(start_row=3, start_column=first, end_row=3, end_column=last)
-    _head(sheet, 4, [header for _key, header, *_ in COLUMNS])
-    for column, (_key, _header, width, _group) in enumerate(COLUMNS, start=1):
+    _title(sheet, "Рейтинг скважин по риску коррозии",
+           f"Выгрузка из системы «Контроль коррозии скважин» {generated:%d.%m.%Y %H:%M} UTC. "
+           "Значения рассчитаны по данным ДАРС, ХИМИК и ЭРА ремонта; источники — на листе «Источники данных».")
+    keys = [key for key, *_ in COLUMNS]
+    first = 1
+    for column, (_key, _header, width, group) in enumerate(COLUMNS, start=1):
         sheet.column_dimensions[get_column_letter(column)].width = width
+        if column < len(COLUMNS) and COLUMNS[column][3] == group:
+            continue
+        for index in range(first, column + 1):     # the group title over its columns
+            _put(sheet, 3, index, group if index == first else None, F_HEAD, fill=FILL_GROUP)
+        if column > first:
+            sheet.merge_cells(start_row=3, start_column=first, end_row=3, end_column=column)
+        first = column + 1
+    _head(sheet, 4, [header for _key, header, *_ in COLUMNS])
     sheet.row_dimensions[4].height = 44
-
-    for offset, well in enumerate(wells):
-        row = 5 + offset
+    for row, well in enumerate(wells, start=5):
         values = _cell_values(well)
         colors = MEASURE_COLORS.get(well.get("measure"))
-        for column, (key, *_rest) in enumerate(COLUMNS, start=1):
-            cell = sheet.cell(row, column, values[key])
-            cell.font, cell.border = F_BASE, BORDER
-            cell.alignment = LEFT if key in {"field", "equipment", "measure", "comment", "category", "action", "data_gaps"} else CENTER
-            if key == "model_ntc":
-                cell.number_format = "0.00"
-            elif key in {"tonnage_t", "liquid_rate_m3_day", "oil_pct"}:
-                cell.number_format = "0.0"
-            elif key in {"noo_days", "index", "index_raw", "oil_l_day"}:
-                cell.number_format = "0"
-            elif key in {"deadline", "plan_date"}:
-                cell.number_format = "DD.MM.YYYY"
+        for column, key in enumerate(keys, start=1):
+            cell = _put(sheet, row, column, values[key], align=LEFT if key in TEXT_COLUMNS else CENTER,
+                        number_format=NUMBER_FORMATS.get(key))
             if key in {"index", "measure", "era"} and colors:
-                cell.fill = PatternFill("solid", fgColor=colors[0])
+                cell.fill = _fill(colors[0])
                 cell.font = Font(name=FONT, size=10, bold=key != "era", color=colors[1])
-        for key, bad in (("corrosive_environment", "Коррозионная"), ("demount_corrosion", "Есть коррозия"),
-                         ("base_corrosion", "Есть коррозия"), ("category", "Коррозионная"),
-                         ("protection", "Недостаточна")):
-            if values[key] == bad:
-                sheet.cell(row, [k for k, *_ in COLUMNS].index(key) + 1).font = F_BAD
-        status_cell = sheet.cell(row, [k for k, *_ in COLUMNS].index("plan_status") + 1)
+            if key in BAD_VALUES and values[key] == BAD_VALUES[key]:
+                cell.font = F_BAD
+        status = sheet.cell(row, keys.index("plan_status") + 1)
         if well.get("plan_status") == "late":
-            status_cell.fill, status_cell.font = PatternFill("solid", fgColor="FDECEA"), F_BAD
+            status.fill, status.font = _fill("FDECEA"), F_BAD
         elif well.get("plan_status") == "not_planned":
-            status_cell.fill = PatternFill("solid", fgColor="FFF4D6")
-            status_cell.font = Font(name=FONT, size=10, bold=True, color="8A5300")
-    last = 4 + max(1, len(wells))
+            status.fill, status.font = _fill("FFF4D6"), Font(name=FONT, size=10, bold=True, color="8A5300")
     sheet.freeze_panes = "C5"
-    sheet.auto_filter.ref = f"A4:{get_column_letter(len(COLUMNS))}{last}"
+    sheet.auto_filter.ref = f"A4:{get_column_letter(len(COLUMNS))}{4 + max(1, len(wells))}"
     sheet.sheet_view.zoomScale = 90
     if not wells:
         sheet["A5"] = "Рейтинг пуст: загрузите данные ДАРС, ХИМИК, ЭРА ремонта и выполните дневной цикл."
@@ -201,49 +197,42 @@ def _rating_sheet(book: Workbook, wells: list[dict], generated: datetime) -> Non
 
 def _schedule_sheet(book: Workbook, wells: list[dict], today: date) -> None:
     sheet = book.create_sheet("График ППР")
-    sheet["A1"] = "График ППР (ДДО) — мероприятия по рейтингу на 12 недель"
-    sheet["A1"].font = F_TITLE
-    sheet["A2"] = ("Код мероприятия стоит в неделе плановой даты; светлая заливка — окно до крайнего "
-                   "срока; «!» — план позже срока. Скважины без мероприятий не показаны.")
-    sheet["A2"].font = F_NOTE
+    _title(sheet, "График ППР (ДДО) — мероприятия по рейтингу на 12 недель",
+           "Код мероприятия стоит в неделе плановой даты; светлая заливка — окно до крайнего срока; «!» — план "
+           "позже срока. Скважины без мероприятий не показаны.")
     heads = ["Место", "№ скважины", "Месторождение", "Индекс коррозии на НКТ", "Код", "Крайний срок", "План (ДДО)"]
     start = today - timedelta(days=today.weekday())
     weeks = [start + timedelta(days=7 * k) for k in range(12)]
     _head(sheet, 4, heads + [f"{week:%d.%m}" for week in weeks])
-    for column in range(1, len(heads) + 1):
-        sheet.cell(3, column).fill = FILL_HEAD
-    for k, week in enumerate(weeks):
-        cell = sheet.cell(3, len(heads) + 1 + k, f"Нед. {k + 1}")
-        cell.font, cell.fill, cell.alignment, cell.border = F_HEAD, FILL_GROUP, CENTER, BORDER
-        if week <= today < week + timedelta(days=7):
-            sheet.cell(4, len(heads) + 1 + k).fill = PatternFill("solid", fgColor=BLUE)
-        sheet.column_dimensions[get_column_letter(len(heads) + 1 + k)].width = 8.5
     for column, width in enumerate((7, 11, 16, 8, 7, 12, 12), start=1):
+        sheet.cell(3, column).fill = FILL_HEAD
         sheet.column_dimensions[get_column_letter(column)].width = width
+    for k, week in enumerate(weeks, start=len(heads) + 1):
+        _put(sheet, 3, k, f"Нед. {k - len(heads)}", F_HEAD, fill=FILL_GROUP)
+        if week <= today < week + timedelta(days=7):
+            sheet.cell(4, k).fill = _fill(BLUE)
+        sheet.column_dimensions[get_column_letter(k)].width = 8.5
     sheet.row_dimensions[4].height = 30
     planned = [well for well in wells if well.get("measure") not in (None, rating.MEASURE_NONE)]
-    for offset, well in enumerate(planned):
-        row = 5 + offset
+    for row, well in enumerate(planned, start=5):
         deadline, plan = _date(well.get("deadline")), _date(well.get("plan_date"))
         code = well.get("measure_code") or ""
-        values = [well.get("rank"), well["well_id"], well.get("field"), well.get("index"), code, deadline, plan]
-        for column, value in enumerate(values, start=1):
-            cell = sheet.cell(row, column, value)
-            cell.font, cell.border = F_BASE, BORDER
-            cell.alignment = LEFT if column == 3 else CENTER
-        sheet.cell(row, 6).number_format = sheet.cell(row, 7).number_format = "DD.MM.YYYY"
+        for column, value in enumerate([well.get("rank"), well["well_id"], well.get("field"), well.get("index"), code,
+                                        deadline, plan], start=1):
+            _put(sheet, row, column, value, align=LEFT if column == 3 else CENTER,
+                 number_format="DD.MM.YYYY" if column >= 6 else None)
         background, foreground = MEASURE_COLORS[well["measure"]]
-        for k, week in enumerate(weeks):
-            cell = sheet.cell(row, len(heads) + 1 + k)
+        for k, week in enumerate(weeks, start=len(heads) + 1):
+            cell = sheet.cell(row, k)
             cell.border, cell.alignment = BORDER, CENTER
             week_end = week + timedelta(days=6)
             if plan and week <= plan <= week_end:
                 late = deadline is not None and plan > deadline
                 cell.value = code + (" !" if late else "")
-                cell.fill = PatternFill("solid", fgColor="1A2430" if late else foreground)
+                cell.fill = _fill("1A2430" if late else foreground)
                 cell.font = Font(name=FONT, size=9, bold=True, color="FFFFFF")
             elif deadline and week_end >= today and week <= deadline:
-                cell.fill = PatternFill("solid", fgColor=background)
+                cell.fill = _fill(background)
     if not planned:
         sheet["A5"] = "Мероприятий по рейтингу нет."
         sheet["A5"].font = F_NOTE
@@ -253,16 +242,13 @@ def _schedule_sheet(book: Workbook, wells: list[dict], today: date) -> None:
 
 def _summary_sheet(book: Workbook, wells: list[dict], counts: dict) -> None:
     sheet = book.create_sheet("Сводка")
-    sheet["A1"] = "Сводка по рейтингу"
-    sheet["A1"].font = F_TITLE
+    _title(sheet, "Сводка по рейтингу")
 
     def rows(start: int, title: list[str], data: list[list]) -> int:
         _head(sheet, start, title)
-        for offset, values in enumerate(data, start=1):
+        for row, values in enumerate(data, start=start + 1):
             for column, value in enumerate(values, start=1):
-                cell = sheet.cell(start + offset, column, value)
-                cell.font, cell.border = (F_BASE if column == 1 else F_BOLD), BORDER
-                cell.alignment = LEFT if column == 1 else CENTER
+                _put(sheet, row, column, value, F_BASE if column == 1 else F_BOLD, LEFT if column == 1 else CENTER)
         return start + len(data) + 2
 
     measures = [rating.MEASURE_REPAIR, rating.MEASURE_ENGINEER, rating.MEASURE_UD, rating.MEASURE_NONE]
@@ -276,14 +262,12 @@ def _summary_sheet(book: Workbook, wells: list[dict], counts: dict) -> None:
         ["Мероприятие назначено, но не запланировано", counts.get("plan_missing", 0)],
     ])
     fields = sorted({well.get("field") or "не указано" for well in wells})
+    in_field = {name: [well for well in wells if (well.get("field") or "не указано") == name] for name in fields}
     nxt = rows(nxt, ["Месторождение", "ППР", "РИ", "УДР", "Всего"], [
-        [name] + [sum(1 for well in wells if (well.get("field") or "не указано") == name and well.get("measure") == key)
-                  for key in measures[:3]]
-        + [sum(1 for well in wells if (well.get("field") or "не указано") == name)]
-        for name in fields])
+        [name] + [sum(1 for well in in_field[name] if well.get("measure") == key) for key in measures[:3]]
+        + [len(in_field[name])] for name in fields])
     rows(nxt, ["Категория скважины", "Скважин"], [
-        [label, sum(1 for well in wells if well.get("category") == key)]
-        for key, label in rating.CATEGORY_LABELS.items()])
+        [label, sum(1 for well in wells if well.get("category") == key)] for key, label in rating.CATEGORY_LABELS.items()])
     sheet.column_dimensions["A"].width = 46
     for letter in "BCDE":
         sheet.column_dimensions[letter].width = 14
@@ -291,23 +275,19 @@ def _summary_sheet(book: Workbook, wells: list[dict], counts: dict) -> None:
 
 def _sources_sheet(book: Workbook, wells: list[dict]) -> None:
     sheet = book.create_sheet("Источники данных")
-    sheet["A1"] = "Откуда взяты значения рейтинга"
-    sheet["A1"].font = F_TITLE
+    _title(sheet, "Откуда взяты значения рейтинга")
     _head(sheet, 3, ["№ скважины", "Поле", "Источник", "Дата данных", "Пояснение"])
     row = 4
     for well in wells:
-        provenance = well.get("provenance") or {}
-        for key, item in provenance.items():
+        for key, item in (well.get("provenance") or {}).items():
             if not isinstance(item, dict):
                 continue
             when = item.get("date")
-            values = [well["well_id"], FIELD_LABELS.get(key, key), item.get("source") or "расчёт системы",
-                      datetime.fromisoformat(when).replace(tzinfo=None) if when else None, item.get("note")]
-            for column, value in enumerate(values, start=1):
-                cell = sheet.cell(row, column, value)
-                cell.font, cell.border = F_BASE, BORDER
-                cell.alignment = LEFT
-            sheet.cell(row, 4).number_format = "DD.MM.YYYY HH:MM"
+            for column, value in enumerate([well["well_id"], FIELD_LABELS.get(key, key),
+                                            item.get("source") or "расчёт системы",
+                                            datetime.fromisoformat(when).replace(tzinfo=None) if when else None,
+                                            item.get("note")], start=1):
+                _put(sheet, row, column, value, align=LEFT, number_format="DD.MM.YYYY HH:MM" if column == 4 else None)
             row += 1
     for letter, width in zip("ABCDE", (12, 24, 22, 17, 80)):
         sheet.column_dimensions[letter].width = width
@@ -316,27 +296,23 @@ def _sources_sheet(book: Workbook, wells: list[dict]) -> None:
 
 def _parameters_sheet(book: Workbook, payload: dict) -> None:
     sheet = book.create_sheet("Параметры")
-    sheet["A1"] = "Параметры рейтинга (настройки системы на момент выгрузки)"
-    sheet["A1"].font = F_TITLE
+    _title(sheet, "Параметры рейтинга (настройки системы на момент выгрузки)")
     settings_block = payload.get("settings", {})
     _head(sheet, 3, ["Мероприятие", "Код", "Индекс от", "Индекс до", "Срок, дней", "ЭРА ремонта"])
-    for offset, item in enumerate(settings_block.get("measures", []), start=4):
+    for row, item in enumerate(settings_block.get("measures", []), start=4):
         for column, value in enumerate([item["label"], item["code"], item["index_from"], item["index_to"],
                                         item.get("deadline_days"), "Включить" if item.get("era_required") else "—"],
                                        start=1):
-            cell = sheet.cell(offset, column, value)
-            cell.font, cell.border = F_BASE, BORDER
-            cell.alignment = LEFT if column == 1 else CENTER
+            _put(sheet, row, column, value, align=LEFT if column == 1 else CENTER)
     protection = settings_block.get("protection") or {}
+    sheet["A9"] = ("Индекс коррозии на НКТ = ОКРУГЛ(прогноз НТЦ × 100). Срок мероприятия "
+                   "отсчитывается от даты, когда скважине впервые назначено текущее мероприятие. "
+                   "Пороги и сроки задаются переменными MAI_RATING_*.")
     sheet["A10"] = (f"Защита (режим {protection.get('mode', '—')}): эффективна, если ингибитор ≥ "
                     f"{protection.get('min_inhibitor', '—')} при отклонении закачки < {protection.get('max_injection_dev', '—')} % "
                     f"или НКТ в защитном исполнении, и это подтверждено скоростью коррозии < {protection.get('max_rate', '—')} мм/год "
                     f"без коррозии в последнем акте. Тогда баллы среды учитываются с коэффициентом {protection.get('factor', '—')}.")
-    sheet["A10"].font = F_NOTE
-    sheet["A9"] = ("Индекс коррозии на НКТ = ОКРУГЛ(прогноз НТЦ × 100). Срок мероприятия "
-                   "отсчитывается от даты, когда скважине впервые назначено текущее мероприятие. "
-                   "Пороги и сроки задаются переменными MAI_RATING_*.")
-    sheet["A9"].font = F_NOTE
+    sheet["A9"].font = sheet["A10"].font = F_NOTE
     for letter, width in zip("ABCDEF", (40, 8, 11, 11, 11, 13)):
         sheet.column_dimensions[letter].width = width
 
