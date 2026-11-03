@@ -49,22 +49,36 @@ def test_data_gaps_name_the_fields_of_each_column():
               "demount_act": True, "demount_corrosion": None}
     ready = Readiness(unique_timestamps=8, recent_observations=8, current_signals=["water_cut_pct", "chlorides_mg_l"])
     gaps = {gap["key"]: gap for gap in _data_gaps(values, [old, fresh], {"water_cut_pct": 90, "chlorides_mg_l": 18000,
-                                                  "inhibitor_efficiency": 0.9}, ready, [], [], [], now)}
+                                                  "inhibitor_efficiency": 0.9}, ready, [], [], [], now, [])}
     # Filled columns are not listed, whichever source filled them.
     assert set(gaps) == {"category", "environment", "acts", "protection"}
     assert gaps["environment"]["note"] == "устарело: CO₂ (последнее значение 01.08.2026)"
     assert gaps["category"]["note"] == "нет: скорость коррозии"
     assert gaps["acts"]["note"] == "нет: признак коррозии в акте демонтажа"
     assert gaps["protection"]["note"] == "нет: отклонение закачки ингибитора"   # asked for only with an inhibitor
+    # The table names the values: CO₂, скорость коррозии…
+    assert [item["short"] for item in gaps["environment"]["items"]] == ["CO₂"]
 
-    # No forecast: what is short, by count and by the inputs the well has.
+    # No forecast: what is short, by indicator — the measurements of each, outdated and missing values.
     short = Readiness(unique_timestamps=2, recent_observations=2, current_signals=["water_cut_pct"])
-    empty = {gap["key"]: gap for gap in _data_gaps({}, [fresh], {}, short, [], [], [], now)}
+    empty = {gap["key"]: gap for gap in _data_gaps({}, [fresh], {}, short, [], [], [], now, [])}
     note = empty["forecast"]["note"]
-    assert note.startswith("модели не рассчитаны: замеров с разными датами — 2 из ")
-    # The index inputs by name: never measured, and measured but not current (with the date).
-    assert "(есть: обводнённость); нет значений: CO₂, отклонение закачки ингибитора, скорость коррозии, толщина стенки" in note
-    assert "устарели: хлориды (последнее значение 29.10.2026), эффективность ингибитора" in note
+    assert note.startswith("модели не рассчитаны: замеров с разными датами — 2 из 8 нужных; ")
+    assert ("замеров за последние 28 сут. — 2 из 8 нужных: обводнённость — 1, хлориды — 1, "
+            "эффективность ингибитора — 1") in note
+    assert "показателей за последние 7 сут. — 1 из 2 нужных (есть: обводнённость)" in note
+    assert "хлориды — последнее значение 29.10.2026, устарело" in note
+    assert "нет значений: CO₂, отклонение закачки ингибитора, скорость коррозии, толщина стенки" in note
+    shorts = [item["short"] for item in empty["forecast"]["items"]]
+    assert "обводнённость, хлориды, эффективность ингибитора" in shorts and "хлориды" in shorts
+
+    # Computed with the median of the math model in place of a missing input: the input is named.
+    imputed = [{"name": "CO₂", "unit": "%", "value": 2.3, "imputed": True},
+               {"name": "обводнённость", "unit": "%", "value": 90.0, "imputed": False}]
+    scored = {gap["key"]: gap for gap in _data_gaps({**values, "model_math": 0.3}, [old, fresh], {}, ready, [], [], [],
+                                                     now, imputed)}
+    assert scored["forecast"]["note"] == "мат. модель: CO₂ — нет значения, взята медиана 2,3 %"
+    assert [item["short"] for item in scored["forecast"]["items"]] == ["CO₂"]
     assert set(empty) == {"well", "forecast", "category", "environment", "sampling", "protection", "run_days", "liquid"}
     assert empty["run_days"]["note"] == "нет: дата спуска оборудования"
     assert empty["well"]["note"] == "нет: месторождение, статус работы (в работе или нет)"
@@ -94,7 +108,8 @@ def test_card_lists_every_ntc_rule(client):
     # The AI agent reads only the rules that fired, one line each.
     from app.core.proposal_agent import build_context
 
-    fired = build_context("DEMO-001")["rating"]["ntc_rules_fired"]
+    context = build_context("DEMO-001")
+    fired = context["rating"]["ntc_rules_fired"]
     assert len(fired) == sum(1 for rule in rules if rule["points"]) > 0
     assert all(line.endswith(f", +{rule['points']}") for line, rule in zip(fired, [r for r in rules if r["points"]]))
 
@@ -155,3 +170,23 @@ def test_ai_proposal_gaps_name_fields_and_are_not_repeated():
         "Нет данных о дате спуска оборудования, наработка не рассчитана",
         "Нет значения pH попутной воды.", "Нет значения pH попутной воды.", ""])
     assert merged == [*gaps, "Нет значения pH попутной воды."]
+
+
+@needs_db
+def test_card_and_export_show_both_models(client):
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+
+    well = _well(client, "DEMO-001")
+    inputs = well["provenance"]["model_math"]["inputs"]
+    assert well["model_math"] is not None and len(inputs) == 5
+    assert "Модель Кокса" in well["provenance"]["model_math"]["note"]
+    assert well["index"] == int(max(well["model_ntc"], well["model_math"]) * 100 + 0.5 + 1e-9)
+    listed = next(item for item in client.get("/api/v1/rating").json()["wells"] if item["well_id"] == "DEMO-001")
+    assert listed["model_math"] == well["model_math"] and "inputs" not in listed["provenance"]["model_math"]
+    book = load_workbook(BytesIO(client.get("/api/v1/rating/export.xlsx").content))
+    headers = [cell.value for cell in book["Рейтинг"][4]]
+    assert "Мат. модель (0–1)" in headers
+    row = next(row for row in book["Рейтинг"].iter_rows(min_row=5, values_only=True) if row[1] == "DEMO-001")
+    assert row[headers.index("Мат. модель (0–1)")] == well["model_math"]

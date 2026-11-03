@@ -1,4 +1,4 @@
-"""Well rating: priority index from the НТЦ score and the measure it implies.
+"""Well rating: priority index from the two forecasts (НТЦ rules, math model) and the measure it implies.
 
 The rules mirror the approved Excel rating (sheet «Параметры»):
   index >= repair_from          -> planned repair package, well goes to the ERA repair plan
@@ -35,7 +35,7 @@ CATEGORY_SHORT = {"corrosive": "Корр.", "medium": "Среднекорр.", "
 # (app.core.rating_builder._data_gaps names the fields and the dates of outdated values).
 GAP_LABELS = {
     "well": "Скважина: месторождение, статус",
-    "forecast": "Индекс и прогноз НТЦ",
+    "forecast": "Прогноз НТЦ / Мат. модель",
     "category": "Категория фонда",
     "environment": "Среда",
     "sampling": "Отбор проб",
@@ -92,9 +92,14 @@ def measures_catalog() -> list[dict[str, Any]]:
             for key in (MEASURE_REPAIR, MEASURE_ENGINEER, MEASURE_UD, MEASURE_NONE)]
 
 
-def priority_index(model_ntc: float | None) -> int | None:
-    """The НТЦ score (0–1) as the index 0–100, rounded half up like Excel's ROUND (not banker's)."""
-    return None if model_ntc is None else int(model_ntc * 100 + 0.5 + 1e-9)
+def priority_index(model_ntc: float | None, model_math: float | None = None) -> int | None:
+    """The forecasts of the НТЦ rules and the math model (0–1) as the index 0–100: their maximum
+    (MAI_RATING_COMBINE=max) or mean (mean) of those computed, rounded half up like Excel's ROUND."""
+    scores = [value for value in (model_ntc, model_math) if value is not None]
+    if not scores:
+        return None
+    combined = max(scores) if settings.rating_combine == "max" else sum(scores) / len(scores)
+    return int(combined * 100 + 0.5 + 1e-9)
 
 
 def measure_for(index: int | None) -> str | None:
@@ -146,9 +151,9 @@ def _as_date(value: Any) -> date | None:
 
 def evaluate(row: dict[str, Any]) -> dict[str, Any]:
     """Add the computed rating fields to one stored well_rating row."""
-    index = priority_index(row.get("model_ntc"))
+    index = priority_index(row.get("model_ntc"), row.get("model_math"))
     raw_ntc = row.get("model_ntc_raw")
-    index_raw = priority_index(raw_ntc if raw_ntc is not None else row.get("model_ntc"))
+    index_raw = priority_index(raw_ntc if raw_ntc is not None else row.get("model_ntc"), row.get("model_math"))
     measure = measure_for(index)
     # The deadline runs from the day the current measure was first assigned, so a daily
     # recomputation does not keep pushing it forward.

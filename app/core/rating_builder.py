@@ -5,8 +5,10 @@ documents):
   DARS   - field, operating status and the telemetry the НТЦ rules run on;
   ХИМИК  - laboratory samples (profile flag "lab_samples"), tonnage and НОО of the treatment;
   ERA    - equipment runs, demount and base-inspection acts with the corrosion finding.
-The НТЦ column is the rule score (app.core.rules) on the current values and trends, computed when
-the well has enough measurements (app.core.readiness). Every value is stored with its provenance
+The forecast has two models, computed when the well has enough measurements (app.core.readiness):
+the НТЦ rule score (app.core.rules) on the current values and trends, and the math model — the Cox
+failure probability (app.core.math_model). The index takes both (app.core.rating.priority_index).
+Every value is stored with its provenance
 (source, date, note) so the dashboard can show where it came from. Operator fields (plan, Промайн
 document, comment) are never written here.
 """
@@ -20,13 +22,13 @@ from zoneinfo import ZoneInfo
 
 from app import db
 from app.config import settings
-from app.core import rating, readiness
+from app.core import math_model, rating, readiness
 from app.core.excel_ingestion import load_profiles
 from app.core.features import Features, build_features
-from app.core.indicators import INDICATORS, MAIN
-from app.core.normalization import normalize_records
+from app.core.indicators import INDICATORS, MAIN, fmt
+from app.core.normalization import RANGE_LIMITS, normalize_records
 from app.core.rules import CRITICAL_POINTS, ENVIRONMENT_PREFIX, THRESHOLDS, Check, evaluate_rules, score
-from app.core.source_kinds import is_snapshot, lab_source_ids, snapshot_source_ids
+from app.core.source_kinds import is_snapshot, lab_source_ids, observations, snapshot_source_ids
 from app.schemas import TelemetryPoint
 
 logger = logging.getLogger(__name__)
@@ -148,7 +150,7 @@ ENVIRONMENT_RULES = (("co2_pct", "co2_high", "Повышенная доля CO�
 def _environment(features: Features) -> tuple[bool | None, list[str]]:
     """(corrosive, reasons); corrosive is None without any of the three values or their trends."""
     values, trends = features.current_values, features.trends_per_day
-    reasons = [f"{reason}: {values[field]:g}." for field, high, reason in ENVIRONMENT_RULES
+    reasons = [f"{reason}: {INDICATORS[field].show(values[field])}." for field, high, reason in ENVIRONMENT_RULES
                if values.get(field) is not None and values[field] >= THRESHOLDS[high]]
     if reasons:
         return True, reasons
@@ -167,16 +169,23 @@ def _fresh_window() -> timedelta:
     return max(timedelta(days=settings.rating_sampling_days), timedelta(hours=settings.max_telemetry_age_hours))
 
 
-def _measured(field: str, name: str, records: list[TelemetryPoint], current: dict, now: datetime,
+def _gap(field: str, short: str | None = None, last: str | None = None) -> dict:
+    """A missing value: the full text for the card, the names for the table ("" — none of its own), the date
+    of an outdated one."""
+    return {"field": field, "short": field if short is None else short, "last": last}
+
+
+def _measured(field: str, records: list[TelemetryPoint], current: dict, now: datetime,
               in_calculation: bool = True) -> dict | None:
-    """None when the well has a current value of the field; else {"field", "last"}: last is the date of
-    the latest value when there is one but it is too old to count, None when there never was one.
-    in_calculation: the value must also be among the current values the analysis used."""
+    """None when the well has a current value of the indicator; else the gap: with the date of the latest
+    value when there is one but it is too old to count. in_calculation: the value must also be among the
+    current values the analysis used."""
+    name = INDICATORS[field].name if field in INDICATORS else "дебит жидкости"
     _, point = _latest(records, field)
     if point is None:
-        return {"field": name, "last": None}
+        return _gap(name)
     if (in_calculation and current.get(field) is None) or now - _utc(point.timestamp) > _fresh_window():
-        return {"field": name, "last": f"{_local(point.timestamp):%d.%m.%Y}"}
+        return _gap(name, last=f"{_local(point.timestamp):%d.%m.%Y}")
     return None
 
 
@@ -187,28 +196,58 @@ def _fields_note(items: list[dict]) -> str:
     return "; ".join(parts)
 
 
-def _forecast_gap(values: dict, records: list[TelemetryPoint], ready: readiness.Readiness) -> dict | None:
-    """Why the index and the НТЦ forecast are empty, by count and by the inputs the well has."""
-    if values.get("model_ntc") is not None:
-        return None
-    reasons: list[str] = []
+def _recent_counts(records: list[TelemetryPoint]) -> dict[str, int]:
+    """Measurements with different times of each main indicator within the trend window (MAI_TREND_WINDOW_DAYS)."""
+    observed = observations(records)
+    if not observed:
+        return {}
+    latest = max(_utc(point.timestamp) for point in observed)
+    moments: dict[str, set[datetime]] = {field: set() for field in MAIN}
+    for point in observed:
+        moment = _utc(point.timestamp)
+        if latest - moment <= timedelta(days=settings.trend_window_days):
+            for field in MAIN:
+                value, (low, high) = getattr(point, field, None), RANGE_LIMITS[field]
+                if value is not None and low <= value <= high:
+                    moments[field].add(moment)
+    return {field: len(found) for field, found in moments.items() if found}
+
+
+def _forecast_gap(values: dict, records: list[TelemetryPoint], ready: readiness.Readiness,
+                  math_inputs: list[dict]) -> dict | None:
+    """What the forecast lacks, by indicator: when the models are not computed, too few measurements (with
+    the count of each indicator) or outdated values; when they are, the inputs the math model took the
+    median for."""
+    items: list[dict] = []
+    if values.get("model_ntc") is not None or values.get("model_math") is not None:
+        for item in math_inputs:
+            if item["imputed"]:
+                median = fmt(item["value"]) + (f" {item['unit']}" if item["unit"] else "")
+                items.append(_gap(f"{item['name']} — нет значения, взята медиана {median}", item["name"]))
+        return {"key": "forecast", "note": "мат. модель: " + "; ".join(item["field"] for item in items),
+                "items": items} if items else None
     if not records:
-        reasons.append("нет ни одного замера показателей")
+        items.append(_gap("нет ни одного замера показателей", "замеры показателей"))
     elif not ready.ready:
+        need = settings.min_trend_observations
         if ready.unique_timestamps < settings.min_telemetry_records:
-            reasons.append(f"замеров с разными датами — {ready.unique_timestamps} из {settings.min_telemetry_records} "
-                           "нужных")
-        if ready.recent_observations < settings.min_trend_observations:
-            reasons.append(f"замеров за последние {settings.trend_window_days} сут. — {ready.recent_observations} "
-                           f"из {settings.min_trend_observations} нужных")
+            items.append(_gap(f"замеров с разными датами — {ready.unique_timestamps} из "
+                              f"{settings.min_telemetry_records} нужных", ""))
+        if ready.recent_observations < need:
+            counts = _recent_counts(records)
+            names = [INDICATORS[field].name for field in counts]
+            items.append(_gap(f"замеров за последние {settings.trend_window_days} сут. — {ready.recent_observations} "
+                              f"из {need} нужных" + (": " + ", ".join(f"{INDICATORS[field].name} — {count}"
+                                                                     for field, count in counts.items()) if counts else ""),
+                              ", ".join(names) or "замеры показателей"))
         signals = ready.current_signals
         if len(signals) < settings.min_current_signals:
             present = [INDICATORS[field].name for field in signals]
-            reasons.append(f"показателей за последние {settings.max_forward_fill_days} сут. — "
-                           f"{len(signals)} из {settings.min_current_signals} нужных"
-                           + (f" (есть: {', '.join(present)})" if present else ""))
+            items.append(_gap(f"показателей за последние {settings.max_forward_fill_days} сут. — "
+                              f"{len(signals)} из {settings.min_current_signals} нужных"
+                              + (f" (есть: {', '.join(present)})" if present else ""), ""))
         # The index inputs by name: never measured, or measured but too long ago to count.
-        absent, old = [], []
+        absent = []
         for field in MAIN:
             if field in signals:
                 continue
@@ -216,22 +255,22 @@ def _forecast_gap(values: dict, records: list[TelemetryPoint], ready: readiness.
             if point is None:
                 absent.append(INDICATORS[field].name)
             elif len(signals) < settings.min_current_signals:
-                old.append(f"{INDICATORS[field].name} (последнее значение {_local(point.timestamp):%d.%m.%Y})")
+                items.append(_gap(f"{INDICATORS[field].name} — последнее значение {_local(point.timestamp):%d.%m.%Y}, "
+                                  "устарело", INDICATORS[field].name))
         if absent:
-            reasons.append("нет значений: " + ", ".join(absent))
-        if old:
-            reasons.append("устарели: " + ", ".join(old))
+            items.append(_gap("нет значений: " + ", ".join(absent), ", ".join(absent)))
         if ready.ahead_hours is not None:
-            reasons.append(f"Последнее измерение датировано будущим временем (+{ready.ahead_hours:.1f} ч.; "
-                           f"допустимо до {settings.max_future_skew_hours:g} ч.); проверьте часы и часовой пояс "
-                           "источника.")
-    note = ("модели не рассчитаны: " + "; ".join(reasons)) if reasons else "модели не рассчитаны: пересчитайте скважину"
-    return {"key": "forecast", "note": note, "items": [{"field": reason, "last": None} for reason in reasons]}
+            items.append(_gap(f"последнее измерение датировано будущим временем (+{fmt(ready.ahead_hours)} ч.; "
+                              f"допустимо до {fmt(settings.max_future_skew_hours)} ч.); проверьте часы и часовой пояс "
+                              "источника", "время замеров"))
+    note = ("модели не рассчитаны: " + "; ".join(item["field"] for item in items)) if items \
+        else "модели не рассчитаны: пересчитайте скважину"
+    return {"key": "forecast", "note": note, "items": items}
 
 
 def _data_gaps(values: dict, records: list[TelemetryPoint], current: dict, ready: readiness.Readiness,
                lab_points: list[TelemetryPoint], demounts: list[dict], base_inspections: list[dict],
-               now: datetime) -> list[dict]:
+               now: datetime, math_inputs: list[dict]) -> list[dict]:
     """«Полнота данных»: per column of the rating table, the values it shows that the well lacks —
     never received, or outdated (with the date of the last value). [{"key", "note", "items"}]."""
     gaps: list[dict] = []
@@ -240,53 +279,51 @@ def _data_gaps(values: dict, records: list[TelemetryPoint], current: dict, ready
         if items:
             gaps.append({"key": key, "note": note or _fields_note(items), "items": items})
 
-    add("well", ([] if values.get("field") else [{"field": "месторождение", "last": None}])
-        + ([] if values.get("in_operation") is not None else [{"field": "статус работы (в работе или нет)", "last": None}]))
-    forecast = _forecast_gap(values, records, ready)
+    add("well", ([] if values.get("field") else [_gap("месторождение")])
+        + ([] if values.get("in_operation") is not None else [_gap("статус работы (в работе или нет)", "статус работы")]))
+    forecast = _forecast_gap(values, records, ready, math_inputs)
     if forecast:
         gaps.append(forecast)
-    rate = _measured("corrosion_rate_mm_year", INDICATORS["corrosion_rate_mm_year"].name, records, current, now)
+    rate = _measured("corrosion_rate_mm_year", records, current, now)
     if values.get("category") is None:
-        add("category", [rate or {"field": "признаки коррозии", "last": None}],
+        add("category", [rate or _gap("признаки коррозии")],
             "не определена: нет оценки среды, скорости коррозии и актов с признаком коррозии")
     elif rate:
         add("category", [rate])
-    add("environment", [item for field in ENVIRONMENT_FIELDS
-                        if (item := _measured(field, INDICATORS[field].name, records, current, now))])
+    add("environment", [item for field in ENVIRONMENT_FIELDS if (item := _measured(field, records, current, now))])
     if values.get("sampling") is not True:
         last = f"{_local(lab_points[-1].timestamp):%d.%m.%Y}" if lab_points else None
-        add("sampling", [{"field": f"лабораторная проба за {settings.rating_sampling_days} сут.", "last": last}],
+        add("sampling", [_gap(f"лабораторная проба за {settings.rating_sampling_days} сут.", "лабораторная проба", last)],
             f"нет лабораторной пробы за {settings.rating_sampling_days} сут."
             + (f" (последняя — {last})" if last else " (проб нет)"))
     acts: list[dict] = []
     if demounts:
         last_demount = _utc(demounts[-1]["event_date"])
         if not any(_utc(event["event_date"]) >= last_demount for event in base_inspections):
-            acts.append({"field": f"акт разбора на базе после демонтажа {_local(last_demount):%d.%m.%Y}", "last": None})
-    for act, corrosion, name in (("demount_act", "demount_corrosion", "признак коррозии в акте демонтажа"),
+            acts.append(_gap(f"акт разбора на базе после демонтажа {_local(last_demount):%d.%m.%Y}", "акт разбора"))
+    for act, corrosion, text in (("demount_act", "demount_corrosion", "признак коррозии в акте демонтажа"),
                                  ("base_act", "base_corrosion", "признак коррозии в акте разбора на базе")):
         if values.get(act) and values.get(corrosion) is None:
-            acts.append({"field": name, "last": None})
+            acts.append(_gap(text, "признак коррозии в акте"))
     add("acts", acts)
     protection: list[dict] = []
     if not values.get("equipment"):
-        protection.append({"field": "спущенное оборудование (насос, НКТ, исполнение)", "last": None})
+        protection.append(_gap("спущенное оборудование (насос, НКТ, исполнение)", "спущенное оборудование"))
     if values.get("protection") is None:
-        protection.append(_measured("inhibitor_efficiency", INDICATORS["inhibitor_efficiency"].name, records, current, now)
-                          or {"field": INDICATORS["inhibitor_efficiency"].name, "last": None})
+        protection.append(_measured("inhibitor_efficiency", records, current, now)
+                          or _gap(INDICATORS["inhibitor_efficiency"].name))
     elif current.get("inhibitor_efficiency") is not None:
-        deviation = _measured("injection_deviation_pct", INDICATORS["injection_deviation_pct"].name, records, current, now)
+        deviation = _measured("injection_deviation_pct", records, current, now)
         if deviation:
             protection.append(deviation)
     if values.get("protection") == "unconfirmed" and rate:
         protection.append({**rate, "field": "скорость коррозии (подтверждение защиты)"})
     add("protection", protection)
     if values.get("installed_at") is None:
-        add("run_days", [{"field": "дата спуска оборудования", "last": None}])
-    liquid = [item for item in (_measured("liquid_rate_m3_day", "дебит жидкости", records, current, now,
-                                          in_calculation=False),) if item]
+        add("run_days", [_gap("дата спуска оборудования")])
+    liquid = [item for item in (_measured("liquid_rate_m3_day", records, current, now, in_calculation=False),) if item]
     if values.get("oil_pct") is None:
-        liquid.append({"field": "обводнённость (для доли нефти)", "last": None})
+        liquid.append(_gap("обводнённость (для доли нефти)", INDICATORS["water_cut_pct"].name))
     add("liquid", liquid)
     return gaps
 
@@ -310,9 +347,9 @@ def _ntc_score(checks: list[Check] | None, when: datetime, sources: _Sources,
         if settings.rating_protection_mode == "adjust":
             values["model_ntc"] = score(adjusted_points)
             note += (f" Защита эффективна: баллы среды ({env_points}) учтены с коэффициентом "
-                     f"{factor:g}, итого {adjusted_points:g} баллов.")
+                     f"{fmt(factor)}, итого {fmt(adjusted_points)} баллов.")
         else:
-            note += (f" Защита эффективна; с её учётом было бы {adjusted_points:g} баллов "
+            note += (f" Защита эффективна; с её учётом было бы {fmt(adjusted_points)} баллов "
                      "(режим MAI_RATING_PROTECTION_MODE=info, индекс не корректируется).")
     rules = [{"group": check.group, "title": check.title, "value": check.value, "condition": check.condition,
               "points": check.points, "reason": check.reason, "missing": check.missing} for check in checks]
@@ -373,7 +410,7 @@ def _reported(records: list[TelemetryPoint], passports: list[tuple[str, dict, da
     values["oil_pct"] = round(max(0.0, min(100.0, 100.0 - water_cut)), 1) if water_cut is not None else None
     if point is not None:
         prov["oil_pct"] = _prov(sources, _record_sources(point), point.timestamp,
-                                f"100 % − обводнённость {water_cut:g} %.")
+                                f"100 % − обводнённость {fmt(water_cut)} %.")
     return values, prov
 
 
@@ -489,7 +526,7 @@ def _condition(records: list[TelemetryPoint], prepared: Prepared | None, acts: d
                                          (environment is True, "коррозионная среда"),
                                          (acts.get("demount_corrosion") is True, "коррозия при демонтаже")) if flag]
         if rate is not None:
-            parts.append(f"скорость коррозии {rate:g} мм/год (порог {THRESHOLDS['corrosion_rate_high']:g})")
+            parts.append(f"скорость коррозии {fmt(rate)} мм/год (порог {fmt(THRESHOLDS['corrosion_rate_high'])})")
         prov["category"] = _prov(sources, None, None, "; ".join(parts) or "признаков коррозии нет")
     return values, prov, rate
 
@@ -505,13 +542,32 @@ def _protection(values: dict, prepared: Prepared | None, rate: float | None, sou
     return {"protection": protection}, {"protection": {**_prov(sources, None, when, note), "means": means}}
 
 
+def _math_score(features: Features, when: datetime, sources: _Sources) -> Part:
+    """The math model's failure probability; the inputs replaced by the median are named in the note
+    and the inputs themselves kept in the provenance for the well card."""
+    try:
+        forecast = math_model.predict(features.current_values, features.trends_per_day)
+    except math_model.Unavailable as exc:
+        return {"model_math": None}, {"model_math": _prov(
+            sources, None, when, f"Мат. модель недоступна: {exc}. Индекс считается по модели НТЦ.")}
+    note = (f"Модель Кокса ({forecast.version}): вероятность отказа за {forecast.horizon_days} сут. — "
+            f"{fmt(forecast.probability * 100)} %.")
+    if forecast.imputed:
+        note += " Нет значений, подставлена медиана: " + ", ".join(forecast.imputed) + "."
+    return {"model_math": forecast.probability}, {"model_math": {
+        **_prov(sources, None, when, note), "inputs": forecast.inputs,
+        "baseline_survival": forecast.baseline_survival, "horizon_days": forecast.horizon_days}}
+
+
 def _models(prepared: Prepared | None, ready: readiness.Readiness, protection: str | None,
             sources: _Sources) -> Part:
-    """The НТЦ forecast when the well has enough measurements (app.core.readiness)."""
+    """The НТЦ rules and the math model, when the well has enough measurements (app.core.readiness)."""
     if prepared is None or not ready.ready:
-        return {"model_ntc": None, "model_ntc_raw": None}, {}
-    return _ntc_score(evaluate_rules(prepared.features, prepared.normalized),
-                      prepared.features.latest_timestamp, sources, protection)
+        return {"model_ntc": None, "model_ntc_raw": None, "model_math": None}, {}
+    when = prepared.features.latest_timestamp
+    values, prov = _ntc_score(evaluate_rules(prepared.features, prepared.normalized), when, sources, protection)
+    math_values, math_prov = _math_score(prepared.features, when, sources)
+    return values | math_values, prov | math_prov
 
 
 def build_values(records: list[TelemetryPoint], events: list[dict], now: datetime | None = None,
@@ -542,7 +598,7 @@ def build_values(records: list[TelemetryPoint], events: list[dict], now: datetim
     # «Полнота данных»: per column of the rating, the values the well lacks (not the sources).
     current = prepared.features.current_values if prepared is not None else {}
     values["data_gaps"] = _data_gaps(values, records, current, ready, lab_points, by_kind["demount"],
-                                     by_kind["base_inspection"], now)
+                                     by_kind["base_inspection"], now, prov.get("model_math", {}).get("inputs") or [])
     return values, prov
 
 
@@ -570,19 +626,19 @@ def _assess_protection(values: dict, prepared: Prepared | None, rate: float | No
         measures.append(f"защитное исполнение: {values.get('equipment')}")
     if inhibitor is not None:
         if inhibitor >= min_inhibitor and (deviation is None or deviation < max_deviation):
-            measures.append(f"ингибитор {inhibitor:.2f}"
-                            + (f", отклонение закачки {deviation:.0f} %" if deviation is not None else ""))
+            measures.append(f"ингибитор {fmt(inhibitor)}"
+                            + (f", отклонение закачки {fmt(deviation)} %" if deviation is not None else ""))
         elif inhibitor < min_inhibitor:
-            problems.append(f"эффективность ингибитора {inhibitor:.2f} ниже {min_inhibitor:g}")
+            problems.append(f"эффективность ингибитора {fmt(inhibitor)} ниже {fmt(min_inhibitor)}")
         else:
-            problems.append(f"отклонение закачки {deviation:.0f} % (порог {max_deviation:g} %)")
+            problems.append(f"отклонение закачки {fmt(deviation)} % (порог {fmt(max_deviation)} %)")
     if not measures and not problems:
         return None, None
     if values.get("base_corrosion") is True or values.get("demount_corrosion") is True:
         problems.append("коррозия в последнем акте демонтажа или разбора")
     high_rate = THRESHOLDS["corrosion_rate_high"]
     if rate is not None and rate >= high_rate and measures:
-        problems.append(f"скорость коррозии {rate:.2f} мм/год при мерах защиты (порог {high_rate:g})")
+        problems.append(f"скорость коррозии {fmt(rate)} мм/год при мерах защиты (порог {fmt(high_rate)})")
     if problems:
         return "insufficient", "Защита недостаточна: " + "; ".join(problems) + (
             ". Меры: " + "; ".join(measures) + "." if measures else ".")
@@ -591,17 +647,17 @@ def _assess_protection(values: dict, prepared: Prepared | None, rate: float | No
                                "нет замера скорости коррозии. Подтвердите эффективность.")
     if rate >= max_rate:
         return "unconfirmed", ("Защита заявлена (" + "; ".join(measures) + f"), но скорость коррозии "
-                               f"{rate:.2f} мм/год не ниже порога подтверждения {max_rate:g}.")
+                               f"{fmt(rate)} мм/год не ниже порога подтверждения {fmt(max_rate)}.")
     return "effective", ("Защита эффективна: " + "; ".join(measures)
-                         + f"; скорость коррозии {rate:.2f} мм/год ниже {max_rate:g}.")
+                         + f"; скорость коррозии {fmt(rate)} мм/год ниже {fmt(max_rate)}.")
 
 
 def update(well_id: str) -> dict:
     """Recompute the well's rating from its stored data and store it; returns the stored row."""
     values, provenance = build_values(db.load_telemetry(well_id), db.load_history_events(well_id),
                                       passports=well_passports(well_id))
-    return db.save_computed_rating(well_id, values, provenance=provenance,
-                                   measure=rating.measure_for(rating.priority_index(values["model_ntc"])))
+    index = rating.priority_index(values["model_ntc"], values["model_math"])
+    return db.save_computed_rating(well_id, values, provenance=provenance, measure=rating.measure_for(index))
 
 
 def recompute_wells(well_ids: Iterable[str]) -> dict:

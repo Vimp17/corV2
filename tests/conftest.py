@@ -35,6 +35,8 @@ os.environ.update({
     "MAI_DOCS_STORAGE_DIR": str(_TMP / "documents"),
     "MAI_DOCS_INBOX_DIR": str(_TMP / "inbox"),
     "MAI_DOCS_RETRY_MINUTES": "1",
+    # The demonstration math model of the repository, whatever a developer's .env names.
+    "MAI_COX_MODEL_PATH": str(ROOT / "config" / "cox_model.json"),
 })
 (_TMP / "inbox").mkdir(parents=True, exist_ok=True)
 

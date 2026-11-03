@@ -12,6 +12,7 @@ from datetime import timedelta
 
 from app.config import settings
 from app.core.features import Features
+from app.core.indicators import fmt
 
 THRESHOLDS = {
     "water_cut_high": 75.0, "water_cut_critical": 90.0,
@@ -65,12 +66,12 @@ def assess_wall(values: dict) -> tuple[bool, str] | None:
         for critical, key in ((True, "wall_loss_critical"), (False, "wall_loss_warning")):
             if loss >= THRESHOLDS[key]:
                 return critical, (f"Потеряно {loss:.0%} исходной толщины стенки "
-                                  f"({wall:g} из {initial:g} мм); порог {THRESHOLDS[key]:.0%}.")
+                                  f"({fmt(wall)} из {fmt(initial)} мм); порог {THRESHOLDS[key]:.0%}.")
         return None
     for critical, key, text in ((True, "wall_thickness_critical", "Остаточная толщина достигла критического порога"),
                                 (False, "wall_thickness_warning", "Остаточная толщина ниже порога предупреждения")):
         if wall <= THRESHOLDS[key]:
-            return critical, f"{text} ({wall:g} мм); исходная толщина неизвестна, применён абсолютный порог."
+            return critical, f"{text} ({fmt(wall)} мм); исходная толщина неизвестна, применён абсолютный порог."
     return None
 
 
@@ -101,13 +102,13 @@ def evaluate_rules(features: Features, normalized: list[dict]) -> list[Check] | 
     def graded(field: str, title: str, unit: str, high: str, critical: str, ids: tuple[str, str],
                reasons: tuple[str, str], below: bool = False) -> None:
         value, sign = values.get(field), "<" if below else "≥"
-        condition = (f"{sign} {THRESHOLDS[high]:g}{unit} → +{POINTS['high']}; "
-                     f"{sign} {THRESHOLDS[critical]:g}{unit} → +{POINTS['critical']}")
+        condition = (f"{sign} {fmt(THRESHOLDS[high])}{unit} → +{POINTS['high']}; "
+                     f"{sign} {fmt(THRESHOLDS[critical])}{unit} → +{POINTS['critical']}")
         if value is None:
             checks.append(Check(ids[0], title, condition, None))
             return
         beyond = (lambda key: value < THRESHOLDS[key]) if below else (lambda key: value >= THRESHOLDS[key])
-        shown = f"{value:g}{unit}"
+        shown = f"{fmt(value)}{unit}"
         if beyond(critical):
             checks.append(Check(ids[1], title, condition, shown, POINTS["critical"], reasons[1]))
         elif beyond(high):
@@ -117,14 +118,14 @@ def evaluate_rules(features: Features, normalized: list[dict]) -> list[Check] | 
 
     def growth(rule_id: str, field: str, title: str, unit: str, limit: float, reason: str) -> None:
         slope = trends.get(field)
-        condition = (f"падение быстрее {-limit:g}{unit} в сутки" if limit < 0 else f"рост > {limit:g}{unit} в сутки"
+        condition = (f"падение быстрее {fmt(-limit)}{unit} в сутки" if limit < 0 else f"рост > {fmt(limit)}{unit} в сутки"
                      ) + f" за {settings.trend_window_days} сут. → +{POINTS['growth']}"
         if slope is None:
             checks.append(Check(rule_id, title, condition, None, missing=None if values.get(field) is None else (
                 f"мало замеров для тренда: нужно {settings.min_trend_observations} за {settings.trend_window_days} сут.")))
             return
         fired = slope < limit if limit < 0 else slope > limit
-        checks.append(Check(rule_id, title, condition, f"{slope:+.3g}{unit} в сутки",
+        checks.append(Check(rule_id, title, condition, f"{'+' if slope > 0 else ''}{fmt(slope)}{unit} в сутки",
                             POINTS["growth"] if fired else 0, reason if fired else None))
 
     def persistent(rule_id: str, field: str, title: str, condition: str, predicate, reason: str) -> None:
@@ -136,20 +137,20 @@ def evaluate_rules(features: Features, normalized: list[dict]) -> list[Check] | 
     graded("co2_pct", "Уровень CO₂", " %", "co2_high", "co2_critical", ("ENV_CO2_001", "ENV_CO2_003"),
            ("Повышенный CO₂", "Критический уровень CO₂"))
     growth("ENV_CO2_002", "co2_pct", "Рост CO₂", " %", 0.012, "Наблюдается рост CO₂")
-    persistent("ENV_CO2_004", "co2_pct", "CO₂ держится выше порога", f"≥ {THRESHOLDS['co2_high']:g} %",
+    persistent("ENV_CO2_004", "co2_pct", "CO₂ держится выше порога", f"≥ {fmt(THRESHOLDS['co2_high'])} %",
                lambda x: x >= THRESHOLDS["co2_high"], "CO₂ превышает высокий порог не менее 7 дней")
 
     graded("water_cut_pct", "Обводнённость", " %", "water_cut_high", "water_cut_critical",
            ("ENV_WATER_001", "ENV_WATER_003"), ("Высокая обводнённость", "Критическая обводнённость"))
     growth("ENV_WATER_002", "water_cut_pct", "Рост обводнённости", " %", 0.10, "Наблюдается рост обводнённости")
     persistent("ENV_WATER_004", "water_cut_pct", "Обводнённость держится выше порога",
-               f"≥ {THRESHOLDS['water_cut_high']:g} %", lambda x: x >= THRESHOLDS["water_cut_high"],
+               f"≥ {fmt(THRESHOLDS['water_cut_high'])} %", lambda x: x >= THRESHOLDS["water_cut_high"],
                "Высокая обводнённость сохраняется не менее 7 дней")
 
     graded("chlorides_mg_l", "Хлориды", " мг/л", "chlorides_high", "chlorides_critical", ("ENV_CL_001", "ENV_CL_002"),
            ("Высокое содержание хлоридов", "Критическое содержание хлоридов"))
     persistent("ENV_CL_003", "chlorides_mg_l", "Хлориды держатся выше порога",
-               f"≥ {THRESHOLDS['chlorides_high']:g} мг/л", lambda x: x >= THRESHOLDS["chlorides_high"],
+               f"≥ {fmt(THRESHOLDS['chlorides_high'])} мг/л", lambda x: x >= THRESHOLDS["chlorides_high"],
                "Высокое содержание хлоридов сохраняется не менее 7 дней")
 
     graded("inhibitor_efficiency", "Эффективность ингибитора", "", "inhibitor_low", "inhibitor_critical",
@@ -159,14 +160,14 @@ def evaluate_rules(features: Features, normalized: list[dict]) -> list[Check] | 
     growth("PROT_INH_003", "inhibitor_efficiency", "Снижение эффективности ингибитора", "", -0.0025,
            "Эффективность защиты устойчиво снижается")
     persistent("PROT_INH_004", "inhibitor_efficiency", "Ингибитор держится ниже порога",
-               f"< {THRESHOLDS['inhibitor_low']:g}", lambda x: x < THRESHOLDS["inhibitor_low"],
+               f"< {fmt(THRESHOLDS['inhibitor_low'])}", lambda x: x < THRESHOLDS["inhibitor_low"],
                "Недостаточная защита сохраняется не менее 7 дней")
 
     graded("injection_deviation_pct", "Отклонение закачки ингибитора", " %", "injection_dev_high",
            "injection_dev_critical", ("TECH_INJ_001", "TECH_INJ_002"),
            ("Отклонение режима закачки превышает порог", "Критическое отклонение режима закачки"))
     persistent("TECH_INJ_003", "injection_deviation_pct", "Отклонение закачки держится выше порога",
-               f"≥ {THRESHOLDS['injection_dev_high']:g} %", lambda x: x >= THRESHOLDS["injection_dev_high"],
+               f"≥ {fmt(THRESHOLDS['injection_dev_high'])} %", lambda x: x >= THRESHOLDS["injection_dev_high"],
                "Отклонение режима закачки сохраняется не менее 7 дней")
     issue = values.get("water_compatibility_issue")
     checks.append(Check("TECH_COMP_001", "Несовместимость вод", f"признак «да» → +{POINTS['compatibility']}",
@@ -177,15 +178,15 @@ def evaluate_rules(features: Features, normalized: list[dict]) -> list[Check] | 
     graded("corrosion_rate_mm_year", "Скорость коррозии", " мм/год", "corrosion_rate_high", "corrosion_rate_critical",
            ("CORR_RATE_001", "CORR_RATE_002"), ("Высокая скорость коррозии", "Критическая скорость коррозии"))
     persistent("CORR_RATE_003", "corrosion_rate_mm_year", "Скорость коррозии держится выше порога",
-               f"≥ {THRESHOLDS['corrosion_rate_high']:g} мм/год", lambda x: x >= THRESHOLDS["corrosion_rate_high"],
+               f"≥ {fmt(THRESHOLDS['corrosion_rate_high'])} мм/год", lambda x: x >= THRESHOLDS["corrosion_rate_high"],
                "Высокая скорость коррозии сохраняется не менее 7 дней")
     wall, initial = values.get("wall_thickness_mm"), values.get("initial_wall_thickness_mm")
     condition = (f"потеря ≥ {THRESHOLDS['wall_loss_warning']:.0%} начальной толщины (без неё ≤ "
-                 f"{THRESHOLDS['wall_thickness_warning']:g} мм) → +{POINTS['wall_warning']}; ≥ "
-                 f"{THRESHOLDS['wall_loss_critical']:.0%} (≤ {THRESHOLDS['wall_thickness_critical']:g} мм) → "
+                 f"{fmt(THRESHOLDS['wall_thickness_warning'])} мм) → +{POINTS['wall_warning']}; ≥ "
+                 f"{THRESHOLDS['wall_loss_critical']:.0%} (≤ {fmt(THRESHOLDS['wall_thickness_critical'])} мм) → "
                  f"+{POINTS['wall_critical']}")
-    shown = None if wall is None else (f"{wall:g} из {initial:g} мм, потеря {(initial - wall) / initial:.0%}"
-                                       if initial and initial >= wall else f"{wall:g} мм")
+    shown = None if wall is None else (f"{fmt(wall)} из {fmt(initial)} мм, потеря {(initial - wall) / initial:.0%}"
+                                       if initial and initial >= wall else f"{fmt(wall)} мм")
     thin = assess_wall(values)
     if thin is None:
         checks.append(Check("CORR_WALL_001", "Толщина стенки НКТ", condition, shown))

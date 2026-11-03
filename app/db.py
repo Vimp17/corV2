@@ -51,7 +51,7 @@ SCHEMA_LOCK_TIMEOUT_MS = 600_000
 # longer writes would make its inserts fail.
 OBSOLETE_TABLES = ("analysis_runs", "era_proposals")
 OBSOLETE_COLUMNS = {"monitor_jobs": ("horizon_days",),
-                    "well_rating": ("model_math", "skip_reason", "analysis_id")}
+                    "well_rating": ("skip_reason", "analysis_id")}
 # Unique constraints of SQL Server let one NULL in; rows without a valid source are keyed under this
 # sentinel, so identical rows are never stored twice.
 _UNSPECIFIED_SOURCE = "__unspecified__"
@@ -147,7 +147,7 @@ well_rating = Table(
     Column("demount_act", Boolean), Column("demount_corrosion", Boolean),
     Column("base_act", Boolean), Column("base_corrosion", Boolean),
     Column("category", NVarchar(32)),
-    Column("model_ntc", Float),
+    Column("model_ntc", Float), Column("model_math", Float),
     Column("plan_date", Date), Column("promine_status", NVarchar(32)),
     Column("comment", NVarchar(2000)),
     Column("assessed_at", UTCDateTime),
@@ -730,7 +730,7 @@ def get_monitor_job(job_id: str) -> dict | None:
 COMPUTED_RATING_FIELDS = (
     "field", "equipment", "in_operation", "sampling", "corrosive_environment", "tonnage_t",
     "noo_days", "demount_act", "demount_corrosion", "base_act", "base_corrosion", "category",
-    "model_ntc", "model_ntc_raw", "protection", "installed_at", "liquid_rate_m3_day", "oil_pct", "data_gaps",
+    "model_ntc", "model_ntc_raw", "model_math", "protection", "installed_at", "liquid_rate_m3_day", "oil_pct", "data_gaps",
 )
 # Edited by the operator; a recomputation never touches them.
 OPERATOR_RATING_FIELDS = ("plan_date", "promine_status", "comment")
@@ -780,10 +780,10 @@ def get_rating_row(well_id: str) -> dict | None:
     return _rating_row(row) if row else None
 
 
-def rating_scores() -> list[float | None]:
-    """The НТЦ score of every well: enough to rank one well without loading all rows."""
+def rating_scores() -> list[tuple[float | None, float | None]]:
+    """The НТЦ and math forecasts of every well: enough to rank one well without loading all rows."""
     with engine().connect() as conn:
-        return [row[0] for row in conn.execute(select(well_rating.c.model_ntc)).all()]
+        return [(row[0], row[1]) for row in conn.execute(select(well_rating.c.model_ntc, well_rating.c.model_math)).all()]
 
 
 def update_rating_row(well_id: str, values: dict) -> bool:

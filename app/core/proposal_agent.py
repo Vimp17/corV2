@@ -106,7 +106,7 @@ def build_context(well_id: str) -> dict | None:
     rules = (provenance.get("model_ntc") or {}).get("rules")
     notes = {key: (provenance.get(key) or {}).get("note") for key in
              ("category", "corrosive_environment", "protection", "demount_act", "demount_corrosion",
-              "base_act", "base_corrosion", "model_ntc", "sampling")}
+              "base_act", "base_corrosion", "model_ntc", "model_math", "sampling")}
     context: dict[str, Any] = {
         "well_id": well_id,
         "today": rating.local_today().isoformat(),
@@ -115,6 +115,7 @@ def build_context(well_id: str) -> dict | None:
             "measure_code": row.get("measure_code"), "measure": row.get("measure_label"),
             "deadline": row.get("deadline"), "plan_date": row.get("plan_date"),
             "forecast_ntc": row.get("model_ntc"),
+            "forecast_math": row.get("model_math"),
             # Only the rules that gave points, one line each: the model's context window may be small.
             "ntc_rules_fired": None if rules is None else [
                 f"{rule['title']} ({rule['value']}): {str(rule.get('reason') or '').rstrip('.')}, +{rule['points']}"

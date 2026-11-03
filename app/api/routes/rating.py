@@ -28,9 +28,11 @@ router = APIRouter(tags=["rating"])
 def _rated_wells() -> list[dict]:
     wells = rating.build_rating(db.list_rating_rows())
     for well in wells:
-        # The full AI proposal and the rule-by-rule НТЦ score are served with the well card only.
+        # The full AI proposal, the НТЦ rules and the math model inputs are served with the well card only.
         well.pop("ai_proposal", None)
-        (well.get("provenance") or {}).get("model_ntc", {}).pop("rules", None)
+        provenance = well.get("provenance") or {}
+        (provenance.get("model_ntc") or {}).pop("rules", None)
+        (provenance.get("model_math") or {}).pop("inputs", None)
     return wells
 
 
@@ -42,7 +44,7 @@ def rated_well(well_id: str) -> dict | None:
     well = rating.evaluate(row)
     index = well["index"]
     if index is not None:
-        others = (rating.priority_index(ntc) for ntc in db.rating_scores())
+        others = (rating.priority_index(ntc, math) for ntc, math in db.rating_scores())
         well["rank"] = 1 + sum(1 for value in others if value is not None and value > index)
     else:
         well["rank"] = None
@@ -81,6 +83,7 @@ def _payload() -> dict:
                            "max_rate": settings.rating_protection_max_rate,
                            "labels": rating.PROTECTION_LABELS},
             "thresholds": rating.thresholds(),
+            "models": {"combine": settings.rating_combine, "horizon_days": settings.rating_horizon_days},
             "measures": rating.measures_catalog(),
             "gap_labels": rating.GAP_LABELS,
             "ai_agent_configured": proposal_agent.configured(),

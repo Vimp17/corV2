@@ -62,6 +62,7 @@ COLUMNS = [
     ("category", "Категория скважины", 21, "Оценка"),
     ("protection", "Защита", 14, "Оценка"),
     ("model_ntc", "Прогноз НТЦ (0–1)", 10, "Оценка"),
+    ("model_math", "Мат. модель (0–1)", 10, "Оценка"),
     ("index_raw", "Индекс без учёта защиты", 11, "Оценка"),
     ("index", "Индекс коррозии на НКТ (0–100)", 11, "Оценка"),
     ("measure", "Мероприятие", 26, "Решение и график ППР"),
@@ -78,7 +79,7 @@ FIELD_LABELS = {key: header for key, header, *_ in COLUMNS}
 
 
 # Number formats and left-aligned (text) columns of «Рейтинг»; the rest are centred.
-NUMBER_FORMATS = {"model_ntc": "0.00", "tonnage_t": "0.0", "liquid_rate_m3_day": "0.0", "oil_pct": "0.0",
+NUMBER_FORMATS = {"model_ntc": "0.00", "model_math": "0.00", "tonnage_t": "0.0", "liquid_rate_m3_day": "0.0", "oil_pct": "0.0",
                   "noo_days": "0", "index": "0", "index_raw": "0", "oil_l_day": "0",
                   "deadline": "DD.MM.YYYY", "plan_date": "DD.MM.YYYY"}
 TEXT_COLUMNS = {"field", "equipment", "measure", "comment", "category", "action", "data_gaps"}
@@ -305,9 +306,11 @@ def _parameters_sheet(book: Workbook, payload: dict) -> None:
                                        start=1):
             _put(sheet, row, column, value, align=LEFT if column == 1 else CENTER)
     protection = settings_block.get("protection") or {}
-    sheet["A9"] = ("Индекс коррозии на НКТ = ОКРУГЛ(прогноз НТЦ × 100). Срок мероприятия "
-                   "отсчитывается от даты, когда скважине впервые назначено текущее мероприятие. "
-                   "Пороги и сроки задаются переменными MAI_RATING_*.")
+    models = settings_block.get("models") or {}
+    combined = "среднее" if models.get("combine") == "mean" else "максимум"
+    sheet["A9"] = (f"Индекс коррозии на НКТ = ОКРУГЛ({combined} из прогноза НТЦ и мат. модели × 100); мат. модель — "
+                   f"вероятность отказа за {models.get('horizon_days', '—')} сут. Срок мероприятия отсчитывается от "
+                   "даты, когда скважине впервые назначено текущее мероприятие. Пороги и сроки — переменные MAI_RATING_*.")
     sheet["A10"] = (f"Защита (режим {protection.get('mode', '—')}): эффективна, если ингибитор ≥ "
                     f"{protection.get('min_inhibitor', '—')} при отклонении закачки < {protection.get('max_injection_dev', '—')} % "
                     f"или НКТ в защитном исполнении, и это подтверждено скоростью коррозии < {protection.get('max_rate', '—')} мм/год "

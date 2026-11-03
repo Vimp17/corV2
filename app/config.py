@@ -93,6 +93,11 @@ class Settings:
     rating_repair_from: int = _int_env("MAI_RATING_REPAIR_FROM", "80", 1, 100)
     rating_ud_from: int = _int_env("MAI_RATING_UD_FROM", "40", 0, 100)
     rating_ud_to: int = _int_env("MAI_RATING_UD_TO", "60", 0, 100)
+    # The index from the two forecasts, the НТЦ rules and the math model: their maximum (max) or mean.
+    rating_combine: str = os.getenv("MAI_RATING_COMBINE", "max").strip().lower()
+    # Math model (Cox): the JSON artifact and the horizon of its failure probability.
+    cox_model_path: Path = _project_path("MAI_COX_MODEL_PATH", "./config/cox_model.json")
+    rating_horizon_days: int = _int_env("MAI_RATING_HORIZON_DAYS", "90", 1, 3650)
     # Days from the date the current measure was first assigned to its deadline.
     rating_days_repair: int = _int_env("MAI_RATING_DAYS_REPAIR", "14", 1, 365)
     rating_days_engineer: int = _int_env("MAI_RATING_DAYS_ENGINEER", "30", 1, 365)
@@ -159,6 +164,8 @@ class Settings:
 
 
 settings = Settings()
+if settings.rating_combine not in {"max", "mean"}:
+    raise ValueError("MAI_RATING_COMBINE must be max or mean")
 if settings.rating_protection_mode not in {"adjust", "info"}:
     raise ValueError("MAI_RATING_PROTECTION_MODE must be adjust or info")
 if not settings.rating_ud_from < settings.rating_ud_to < settings.rating_repair_from:

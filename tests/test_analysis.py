@@ -74,3 +74,63 @@ def test_every_rule_is_reported_fired_or_not():
     no_data = {check.title for check in checks if check.value is None}
     assert {"Эффективность ингибитора", "Скорость коррозии", "Толщина стенки НКТ", "Несовместимость вод"} <= no_data
     assert {check.group for check in checks} == {"Среда", "Защита", "Технология", "Коррозия"}
+
+
+def test_math_model_is_the_cox_probability_and_names_the_median_it_took():
+    import json
+    import math
+
+    from app.config import settings
+    from app.core import math_model
+
+    raw = json.loads(settings.cox_model_path.read_text(encoding="utf-8"))
+    values = {"corrosion_rate_mm_year": 0.65, "co2_pct": 5.6, "chlorides_mg_l": 24000, "inhibitor_efficiency": 0.82,
+              "water_cut_pct": 68}
+    forecast = math_model.predict(values, {})
+    linear = sum(raw["coefficients"][key] * (values[key] - raw["means"][key]) for key in raw["features"])
+    # S₀ at the horizon: the last baseline point not after it (survival only goes down).
+    survival = min(item["survival"] for item in raw["baseline_survival"] if item["time_days"] <= settings.rating_horizon_days)
+    assert survival == forecast.baseline_survival == 0.85
+    assert forecast.probability == round(1 - survival ** math.exp(linear), 4)
+    assert forecast.horizon_days == 90 and forecast.imputed == []
+    # A missing input takes the median of the model, and the forecast names it.
+    partial = math_model.predict({key: value for key, value in values.items() if key != "co2_pct"}, {})
+    assert partial.imputed == ["CO₂"]
+    assert next(item for item in partial.inputs if item["key"] == "co2_pct")["value"] == raw["medians"]["co2_pct"]
+
+
+def test_math_model_unavailable_without_its_file_or_beyond_its_horizon(monkeypatch, tmp_path):
+    import dataclasses
+
+    import pytest
+
+    from app.core import math_model
+
+    original = math_model.settings
+    monkeypatch.setattr(math_model, "settings", dataclasses.replace(original, cox_model_path=tmp_path / "none.json"))
+    with pytest.raises(math_model.Unavailable, match="нет файла модели"):
+        math_model.predict({}, {})
+    monkeypatch.setattr(math_model, "settings", dataclasses.replace(original, rating_horizon_days=3000))
+    with pytest.raises(math_model.Unavailable, match="горизонт 3000 сут."):
+        math_model.predict({}, {})
+
+
+def test_index_combines_the_two_forecasts(monkeypatch):
+    import dataclasses
+
+    from app.core import rating
+
+    assert rating.priority_index(0.5, 0.735) == 74          # the larger one by default (MAI_RATING_COMBINE=max)
+    assert rating.priority_index(None, 0.4) == 40 and rating.priority_index(None, None) is None
+    monkeypatch.setattr(rating, "settings", dataclasses.replace(rating.settings, rating_combine="mean"))
+    assert rating.priority_index(0.5, 0.7) == 60
+
+
+def test_numbers_are_shown_the_russian_way():
+    from app.core.indicators import INDICATORS, fmt, plural
+
+    assert [fmt(value) for value in (5.627, 23990, 0.012, -4.74e-05, 12.0, 0.35)] == [
+        "5,63", "23 990", "0,012", "−0,0000474", "12", "0,35"]
+    assert INDICATORS["chlorides_mg_l"].show(30000) == "30 000 мг/л"
+    assert [plural(count, "замер", "замера", "замеров") for count in (1, 3, 8, 11, 22)] == [
+        "замер", "замера", "замеров", "замеров", "замера"]
