@@ -95,8 +95,8 @@ class Settings:
     rating_ud_to: int = _int_env("MAI_RATING_UD_TO", "60", 0, 100)
     # The index from the two forecasts, the НТЦ rules and the math model: their maximum (max) or mean.
     rating_combine: str = os.getenv("MAI_RATING_COMBINE", "max").strip().lower()
-    # Math model (Cox): the JSON artifact and the horizon of its failure probability.
-    cox_model_path: Path = _project_path("MAI_COX_MODEL_PATH", "./config/cox_model.json")
+    # Math model: its JSON file and the horizon of its failure probability.
+    math_model_path: Path = _project_path("MAI_MATH_MODEL_PATH", "./config/math_model.json")
     rating_horizon_days: int = _int_env("MAI_RATING_HORIZON_DAYS", "90", 1, 3650)
     # Days from the date the current measure was first assigned to its deadline.
     rating_days_repair: int = _int_env("MAI_RATING_DAYS_REPAIR", "14", 1, 365)

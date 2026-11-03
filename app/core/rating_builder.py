@@ -6,7 +6,7 @@ documents):
   ХИМИК  - laboratory samples (profile flag "lab_samples"), tonnage and НОО of the treatment;
   ERA    - equipment runs, demount and base-inspection acts with the corrosion finding.
 The forecast has two models, computed when the well has enough measurements (app.core.readiness):
-the НТЦ rule score (app.core.rules) on the current values and trends, and the math model — the Cox
+the НТЦ rule score (app.core.rules) on the current values and trends, and the math model — the
 failure probability (app.core.math_model). The index takes both (app.core.rating.priority_index).
 Every value is stored with its provenance
 (source, date, note) so the dashboard can show where it came from. Operator fields (plan, Промайн
@@ -550,7 +550,7 @@ def _math_score(features: Features, when: datetime, sources: _Sources) -> Part:
     except math_model.Unavailable as exc:
         return {"model_math": None}, {"model_math": _prov(
             sources, None, when, f"Мат. модель недоступна: {exc}. Индекс считается по модели НТЦ.")}
-    note = (f"Модель Кокса ({forecast.version}): вероятность отказа за {forecast.horizon_days} сут. — "
+    note = (f"Математическая модель ({forecast.version}): вероятность отказа за {forecast.horizon_days} сут. — "
             f"{fmt(forecast.probability * 100)} %.")
     if forecast.imputed:
         note += " Нет значений, подставлена медиана: " + ", ".join(forecast.imputed) + "."

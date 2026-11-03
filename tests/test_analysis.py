@@ -76,14 +76,14 @@ def test_every_rule_is_reported_fired_or_not():
     assert {check.group for check in checks} == {"Среда", "Защита", "Технология", "Коррозия"}
 
 
-def test_math_model_is_the_cox_probability_and_names_the_median_it_took():
+def test_math_model_probability_and_the_median_it_took():
     import json
     import math
 
     from app.config import settings
     from app.core import math_model
 
-    raw = json.loads(settings.cox_model_path.read_text(encoding="utf-8"))
+    raw = json.loads(settings.math_model_path.read_text(encoding="utf-8"))
     values = {"corrosion_rate_mm_year": 0.65, "co2_pct": 5.6, "chlorides_mg_l": 24000, "inhibitor_efficiency": 0.82,
               "water_cut_pct": 68}
     forecast = math_model.predict(values, {})
@@ -107,7 +107,7 @@ def test_math_model_unavailable_without_its_file_or_beyond_its_horizon(monkeypat
     from app.core import math_model
 
     original = math_model.settings
-    monkeypatch.setattr(math_model, "settings", dataclasses.replace(original, cox_model_path=tmp_path / "none.json"))
+    monkeypatch.setattr(math_model, "settings", dataclasses.replace(original, math_model_path=tmp_path / "none.json"))
     with pytest.raises(math_model.Unavailable, match="нет файла модели"):
         math_model.predict({}, {})
     monkeypatch.setattr(math_model, "settings", dataclasses.replace(original, rating_horizon_days=3000))

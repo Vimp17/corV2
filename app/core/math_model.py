@@ -1,10 +1,10 @@
-"""Мат. модель: the Cox proportional-hazards probability of a tubing failure within the horizon.
+"""Мат. модель (математическая модель): the probability of a tubing failure within the horizon.
 
-The model is a JSON artifact (MAI_COX_MODEL_PATH; config/cox_model.json is a DEMONSTRATION model with
+The model is a JSON file (MAI_MATH_MODEL_PATH; config/math_model.json is a DEMONSTRATION model with
 hand-picked coefficients, not trained on real failures): its inputs (indicator keys, «<key>_trend» for
 the trend per day), their coefficients β, means and medians, and the baseline survival S₀(t). The
 probability over the horizon h (MAI_RATING_HORIZON_DAYS) is 1 − S₀(h)^exp(Σ β·(x − mean)). An input
-the well has no current value of takes the median of the artifact, and the forecast names it.
+the well has no current value of takes the median of the model, and the forecast names it.
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ class Unavailable(RuntimeError):
 
 
 @dataclass(frozen=True)
-class CoxModel:
+class Model:
     version: str
     inputs: tuple[str, ...]
     coefficients: dict[str, float]
@@ -64,7 +64,7 @@ def _finite(raw: dict, key: str) -> float:
 
 
 @lru_cache(maxsize=4)
-def _read(path: str, modified: int) -> CoxModel:
+def _read(path: str, modified: int) -> Model:
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
     inputs = tuple(raw["features"])
     for key in inputs:
@@ -75,18 +75,18 @@ def _read(path: str, modified: int) -> CoxModel:
     if not inputs or not baseline or any(not 0 <= survival <= 1 or days < 0 for days, survival in baseline) or any(
             later[1] > earlier[1] for earlier, later in zip(baseline, baseline[1:])):
         raise ValueError("inputs and a non-increasing baseline_survival between 0 and 1 are required")
-    return CoxModel(version=str(raw.get("model_version", "1.0")), inputs=inputs,
+    return Model(version=str(raw.get("model_version", "1.0")), inputs=inputs,
                     coefficients={key: _finite(raw["coefficients"], key) for key in inputs},
                     means={key: _finite(raw["means"], key) for key in inputs},
                     medians={key: _finite(raw["medians"], key) for key in inputs}, baseline=baseline)
 
 
-def load() -> CoxModel:
-    path = settings.cox_model_path
+def load() -> Model:
+    path = settings.math_model_path
     try:
         return _read(str(path), path.stat().st_mtime_ns)
     except FileNotFoundError:
-        raise Unavailable(f"нет файла модели {path.name} (MAI_COX_MODEL_PATH)") from None
+        raise Unavailable(f"нет файла модели {path.name} (MAI_MATH_MODEL_PATH)") from None
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise Unavailable(f"файл модели {path.name} не читается: {exc}") from None
 

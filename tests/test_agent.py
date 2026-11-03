@@ -181,7 +181,7 @@ def test_card_and_export_show_both_models(client):
     well = _well(client, "DEMO-001")
     inputs = well["provenance"]["model_math"]["inputs"]
     assert well["model_math"] is not None and len(inputs) == 5
-    assert "Модель Кокса" in well["provenance"]["model_math"]["note"]
+    assert well["provenance"]["model_math"]["note"].startswith("Математическая модель")
     assert well["index"] == int(max(well["model_ntc"], well["model_math"]) * 100 + 0.5 + 1e-9)
     listed = next(item for item in client.get("/api/v1/rating").json()["wells"] if item["well_id"] == "DEMO-001")
     assert listed["model_math"] == well["model_math"] and "inputs" not in listed["provenance"]["model_math"]
