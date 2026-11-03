@@ -13,19 +13,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from app.config import settings
+from app.core.indicators import INDICATORS
 from app.core.normalization import RANGE_LIMITS, as_utc
 from app.core.source_kinds import observations
 from app.schemas import TelemetryPoint
-
-# Model inputs by name; the first MAIN_SIGNALS are measured routinely, the rest are rare.
-SIGNAL_NAMES = {
-    "water_cut_pct": "обводнённость", "co2_pct": "CO₂", "chlorides_mg_l": "хлориды",
-    "inhibitor_efficiency": "эффективность ингибитора", "injection_deviation_pct": "отклонение закачки",
-    "corrosion_rate_mm_year": "скорость коррозии", "wall_thickness_mm": "толщина стенки",
-    "initial_wall_thickness_mm": "начальная толщина стенки", "metal_loss_mm": "потеря металла",
-    "corrosion_load": "коррозионная нагрузка",
-}
-MAIN_SIGNALS = 7
 
 
 @dataclass
@@ -55,12 +46,12 @@ def assess(records: list[TelemetryPoint]) -> Readiness:
         if latest - moment <= timedelta(days=settings.trend_window_days):
             recent.add(moment)
         if latest - moment <= timedelta(days=settings.max_forward_fill_days):
-            for field in SIGNAL_NAMES:
+            for field in INDICATORS:
                 value = getattr(point, field)
                 low, high = RANGE_LIMITS[field]
                 if value is not None and low <= value <= high:
                     current.add(field)
     ahead = (latest - datetime.now(timezone.utc)).total_seconds() / 3600 if latest is not None else None
     return Readiness(unique_timestamps=len(set(moments)), recent_observations=len(recent),
-                     current_signals=[field for field in SIGNAL_NAMES if field in current],
+                     current_signals=[field for field in INDICATORS if field in current],
                      ahead_hours=ahead if ahead is not None and ahead > settings.max_future_skew_hours else None)

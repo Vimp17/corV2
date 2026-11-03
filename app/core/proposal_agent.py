@@ -17,17 +17,11 @@ from typing import Any
 from app import db
 from app.config import settings
 from app.core import llm, proposal_language, rating
+from app.core.indicators import INDICATORS, MAIN
 
 logger = logging.getLogger(__name__)
 
 MEASURE_CODES = ("ППР", "РИ", "УДР", "—")
-LAB_FIELDS = ("water_cut_pct", "co2_pct", "chlorides_mg_l", "inhibitor_efficiency", "injection_deviation_pct",
-              "corrosion_rate_mm_year", "wall_thickness_mm")
-FIELD_LABELS = {
-    "water_cut_pct": "обводнённость, %", "co2_pct": "CO₂, %", "chlorides_mg_l": "хлориды, мг/л",
-    "inhibitor_efficiency": "эффективность ингибитора (доля)", "injection_deviation_pct": "отклонение закачки, %",
-    "corrosion_rate_mm_year": "скорость коррозии, мм/год", "wall_thickness_mm": "толщина стенки, мм",
-}
 
 SYSTEM_PROMPT = (
     "Ты — инженер-технолог по защите скважинного оборудования от коррозии. По данным одной скважины "
@@ -112,7 +106,7 @@ def build_context(well_id: str) -> dict | None:
     rules = (provenance.get("model_ntc") or {}).get("rules")
     notes = {key: (provenance.get(key) or {}).get("note") for key in
              ("category", "corrosive_environment", "protection", "demount_act", "demount_corrosion",
-              "base_act", "base_corrosion", "model_ntc", "sampling")}
+              "base_act", "base_corrosion", "model_ntc", "model_math", "sampling")}
     context: dict[str, Any] = {
         "well_id": well_id,
         "today": rating.local_today().isoformat(),
@@ -121,6 +115,7 @@ def build_context(well_id: str) -> dict | None:
             "measure_code": row.get("measure_code"), "measure": row.get("measure_label"),
             "deadline": row.get("deadline"), "plan_date": row.get("plan_date"),
             "forecast_ntc": row.get("model_ntc"),
+            "forecast_math": row.get("model_math"),
             # Only the rules that gave points, one line each: the model's context window may be small.
             "ntc_rules_fired": None if rules is None else [
                 f"{rule['title']} ({rule['value']}): {str(rule.get('reason') or '').rstrip('.')}, +{rule['points']}"
@@ -157,7 +152,7 @@ def build_context(well_id: str) -> dict | None:
 
     samples, latest = [], {}
     for point in db.load_telemetry(well_id):
-        values = {FIELD_LABELS[name]: getattr(point, name) for name in LAB_FIELDS if getattr(point, name, None) is not None}
+        values = {INDICATORS[name].label: getattr(point, name) for name in MAIN if getattr(point, name, None) is not None}
         for name, value in values.items():
             latest[name] = value
         point_sources = set(str(getattr(point, "source_id", "") or "").split("+"))

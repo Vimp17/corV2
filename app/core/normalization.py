@@ -2,23 +2,12 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from app.core.indicators import INDICATORS
 from app.core.source_kinds import is_snapshot, point_sources
 from app.schemas import TelemetryPoint
 
-# Physical sanity bounds inherited from the V3.0 demonstration notebook: a value outside them is not
-# used. They are data-quality bounds, not corrosion intervention limits.
-RANGE_LIMITS: dict[str, tuple[float, float]] = {
-    "water_cut_pct": (0.0, 100.0),
-    "co2_pct": (0.0, 8.0),
-    "chlorides_mg_l": (0.0, 80000.0),
-    "inhibitor_efficiency": (0.0, 1.2),
-    "injection_deviation_pct": (0.0, 60.0),
-    "corrosion_rate_mm_year": (0.0, 1.5),
-    "wall_thickness_mm": (0.8, 14.0),
-    "initial_wall_thickness_mm": (0.8, 14.0),
-    "metal_loss_mm": (0.0, 14.0),
-    "corrosion_load": (0.02, 3.0),
-}
+# A value outside the sanity bounds of its indicator (app.core.indicators) is not used.
+RANGE_LIMITS: dict[str, tuple[float, float]] = {key: (item.low, item.high) for key, item in INDICATORS.items()}
 
 
 def as_utc(value: datetime) -> datetime:

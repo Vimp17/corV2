@@ -106,7 +106,7 @@
     /* The table fits the window: no inner scroll, compact type, columns share the width.
        All 13 columns from 960 px of table width (a 1024 px window); narrower (tablet, phone) — a card per well. */
     .table-box { container-type:inline-size }
-    .grid-row { display:grid; grid-template-columns:38px minmax(76px,.9fr) 42px minmax(80px,1fr) minmax(100px,2fr) minmax(70px,1.1fr) minmax(70px,.9fr) minmax(70px,.9fr) minmax(70px,.9fr) minmax(84px,1.3fr) 46px minmax(72px,1fr) minmax(76px,1fr); align-items:center; column-gap:5px; padding:0 8px }
+    .grid-row { display:grid; grid-template-columns:38px minmax(76px,.9fr) 42px minmax(80px,1fr) minmax(100px,2fr) minmax(70px,1.1fr) minmax(70px,.9fr) minmax(70px,.9fr) minmax(70px,.9fr) minmax(84px,1.3fr) 46px minmax(72px,1fr) minmax(96px,1.2fr); align-items:center; column-gap:5px; padding:0 8px }
     .grid-row > div { min-width:0; overflow-wrap:anywhere }
     .table-inner { min-width:0 }
     .thead-wrap { top:calc(var(--appbar-h) + var(--navstrip-h, 0px)) }
@@ -131,7 +131,8 @@
     }
     .fc { display:flex; flex-direction:column; gap:3px }
     .fc .barline { grid-template-columns:26px minmax(16px,1fr) 28px; gap:4px }
-    .gapbox { display:inline-flex; flex-direction:column; gap:1px; max-width:100%; box-sizing:border-box; overflow-wrap:anywhere; padding:3px 6px; border:1.5px solid #E08A1E; border-radius:6px; background:#FFF8EC; color:#8A4B00; font-size:12px; font-weight:600; line-height:1.3 }
+    .gapbox .names { font-size:11px; font-weight:500 }
+    .gapbox { display:inline-flex; flex-direction:column; gap:1px; max-width:100%; box-sizing:border-box; overflow-wrap:break-word; hyphens:auto; padding:3px 6px; border:1.5px solid #E08A1E; border-radius:6px; background:#FFF8EC; color:#8A4B00; font-size:12px; font-weight:600; line-height:1.3 }
     .okmark { display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; border-radius:50%; background:var(--none-bg); color:var(--none); font-size:16px; font-weight:700 }
     .protline { font-size:11px; font-weight:600 }
     .protline.yes { color:var(--none) } .protline.no { color:var(--muted) }
@@ -162,6 +163,7 @@
     .wellbtn:hover { color:var(--blue); text-decoration-color:var(--blue) }
     .idxnum.repair { color:var(--repair) } .idxnum.engineer { color:var(--engineer) } .idxnum.ud { color:var(--ud) } .idxnum.none { color:var(--none) } .idxnum.unscored { color:var(--muted) }
     .bars { display:flex; flex-direction:column; gap:4px; flex:1; min-width:0 }
+    .drawer-body > .bars { flex:none }  /* in the card: as tall as its content, also on a tall screen */
     .barline { display:grid; grid-template-columns:28px minmax(0,1fr) 30px; align-items:center; gap:6px; font-size:11px; color:var(--muted) }
     .bar { height:6px; background:#E5EAF0; border-radius:3px; overflow:hidden }
     .bar span { display:block; height:100%; background:var(--navy-3); border-radius:3px }
@@ -350,7 +352,7 @@
       <div class="page-head">
         <div>
           <h1>Рейтинг скважин</h1>
-          <div class="sub" id="ratingSub">Индекс коррозии на НКТ 0–100 — прогноз НТЦ × 100. По индексу рейтинг предлагает мероприятие.</div>
+          <div class="sub" id="ratingSub">Индекс коррозии на НКТ 0–100 — большее из прогнозов НТЦ и мат. модели × 100. По индексу рейтинг предлагает мероприятие.</div>
           <div class="datastate" id="dataState"></div>
         </div>
       </div>
@@ -379,7 +381,7 @@
         <div class="table-box"><div class="table-inner">
           <div class="thead-wrap">
             <div class="grid-row thead" role="row">
-              <div>Место</div><div>Скважина</div><div>Индекс корро&shy;зии на НКТ</div><div>Прогноз НТЦ</div><div>Мероприятие и предложение</div><div>Категория фонда</div>
+              <div>Место</div><div>Скважина</div><div>Индекс корро&shy;зии на НКТ</div><div>Прогноз НТЦ / Мат.</div><div>Мероприятие и предложение</div><div>Категория фонда</div>
               <div>Среда</div><div title="Последний акт из истории ремонтов (ЭРА ремонта, документы) — исторические данные, а не текущее состояние скважины">Демонтаж<span class="hsub">исторические данные</span></div><div title="Последний акт из истории ремонтов (ЭРА ремонта, документы) — исторические данные, а не текущее состояние скважины">Разбор на базе<span class="hsub">исторические данные</span></div><div>Оборудование и защита</div>
               <div>Нара&shy;ботка, сут</div><div>Жидкость, м³ / нефть, л (%)</div><div>Полнота данных</div>
             </div>
@@ -557,7 +559,7 @@
     }
 
     // «Полнота данных» by column of the table (the backend sends the same labels in settings.gap_labels).
-    const GAP_FALLBACK = { well: 'Скважина: месторождение, статус', forecast: 'Индекс и прогноз НТЦ', category: 'Категория фонда',
+    const GAP_FALLBACK = { well: 'Скважина: месторождение, статус', forecast: 'Прогноз НТЦ / Мат. модель', category: 'Категория фонда',
       environment: 'Среда', sampling: 'Отбор проб', acts: 'Демонтаж и разбор', protection: 'Оборудование и защита', run_days: 'Наработка',
       liquid: 'Жидкость / нефть' };
     const GAP_SHORT = { well: 'Скважина', forecast: 'Прогноз', category: 'Категория', environment: 'Среда', sampling: 'Проба', acts: 'Акты',
@@ -688,8 +690,11 @@
     function gapsCell(w) {
       const gaps = w.data_gaps || [];
       if (!gaps.length) return el('span', { class: 'okmark', title: 'Все столбцы рейтинга заполнены актуальными значениями', 'aria-label': 'Данные полные', text: '✓' });
-      return el('div', { class: 'gapbox', title: gaps.map(gapLine).join('\n') },
-        el('span', { text: 'Нет данных:' }), el('span', { text: gaps.map(g => GAP_SHORT[g.key] || g.key).join(', ') }));
+      // The values by name (CO₂, акт разбора…); rows computed before the names were kept show the columns.
+      const names = [...new Set(gaps.flatMap(g => (g.items || []).flatMap(i => (i.short ?? '').split(', '))).filter(Boolean))];
+      const shown = names.length ? names.slice(0, 3).join(', ') + (names.length > 3 ? ` и ещё ${names.length - 3}` : '')
+        : gaps.map(g => GAP_SHORT[g.key] || g.key).join(', ');
+      return el('div', { class: 'gapbox', title: gaps.map(gapLine).join('\n') }, el('span', { text: 'Нет данных:' }), el('span', { class: 'names', text: shown }));
     }
 
     function renderTable() {
@@ -718,7 +723,7 @@
           el('div', { style: 'display:flex; flex-direction:column' },
             el('strong', { class: `idxnum ${key}`, style: 'font-size:18px; line-height:1.1; font-variant-numeric:tabular-nums', text: w.index ?? '—' }),
             w.protection_adjusted ? el('span', { class: 'sub', style: 'font-size:10px; line-height:1.2', title: `Без учёта защиты: ${w.index_raw}`, text: `было ${w.index_raw}` }) : null),
-          el('div', { 'data-label': 'Прогноз НТЦ' }, el('div', { class: 'fc' }, barLine('НТЦ', w.model_ntc, ''))),
+          el('div', { 'data-label': 'Прогноз НТЦ / Мат.' }, el('div', { class: 'fc' }, barLine('НТЦ', w.model_ntc, ''), barLine('Мат.', w.model_math, 'm'))),
           el('div', { 'data-label': 'Мероприятие' }, el('div', { style: 'display:flex; flex-direction:column; align-items:flex-start; gap:2px' },
             el('span', { class: `mchip ${key}`, text: w.measure ? (w.measure === 'none' ? 'Не требуются' : w.measure_code) : 'Нет оценки' }),
             el('span', { style: 'font-size:11px', text: w.action || '' }))),
@@ -754,7 +759,7 @@
       return el('div', { class: 'barline', style: wide ? 'grid-template-columns:110px minmax(0,1fr) 34px' : null },
         el('span', { text: label }),
         el('div', { class: `bar ${cls}` }, el('span', { style: `width:${pct}%` })),
-        el('span', { class: 'num', text: value === null || value === undefined ? '—' : value.toFixed(2) }));
+        el('span', { class: 'num', text: fmtNum(value, 2) }));
     }
 
     // ---------------------------------------------------------------- render: ППР schedule
@@ -887,7 +892,8 @@
     function overviewTab(w, key) {
       const body = [];
       const blocks = cardBlocks(w);
-      body.push(el('div', { class: 'bars' }, barLine('Прогноз НТЦ', w.model_ntc, '', true), provLine(w, 'model_ntc'), blocks.rules));
+      body.push(el('div', { class: 'bars' }, barLine('Прогноз НТЦ', w.model_ntc, '', true), provLine(w, 'model_ntc'), blocks.rules,
+        barLine('Мат. модель', w.model_math, 'm', true), provLine(w, 'model_math'), blocks.math));
       const prop = el('div', { class: `prop ${key}` }, el('h3', { text: `Предложение рейтинга: ${w.measure_label}` }), el('div', { style: 'font-size:13px', text: w.action }));
       if (w.protection_adjusted) prop.append(el('div', { style: 'font-size:13px', text: `С учётом подтверждённой защиты индекс снижен с ${w.index_raw} до ${w.index}.` }));
       // No index: what the forecast lacks — counts of measurements and the fields by name.
@@ -1258,8 +1264,9 @@
       const extras = el('div', { id: 'wellExtras', hidden: true });
       const registry = el('div', { id: 'wellRegistry', hidden: true });
       const rules = el('div', { id: 'wellRules', hidden: true });
+      const math = el('div', { id: 'wellMath', hidden: true });
       loadWellExtras(w.well_id);
-      return { ai, docs, extras, registry, rules };
+      return { ai, docs, extras, math, registry, rules };
     }
 
     // How the НТЦ forecast was counted: every rule, fired or not (app/core/rules.py).
@@ -1286,7 +1293,33 @@
         el('table', { class: 'rules' },
           el('thead', {}, el('tr', {}, el('th', { text: 'Правило и условие' }), el('th', { text: 'Значение' }), el('th', { text: 'Баллы' }))),
           el('tbody', {}, rows)),
-        el('div', { class: 'hint', text: 'Прогноз НТЦ = баллы / 14, не больше 1; индекс = прогноз × 100. При подтверждённой защите баллы среды учитываются с коэффициентом — см. строку над таблицей. Пороги демонстрационные.' })));
+        el('div', { class: 'hint', text: `Прогноз НТЦ = баллы / 14, не больше 1. Индекс = ${combined()} из прогнозов НТЦ и мат. модели × 100. При подтверждённой защите баллы среды учитываются с коэффициентом — см. строку над таблицей. Пороги демонстрационные.` })));
+    }
+
+    const combined = () => state.rating?.settings?.models?.combine === 'mean' ? 'среднее' : 'большее';
+    const ruNum = (value) => Number(value).toLocaleString('ru-RU', { maximumSignificantDigits: 3 }).replace('-', '−');
+
+    // How the math model counted the failure probability: its inputs, the medians it took, their weights (app/core/math_model.py).
+    function renderMath(detail) {
+      const box = $('wellMath');
+      if (!box) return;
+      const prov = detail.provenance?.model_math || {};
+      const inputs = prov.inputs || [];
+      box.hidden = !inputs.length;
+      if (!inputs.length) { box.replaceChildren(); return; }
+      const imputed = inputs.filter(item => item.imputed).length;
+      const shown = (item) => `${ruNum(item.value)} ${item.unit || ''}`.trim();
+      const rows = inputs.map(item => el('tr', { class: item.imputed ? 'nodata' : '' },
+        el('td', { text: item.name }),
+        el('td', { text: item.imputed ? `нет данных → медиана ${shown(item)}` : shown(item) }),
+        el('td', { class: 'pts', text: `${item.contribution > 0 ? '+' : ''}${ruNum(item.contribution)}` })));
+      box.replaceChildren(el('details', { class: 'rules-box' },
+        el('summary', { text: `Как посчитана мат. модель: вероятность отказа за ${prov.horizon_days} сут. — ${ruNum((detail.model_math || 0) * 100)} %`
+          + (imputed ? `, медиана вместо ${imputed} из ${inputs.length} показателей` : '') }),
+        el('table', { class: 'rules' },
+          el('thead', {}, el('tr', {}, el('th', { text: 'Показатель' }), el('th', { text: 'Значение' }), el('th', { text: 'Вклад' }))),
+          el('tbody', {}, rows)),
+        el('div', { class: 'hint', text: `Вероятность отказа = 1 − S₀^exp(сумма вкладов), S₀ = ${ruNum(prov.baseline_survival)} — доля НКТ без отказа за ${prov.horizon_days} сут. при средних показателях. Вклад = коэффициент × (значение − среднее): плюс повышает риск, минус снижает. Модель демонстрационная, коэффициенты подобраны вручную.` })));
     }
 
     async function loadWellExtras(wellId) {
@@ -1295,6 +1328,7 @@
         if (state.selected !== wellId) return;
         renderAiBox(detail);
         renderRules(detail);
+        renderMath(detail);
         renderWellDocs(detail);
         renderExtraMeasurements(detail);
         renderRegistry(detail);
@@ -1312,7 +1346,7 @@
       const parts = [el('div', { style: 'display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:space-between' }, el('h3', { text: 'Предложение ИИ-агента' }), button)];
       if (!detail.ai_agent_configured) parts.push(el('div', { class: 'hint warn', text: 'ИИ-агент не настроен: задайте MAI_LLM_API_URL и MAI_LLM_MODEL.' }));
       if (!p) {
-        parts.push(el('div', { class: 'hint', text: 'Агент учтёт рейтинг и прогноз НТЦ, акты, химию, защиту, документы, расписание бригад и примеры мер реагирования. Чего нет в данных — укажет отдельно.' }));
+        parts.push(el('div', { class: 'hint', text: 'Агент учтёт рейтинг, прогнозы НТЦ и мат. модели, сработавшие правила, акты, химию, защиту, документы, расписание бригад и примеры мер реагирования. Чего нет в данных — укажет отдельно.' }));
         box.replaceChildren(...parts);
         return;
       }

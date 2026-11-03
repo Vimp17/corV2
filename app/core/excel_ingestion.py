@@ -3,25 +3,18 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import defaultdict
-from datetime import date, datetime, time, timezone
+from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from openpyxl import load_workbook
-
-from app.core.excel_legacy import is_legacy_workbook, xls_to_xlsx
 from pydantic import ValidationError
 
 from app.config import settings
+from app.core import excel_cells as cells
+from app.core.excel_legacy import is_legacy_workbook, xls_to_xlsx
 from app.schemas import FailureHistoryItem, TelemetryPoint, WorkHistoryItem
-
-
-def _adjust(field: str, header: str, value: float) -> float:
-    from app.core.documents.excel_reader import _adjust as adjust
-
-    return adjust(field, header, value)
 
 MEASUREMENT_FIELDS = {
     "water_cut_pct", "co2_pct", "chlorides_mg_l", "inhibitor_efficiency",
@@ -39,10 +32,20 @@ class ExcelImportError(ValueError):
 
 
 def load_profiles() -> dict:
+    """The validated source profiles (MAI_SOURCE_PROFILES_PATH), read again only when the file
+    changes. The result is shared between callers: read it, do not modify it."""
+    path = settings.source_profiles_path
     try:
-        data = json.loads(settings.source_profiles_path.read_text(encoding="utf-8"))
+        modified = path.stat().st_mtime_ns
     except FileNotFoundError as exc:
-        raise ExcelImportError(f"Source profile file is missing: {settings.source_profiles_path}") from exc
+        raise ExcelImportError(f"Source profile file is missing: {path}") from exc
+    return _read_profiles(str(path), modified)
+
+
+@lru_cache(maxsize=4)
+def _read_profiles(path: str, modified: int) -> dict:
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as exc:
         raise ExcelImportError(f"Source profile file is invalid: {exc}") from exc
     profiles = data.get("profiles")
@@ -82,48 +85,14 @@ def load_profiles() -> dict:
     return profiles
 
 
-def _header_key(value: Any) -> str:
-    return "".join(char for char in str(value or "").strip().casefold() if char.isalnum())
-
-
-def _as_datetime(value: Any) -> datetime:
-    if isinstance(value, datetime):
-        parsed = value
-    elif isinstance(value, date):
-        parsed = datetime.combine(value, time.min)
-    elif isinstance(value, str):
-        raw = value.strip()
-        if not raw:
-            raise ValueError("date is empty")
-        try:
-            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        except ValueError:
-            parsed = None
-            # Dates typed as text the Russian way: 16.10.2026, 16.10.2026 10:30, 16.10.26.
-            for pattern in ("%d.%m.%Y", "%d.%m.%Y %H:%M", "%d.%m.%Y %H:%M:%S", "%d.%m.%y", "%d.%m.%y %H:%M"):
-                try:
-                    parsed = datetime.strptime(" ".join(raw.split()), pattern)
-                    break
-                except ValueError:
-                    continue
-            if parsed is None:
-                raise ValueError("date must be an Excel date, ISO 8601 or ДД.ММ.ГГГГ value") from None
-    else:
-        raise ValueError("date must be an Excel date or ISO 8601 value")
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=ZoneInfo(settings.source_timezone))
-    return parsed.astimezone(timezone.utc)
-
-
-def _number(value: Any) -> float | None:
+def _strict_number(value: Any) -> float | None:
+    """A measurement cell: None when empty; anything but a number rejects the row (named in the errors)."""
     if value is None or (isinstance(value, str) and not value.strip()):
         return None
-    if isinstance(value, bool):
-        return float(value)
-    if isinstance(value, (int, float)):
-        return float(value)
-    normalized = str(value).strip().replace("\u00a0", "").replace(" ", "").replace(",", ".")
-    return float(normalized)
+    result = cells.number(value)
+    if result is None:
+        raise ValueError(f"could not convert to a number: {str(value)[:40]!r}")
+    return result
 
 
 def _boolean(value: Any) -> bool | None:
@@ -161,10 +130,10 @@ def _text(value: Any) -> str | None:
 
 
 def _row_values(headers: list[Any], values: tuple[Any, ...], field_map: dict) -> dict[str, Any]:
-    columns = {_header_key(header): index for index, header in enumerate(headers) if header is not None}
+    columns = {cells.header_key(header): index for index, header in enumerate(headers) if header is not None}
     resolved = {}
     for canonical, aliases in field_map.items():
-        candidates = [_header_key(canonical), *(_header_key(item) for item in aliases)]
+        candidates = [cells.header_key(canonical), *(cells.header_key(item) for item in aliases)]
         index = next((columns[key] for key in candidates if key in columns), None)
         if index is not None:
             resolved[canonical] = values[index] if index < len(values) else None
@@ -172,10 +141,10 @@ def _row_values(headers: list[Any], values: tuple[Any, ...], field_map: dict) ->
 
 
 def _source_field_metadata(profile: dict, headers: list[Any]) -> dict[str, str]:
-    columns = {_header_key(header): str(header) for header in headers if header is not None}
+    columns = {cells.header_key(header): str(header) for header in headers if header is not None}
     resolved: dict[str, str] = {}
     for canonical, aliases in profile.get("field_map", {}).items():
-        for key in [_header_key(canonical), *(_header_key(alias) for alias in aliases)]:
+        for key in [cells.header_key(canonical), *(cells.header_key(alias) for alias in aliases)]:
             if key in columns:
                 resolved[canonical] = columns[key]
                 break
@@ -190,14 +159,12 @@ def _sheet_field_map(profile: dict, headers: list[Any]) -> tuple[dict, dict[str,
     field_map = profile.get("field_map", {})
     if profile.get("kind") != "telemetry":
         return field_map, {}
-    from app.core.documents.excel_reader import field_for
-
     known = _source_field_metadata(profile, headers)
     recognised: dict[str, str] = {}
     for header in headers:
         if header is None or str(header) in known.values():
             continue
-        field = field_for(header, {})
+        field = cells.field_for(header, {})
         if field in field_map and field not in known and field not in recognised:
             recognised[field] = str(header)
     if not recognised:
@@ -218,23 +185,17 @@ def _extra_measurements(headers: list[Any], values: tuple[Any, ...], source_fiel
     if profile.get("extra_columns") is False:
         return {}
     used = set(source_fields.values())
-    exclude = [_header_key(word) for word in profile.get("extra_columns_exclude", _EXTRA_EXCLUDE_DEFAULT)]
+    exclude = [cells.header_key(word) for word in profile.get("extra_columns_exclude", _EXTRA_EXCLUDE_DEFAULT)]
     extras: dict[str, float] = {}
     for index, header in enumerate(headers):
         if header is None or str(header) in used or index >= len(values):
             continue
         name = " ".join(str(header).split())
-        key = _header_key(name)
+        key = cells.header_key(name)
         if not key or any(word and (key == word or key.startswith(word)) for word in exclude):
             continue
-        value = values[index]
-        if value is None or isinstance(value, (bool, datetime, date)):
-            continue
-        try:
-            number = _number(value)
-        except (TypeError, ValueError):
-            continue
-        if number is not None and number == number and abs(number) != float("inf"):
+        number = cells.number(values[index])
+        if number is not None:
             extras[name[:100]] = number
     return extras
 
@@ -364,8 +325,8 @@ def parse_excel(content: bytes, filename: str, profile_id: str, supplied_well_id
         history_failures: dict[str, list[FailureHistoryItem]] = defaultdict(list)
         errors: list[dict] = []
         rows_read = accepted = 0
-        work_values = {_header_key(item) for item in profile.get("work_event_values", [])}
-        failure_values = {_header_key(item) for item in profile.get("failure_event_values", [])}
+        work_values = {cells.header_key(item) for item in profile.get("work_event_values", [])}
+        failure_values = {cells.header_key(item) for item in profile.get("failure_event_values", [])}
         try:
             scale_fields = {entry["field"]: float(entry.get("multiply", 1))
                             for entry in profile.get("scale_fields", [])
@@ -404,21 +365,21 @@ def parse_excel(content: bytes, filename: str, profile_id: str, supplied_well_id
                     continue
                 try:
                     if kind == "telemetry":
-                        row["timestamp"] = _as_datetime(row.get("timestamp"))
+                        row["timestamp"] = cells.as_datetime(row.get("timestamp"))
                         normalized = {key: value for key, value in row.items()
                                       if key in MEASUREMENT_FIELDS | TEXT_FIELDS | STATUS_FIELDS
                                       or key == "timestamp"}
                         normalized["source_id"] = source_id
                         for field, multiplier in scale_fields.items():
                             if field in normalized and normalized[field] is not None:
-                                normalized[field] = _number(normalized[field]) * multiplier
+                                normalized[field] = _strict_number(normalized[field]) * multiplier
                         for field in MEASUREMENT_FIELDS - {"water_compatibility_issue"}:
                             if field in normalized:
-                                normalized[field] = _number(normalized[field])
+                                normalized[field] = _strict_number(normalized[field])
                         for field, header in recognised.items():
                             # A column found by its name: inhibitor efficiency in percent → fraction.
                             if field in MEASUREMENT_FIELDS and normalized.get(field) is not None:
-                                normalized[field] = _adjust(field, header, normalized[field])
+                                normalized[field] = cells.adjust(field, header, normalized[field])
                         if "water_compatibility_issue" in normalized:
                             normalized["water_compatibility_issue"] = _boolean(normalized["water_compatibility_issue"])
                         for field in TEXT_FIELDS & normalized.keys():
@@ -432,9 +393,9 @@ def parse_excel(content: bytes, filename: str, profile_id: str, supplied_well_id
                         point = TelemetryPoint.model_validate(normalized)
                         telemetry_rows[well_id].append(point)
                     else:
-                        event_date = _as_datetime(row.get("event_date"))
+                        event_date = cells.as_datetime(row.get("event_date"))
                         event_raw = _text(row.get("event_type"))
-                        event_key = _header_key(event_raw)
+                        event_key = cells.header_key(event_raw)
                         if not event_raw:
                             event_type = "failure" if _text(row.get("failure_type")) else "work"
                         elif event_key in failure_values:
@@ -452,7 +413,7 @@ def parse_excel(content: bytes, filename: str, profile_id: str, supplied_well_id
                                 failure_type=failure_type, cause=_text(row.get("cause")),
                                 corrosion_detected=_boolean(row.get("corrosion_detected")),
                                 repair=_text(row.get("repair")),
-                                downtime_days=int(_number(row.get("downtime_days"))) if _number(row.get("downtime_days")) is not None else None,
+                                downtime_days=int(_strict_number(row.get("downtime_days"))) if _strict_number(row.get("downtime_days")) is not None else None,
                             ))
                         else:
                             work_type = _text(row.get("work_type")) or event_raw
