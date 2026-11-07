@@ -60,6 +60,31 @@ def test_source_import_recognises_a_column_by_its_name(client, tmp_path):
     assert well["tonnage_t"] == 6.5
 
 
+def test_no_data_and_text_cells_leave_the_rest_of_the_row(tmp_path):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from openpyxl import Workbook
+
+    from app.config import settings
+    from app.core.excel_ingestion import parse_excel
+
+    book = Workbook()
+    book.active.append(["Скважина", "Дата замера", "Обводнённость, %", "CO2, %", "Хлориды, мг/л"])
+    book.active.append(["DEMO-001", "06.11.2026 10:00", "н/д", 1.2, "—"])
+    book.active.append(["DEMO-002", "06.11.2026 10:00", 55, "1,5 примерно", "нет данных"])
+    book.save(tmp_path / "dars.xlsx")
+    parsed = parse_excel((tmp_path / "dars.xlsx").read_bytes(), "dars.xlsx", "dars")
+    assert parsed["rows_accepted"] == 2 and parsed["rows_rejected"] == 0
+    first, second = (parsed["groups"][well]["records"][0] for well in ("DEMO-001", "DEMO-002"))
+    assert (first.water_cut_pct, first.co2_pct, first.chlorides_mg_l) == (None, 1.2, None)
+    assert (second.water_cut_pct, second.co2_pct, second.chlorides_mg_l) == (55, None, None)
+    assert parsed["skipped_cell_count"] == 1
+    assert parsed["skipped_cells"] == [{"sheet_name": book.active.title, "row": 3, "well_id": "DEMO-002",
+                                        "column": "CO2, %", "value": "1,5 примерно"}]
+    assert first.timestamp == datetime(2026, 11, 6, 10, tzinfo=ZoneInfo(settings.source_timezone))
+
+
 # --------------------------------------------------------------------------- mixed chemistry tables
 def _chemistry_book(path, date_header="Дата", title=None, text_dates=True):
     from datetime import datetime as _dt

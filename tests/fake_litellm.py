@@ -134,7 +134,11 @@ class FakeLiteLLM:
         if isinstance(user, list):
             self.calls.append({"kind": "ocr", "model": body["model"]})
             return self.ocr_text
-        payload = json.loads(user)
+        try:
+            payload = json.loads(user)
+        except json.JSONDecodeError:  # a plain question, e.g. the model check of mai.cmd check
+            self.calls.append({"kind": "text"})
+            return "готово"
         if "Определи тип документа" in system:
             self.calls.append({"kind": "classify"})
             return json.dumps({"type": "other"})

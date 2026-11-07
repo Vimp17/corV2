@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 
 import pytest
@@ -340,14 +340,14 @@ def test_ocr_unavailable_is_retried_then_failed(client, generated, fake, monkeyp
 
     def broken(messages, **kwargs):
         if isinstance(messages[-1]["content"], list):
-            raise llm.LLMError("LLM call failed (ConnectionError).")
+            raise llm.LLMError("нет соединения с сервером модели (ConnectionError).")
         return fake.chat(messages, **kwargs)
 
     monkeypatch.setattr(llm, "chat", broken)
     document = _upload(client, generated / "documents" / "akt_demontazha_DEMO-005_scan.jpg")
     assert document["status"] == "queued" and "Повтор" in document["status_message"]
     for _ in range(settings.docs_max_attempts - 1):
-        db.update_document(document["document_id"], started_at=db.datetime.now(db.timezone.utc) - timedelta(minutes=5))
+        db.update_document(document["document_id"], started_at=datetime.now(timezone.utc) - timedelta(minutes=5))
         db.claim_next_document()
         from app.core.documents.pipeline import process_document
         row = process_document(document["document_id"])
@@ -421,6 +421,69 @@ def test_reupload_after_failure_processes_again(client, generated):
     with open(path, "rb") as handle:
         body = client.post("/api/v1/documents?wait=true", files=[("files", (path.name, handle))]).json()
     assert body["duplicates"] == 1 and body["requeued"] == 0
+
+
+@needs_db
+def test_data_shared_by_two_documents_stays_until_both_are_deleted(client, tmp_path):
+    from app import db
+    from scripts.build_demo_documents import base_act_lines
+
+    # The same act in two files: the event is stored once, under the first document.
+    lines = base_act_lines(TODAY)
+    act = _upload(client, _pdf(tmp_path / "akt.pdf", lines))
+    act_copy = _upload(client, _pdf(tmp_path / "akt_kopiya.pdf", lines + ["Копия верна"]))
+    assert act["status"] == act_copy["status"] == "loaded"
+    acts = lambda: [event for event in db.load_history_events("DEMO-002") if event["source_id"] == "DOC_BASE"]  # noqa: E731
+    assert len(acts()) == 1
+    assert client.delete(f"/api/v1/documents/{act['document_id']}").status_code == 200
+    assert len(acts()) == 1 and _well(client, "DEMO-002")["base_act"] is True
+    assert client.delete(f"/api/v1/documents/{act_copy['document_id']}").status_code == 200
+    assert acts() == [] and "acts" in _gap_keys(_well(client, "DEMO-002"))
+
+    # The same sample in two protocols: it is stored under the last one.
+    protocol = ["ПРОТОКОЛ ХИМИЧЕСКОГО АНАЛИЗА № 7", "",
+                "Скважина | Дата отбора | Обводнённость, % | Хлориды, мг/л | Тоннаж, т | НОО, сут",
+                f"DEMO-012 | {TODAY:%d.%m.%Y} | 44 | 21500 | 7.5 | 41"]
+    _upload(client, _pdf(tmp_path / "protokol.pdf", protocol))
+    latest = _upload(client, _pdf(tmp_path / "protokol_kopiya.pdf", protocol + ["Копия верна"]))
+    assert client.delete(f"/api/v1/documents/{latest['document_id']}").status_code == 200
+    well = _well(client, "DEMO-012")
+    assert well["tonnage_t"] == 7.5
+    assert well["provenance"]["tonnage_t"]["source"] == "Протокол хим. анализа (документ)"
+
+
+def test_a_document_without_a_date_counts_from_the_day_it_was_received():
+    from zoneinfo import ZoneInfo
+
+    from app.config import settings
+    from app.core.documents import load
+
+    received = datetime(2026, 3, 1, 22, 30, tzinfo=timezone.utc)
+    assert load._received_day({"created_at": received}) == \
+        received.astimezone(ZoneInfo(settings.source_timezone)).date().isoformat()
+    assert load._received_day({"created_at": received.isoformat()}) == load._received_day({"created_at": received})
+
+
+def test_model_failures_are_explained_in_words():
+    import requests
+
+    from app.core import llm
+
+    def http(status):
+        response = requests.Response()
+        response.status_code = status
+        return requests.HTTPError(response=response)
+
+    assert "нет соединения" in llm.describe_failure(requests.ConnectionError(), "m", 60)
+    assert "MAI_OCR_API_URL" in llm.describe_failure(requests.ConnectionError(), "m", 60, "MAI_OCR_API_URL")
+    assert "не ответила за 90 с" in llm.describe_failure(requests.ReadTimeout(), "m", 90)
+    assert "ключ" in llm.describe_failure(http(401), "m", 60)
+    assert "не найдены" in llm.describe_failure(http(404), "m", 60)
+    assert "HTTP 503" in llm.describe_failure(http(503), "m", 60)
+    assert "неожиданном формате" in llm.describe_failure(ValueError("no choices"), "m", 60)
+    with pytest.raises(llm.LLMError, match="не заданы"):
+        llm.chat([{"role": "user", "content": "?"}], model="", url="")
+    assert FakeLiteLLM().chat([{"role": "user", "content": "Напиши слово: готово"}], model="fake") == "готово"
 
 
 @needs_db

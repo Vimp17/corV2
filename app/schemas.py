@@ -3,8 +3,17 @@ from __future__ import annotations
 import math
 from datetime import date, datetime
 from typing import Any, Literal
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from app.config import settings
+
+
+def in_source_zone(moment: datetime) -> datetime:
+    """A time received without a zone is in MAI_SOURCE_TIMEZONE, as in the Excel files
+    (app.core.excel_cells.as_datetime); a time with a zone is kept."""
+    return moment if moment.tzinfo is not None else moment.replace(tzinfo=ZoneInfo(settings.source_timezone))
 
 
 class APIModel(BaseModel):
@@ -89,6 +98,12 @@ class IngestionRequest(WellRequest):
     batch_id: str | None = Field(default=None, min_length=1, max_length=128)
     records: list[TelemetryPoint] = Field(min_length=1, max_length=10000)
 
+    @model_validator(mode="after")
+    def zone_times(self):
+        for record in self.records:
+            record.timestamp = in_source_zone(record.timestamp)
+        return self
+
     @field_validator("batch_id")
     @classmethod
     def trim_batch_id(cls, value: str | None) -> str | None:
@@ -156,6 +171,10 @@ class HistoryIngestionRequest(WellRequest):
     def require_history(self):
         if not self.work_history and not self.failure_history:
             raise ValueError("at least one work or failure history record is required")
+        for item in self.work_history:
+            item.date = in_source_zone(item.date)
+        for item in self.failure_history:
+            item.failure_date = in_source_zone(item.failure_date)
         return self
 
 
@@ -167,6 +186,11 @@ class CrewAvailability(APIModel):
     available_from: datetime | None = None
     available_to: datetime | None = None
     source_id: str = Field(min_length=1, max_length=128)
+
+    @field_validator("available_from", "available_to")
+    @classmethod
+    def zone_times(cls, value: datetime | None) -> datetime | None:
+        return None if value is None else in_source_zone(value)
 
     @model_validator(mode="after")
     def validate_availability_window(self):
