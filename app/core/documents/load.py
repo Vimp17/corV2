@@ -14,8 +14,10 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date, datetime, time, timezone
+from zoneinfo import ZoneInfo
 
 from app import db
+from app.config import settings
 from app.core.documents.extract import values_of
 from app.core.documents.types import DATE_FIELD
 from app.schemas import TelemetryPoint, WorkHistoryItem
@@ -64,6 +66,16 @@ def _point(values: dict, day: str, source_id: str) -> TelemetryPoint | None:
     return TelemetryPoint.model_validate({"timestamp": _moment(day), "source_id": source_id, **payload})
 
 
+def _received_day(document: dict) -> str:
+    """The day the file was received, in the sources' time zone (reprocessing keeps it)."""
+    created = document.get("created_at")
+    if isinstance(created, str):
+        created = datetime.fromisoformat(created)
+    if not isinstance(created, datetime):
+        return date.today().isoformat()
+    return created.astimezone(ZoneInfo(settings.source_timezone)).date().isoformat()
+
+
 def _install_item(values: dict) -> WorkHistoryItem | None:
     """The equipment and the date it was run in: an equipment-run event (the run time counts from it)."""
     if not (values.get("equipment") and values.get("install_date")):
@@ -81,7 +93,7 @@ def load_records(document: dict, spec: dict, records: list[dict]) -> dict:
     for record in accepted:
         by_well[record["well_id"]].append(values_of(record))
     # A passport without a date: its measurements count from the day the file was received.
-    received = date.today().isoformat()
+    received = _received_day(document)
     summary: dict[str, dict] = {}
     for well_id, items in by_well.items():
         work: list[WorkHistoryItem] = []

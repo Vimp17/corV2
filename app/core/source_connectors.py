@@ -19,7 +19,7 @@ from pydantic import ValidationError
 from app import db
 from app.config import settings
 from app.core.excel_ingestion import ExcelImportError, load_profiles, parse_excel
-from app.schemas import CrewAvailability, FailureHistoryItem, TelemetryPoint, WorkHistoryItem
+from app.schemas import CrewAvailability, FailureHistoryItem, TelemetryPoint, WorkHistoryItem, in_source_zone
 
 logger = logging.getLogger(__name__)
 SOURCE_ENTRY_POINT_GROUP = "mai_corrosion.sources"
@@ -43,6 +43,8 @@ def _status_message(parsed: dict) -> str:
     summary = f"{parsed['rows_accepted']} rows accepted, {parsed['rows_rejected']} rejected out of {parsed['rows_read']} read. "
     if parsed["errors"]:
         summary += " Examples: " + "; ".join(f"row {item['row']}: {item['message']}" for item in parsed["errors"][:5])
+    if parsed.get("skipped_cell_count"):
+        summary += f" Non-numeric cells left out: {parsed['skipped_cell_count']}."
     return summary[:2000]
 
 
@@ -78,9 +80,10 @@ def ingest_excel_bytes(content: bytes, filename: str, profile_id: str, well_id: 
     return {"status": parsed["status"] if imported else "unavailable", "source_id": source_id, "profile_id": profile_id,
             **{key: parsed[key] for key in ("kind", "sheet_name", "sheet_names", "skipped_sheets", "rows_read",
                                             "rows_accepted", "rows_rejected", "source_columns", "ignored_columns",
-                                            "extra_columns", "errors")},
+                                            "extra_columns", "errors", "skipped_cell_count", "skipped_cells")},
             "imported_wells": imported, "source_statuses": statuses, "origin": origin,
-            "message": None if imported and parsed["status"] == "ok" else _status_message(parsed)}
+            "message": None if imported and parsed["status"] == "ok" and not parsed["skipped_cell_count"]
+            else _status_message(parsed)}
 
 
 # --------------------------------------------------------------------------- crew schedule
@@ -163,11 +166,17 @@ def _store_json(answer: Any, profile_id: str, profile: dict, source_id: str, wel
         allowed = set(TelemetryPoint.model_fields)
         points = [TelemetryPoint.model_validate({**{key: value for key, value in record.items() if key in allowed},
                                                  "source_id": source_id}) for record in records]
+        for point in points:
+            point.timestamp = in_source_zone(point.timestamp)
         db.save_batch(well_id, batch, points)
         count = len(points)
     elif kind == "history":
         work = [WorkHistoryItem.model_validate(item) for item in answer.get("work_history", [])]
         failures = [FailureHistoryItem.model_validate(item) for item in answer.get("failure_history", [])]
+        for item in work:
+            item.date = in_source_zone(item.date)
+        for item in failures:
+            item.failure_date = in_source_zone(item.failure_date)
         if not work and not failures:
             raise ExcelImportError("History adapter returned no work_history or failure_history records")
         db.save_history(well_id, batch, work, failures, source_id=source_id)

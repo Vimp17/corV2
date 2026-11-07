@@ -38,7 +38,7 @@ def validate_url(url: str, variable: str = "MAI_LLM_API_URL") -> None:
     parsed = urlparse(url)
     if (parsed.scheme not in {"http", "https"} or not parsed.netloc
             or parsed.username or parsed.password or parsed.fragment):
-        raise LLMError(f"{variable} must be an http(s) LiteLLM Chat Completions URL without embedded credentials.")
+        raise LLMError(f"адрес {variable} должен быть http(s)-адресом LiteLLM …/v1/chat/completions без логина и пароля.")
 
 
 def extract_content(response_data: Any) -> str:
@@ -97,7 +97,7 @@ def chat(messages: list[dict], *, model: str, url: str | None = None, api_key: s
     timeout = timeout or settings.llm_timeout_seconds
     max_retries = settings.llm_max_retries if max_retries is None else max_retries
     if not url or not model:
-        raise LLMError("LiteLLM URL or model is not configured.")
+        raise LLMError(f"не заданы адрес ({url_variable}) или модель.")
     validate_url(url, url_variable)
     body = {"model": model, "temperature": temperature, "messages": messages, **(extra or {})}
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
@@ -130,4 +130,26 @@ def chat(messages: list[dict], *, model: str, url: str | None = None, api_key: s
         return extract_content(response_data)
     except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
         logger.warning("LLM call failed model=%s error_type=%s", model, type(exc).__name__)
-        raise LLMError(f"LLM call failed ({type(exc).__name__}).") from exc
+        raise LLMError(describe_failure(exc, model, timeout, url_variable)) from exc
+
+
+def describe_failure(exc: Exception, model: str, timeout: float, url_variable: str = "MAI_LLM_API_URL") -> str:
+    """Why the call failed, in words for the operator (the callers prefix what was not done)."""
+    if isinstance(exc, requests.Timeout):
+        return f"модель {model} не ответила за {timeout:.0f} с ({type(exc).__name__})."
+    if isinstance(exc, requests.ConnectionError):
+        return f"нет соединения с сервером модели ({type(exc).__name__}); проверьте {url_variable}, сеть и прокси."
+    if isinstance(exc, requests.HTTPError) and exc.response is not None:
+        status = exc.response.status_code
+        if status in {401, 403}:
+            return f"сервер модели отклонил ключ доступа (HTTP {status})."
+        if status == 404:
+            return f"адрес или модель {model} не найдены на сервере (HTTP 404)."
+        if status == 429:
+            return "сервер модели перегружен или исчерпан лимит запросов (HTTP 429)."
+        if status >= 500:
+            return f"ошибка на сервере модели (HTTP {status})."
+        return f"сервер модели отклонил запрос (HTTP {status})."
+    if isinstance(exc, requests.RequestException):
+        return f"запрос к модели не выполнен ({type(exc).__name__})."
+    return f"модель вернула ответ в неожиданном формате ({type(exc).__name__})."

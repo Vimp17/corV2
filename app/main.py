@@ -39,7 +39,7 @@ async def lifespan(app: FastAPI):
 def require_api_key(x_api_key: str | None = Header(default=None, alias="X-API-Key")) -> None:
     expected = settings.api_key
     if expected and (not x_api_key or not secrets.compare_digest(x_api_key, expected)):
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+        raise HTTPException(status_code=401, detail="Ключ API не указан или неверный (заголовок X-API-Key).")
 
 
 app = FastAPI(
@@ -66,7 +66,7 @@ async def request_context(request: Request, call_next):
 async def unexpected_error_handler(request: Request, exc: Exception):
     logger.exception("Unhandled error request_id=%s path=%s", getattr(request.state, "request_id", "unknown"), request.url.path)
     return JSONResponse(status_code=500, content={
-        "detail": "Internal server error",
+        "detail": "Внутренняя ошибка сервера; подробности в журнале backend.",
         "request_id": getattr(request.state, "request_id", None),
     })
 
@@ -84,7 +84,7 @@ def ready():
         logger.warning("Database readiness check failed (%s)", type(exc).__name__)
         raise HTTPException(status_code=503, detail="Database is unavailable") from exc
     return {
-        # "postgresql"; "mssql" in the standalone build (standalone/mssql_compat.py).
+        # storage: the SQLAlchemy dialect, always "mssql" (app/db.py).
         "status": "ready", "storage": db.engine().dialect.name, "database_connected": True,
         "llm_agent": "configured" if settings.llm_api_url and settings.llm_model else "not_configured",
         "ocr_model": "configured" if settings.ocr_url and settings.ocr_model else "not_configured",

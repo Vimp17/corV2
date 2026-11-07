@@ -85,13 +85,19 @@ def _read_profiles(path: str, modified: int) -> dict:
     return profiles
 
 
-def _strict_number(value: Any) -> float | None:
-    """A measurement cell: None when empty; anything but a number rejects the row (named in the errors)."""
-    if value is None or (isinstance(value, str) and not value.strip()):
+# Cells that only say "no data": read as empty, without a note.
+NO_DATA = {"н/д", "нд", "н.д.", "н/д.", "нет данных", "не определялось", "-", "--", "—", "–", "n/a", "na"}
+MAX_SKIPPED_NOTES = 50
+
+
+def _cell_number(value: Any, notes: list[dict], column: str | None) -> float | None:
+    """A measurement cell: None when empty or "no data" (н/д, —). Other text is not a value: it is left
+    out with a note (the rest of the row is kept)."""
+    if value is None or (isinstance(value, str) and (not value.strip() or cells.norm(value) in NO_DATA)):
         return None
     result = cells.number(value)
     if result is None:
-        raise ValueError(f"could not convert to a number: {str(value)[:40]!r}")
+        notes.append({"column": column, "value": str(value)[:40]})
     return result
 
 
@@ -324,6 +330,8 @@ def parse_excel(content: bytes, filename: str, profile_id: str, supplied_well_id
         history_work: dict[str, list[WorkHistoryItem]] = defaultdict(list)
         history_failures: dict[str, list[FailureHistoryItem]] = defaultdict(list)
         errors: list[dict] = []
+        skipped_cells: list[dict] = []
+        skipped_count = 0
         rows_read = accepted = 0
         work_values = {cells.header_key(item) for item in profile.get("work_event_values", [])}
         failure_values = {cells.header_key(item) for item in profile.get("failure_event_values", [])}
@@ -363,6 +371,11 @@ def parse_excel(content: bytes, filename: str, profile_id: str, supplied_well_id
                     if len(errors) < 50:
                         errors.append({"sheet_name": sheet.title, "row": excel_row, "message": "well_id is blank"})
                     continue
+                row_notes: list[dict] = []
+
+                def number(field: str) -> float | None:
+                    return _cell_number(row.get(field), row_notes, _source_fields.get(field, field))
+
                 try:
                     if kind == "telemetry":
                         row["timestamp"] = cells.as_datetime(row.get("timestamp"))
@@ -370,12 +383,12 @@ def parse_excel(content: bytes, filename: str, profile_id: str, supplied_well_id
                                       if key in MEASUREMENT_FIELDS | TEXT_FIELDS | STATUS_FIELDS
                                       or key == "timestamp"}
                         normalized["source_id"] = source_id
-                        for field, multiplier in scale_fields.items():
-                            if field in normalized and normalized[field] is not None:
-                                normalized[field] = _strict_number(normalized[field]) * multiplier
-                        for field in MEASUREMENT_FIELDS - {"water_compatibility_issue"}:
+                        for field in (MEASUREMENT_FIELDS - {"water_compatibility_issue"}) | set(scale_fields):
                             if field in normalized:
-                                normalized[field] = _strict_number(normalized[field])
+                                normalized[field] = number(field)
+                        for field, multiplier in scale_fields.items():
+                            if normalized.get(field) is not None:
+                                normalized[field] *= multiplier
                         for field, header in recognised.items():
                             # A column found by its name: inhibitor efficiency in percent → fraction.
                             if field in MEASUREMENT_FIELDS and normalized.get(field) is not None:
@@ -413,7 +426,7 @@ def parse_excel(content: bytes, filename: str, profile_id: str, supplied_well_id
                                 failure_type=failure_type, cause=_text(row.get("cause")),
                                 corrosion_detected=_boolean(row.get("corrosion_detected")),
                                 repair=_text(row.get("repair")),
-                                downtime_days=int(_strict_number(row.get("downtime_days"))) if _strict_number(row.get("downtime_days")) is not None else None,
+                                downtime_days=None if (days := number("downtime_days")) is None else int(days),
                             ))
                         else:
                             work_type = _text(row.get("work_type")) or event_raw
@@ -425,6 +438,9 @@ def parse_excel(content: bytes, filename: str, profile_id: str, supplied_well_id
                                 corrosion_detected=_boolean(row.get("corrosion_detected")),
                             ))
                     accepted += 1
+                    skipped_count += len(row_notes)
+                    skipped_cells += [{"sheet_name": sheet.title, "row": excel_row, "well_id": well_id, **note}
+                                      for note in row_notes][:max(0, MAX_SKIPPED_NOTES - len(skipped_cells))]
                 except (ValueError, TypeError, ValidationError) as exc:
                     if len(errors) < 50:
                         errors.append({"sheet_name": sheet.title, "row": excel_row,
@@ -454,6 +470,8 @@ def parse_excel(content: bytes, filename: str, profile_id: str, supplied_well_id
             "extra_columns": list(extra_columns),
             "rows_read": rows_read, "rows_accepted": accepted, "rows_rejected": rows_read - accepted,
             "errors": errors, "groups": grouped, "file_sha256": file_hash,
+            # Cells left out of accepted rows: text where a number belongs («abc», «12,5 примерно»).
+            "skipped_cell_count": skipped_count, "skipped_cells": skipped_cells,
             "status": "ok" if accepted and not errors else ("partial" if accepted else "error"),
         }
     finally:

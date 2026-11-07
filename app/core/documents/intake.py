@@ -2,7 +2,8 @@
 
 A file is checked (type by its content, size), stored once by its SHA-256 and queued. The same
 file sent again returns the existing document instead of a second copy. Inbox files are moved
-to processed/<date>/ or failed/<date>/ next to the inbox after they are taken.
+to processed/<date>/ or failed/<date>/ inside the inbox after they are taken (a rejected file with
+<name>.error.txt giving the reason).
 """
 from __future__ import annotations
 

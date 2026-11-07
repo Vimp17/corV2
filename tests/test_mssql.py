@@ -138,3 +138,56 @@ def test_a_column_added_by_a_new_version_is_created(db):
             "well_rating", schema=settings.database_schema or None)}
     assert "ai_proposal_at" in columns
     assert "analysis_id" not in columns     # a column of an earlier version is dropped
+
+
+def test_a_deadlock_victim_is_run_again(db, monkeypatch):
+    from sqlalchemy.exc import OperationalError
+
+    monkeypatch.setattr(db.time, "sleep", lambda seconds: None)
+    calls = []
+
+    @db._retry_deadlocks
+    def write():
+        calls.append("write")
+        if len(calls) < 3:
+            raise OperationalError("MERGE …", {}, Exception(1205, b"Transaction was deadlocked on lock resources"))
+        return "done"
+
+    @db._retry_deadlocks
+    def duplicate():
+        calls.append("duplicate")
+        raise OperationalError("INSERT …", {}, Exception(2627, b"Violation of UNIQUE KEY constraint"))
+
+    assert write() == "done" and calls == ["write"] * 3
+    calls.clear()
+    with pytest.raises(OperationalError):
+        duplicate()
+    assert calls == ["duplicate"]                     # any other error is raised at once
+
+
+def test_parallel_writes_of_new_wells_do_not_deadlock(db, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.schemas import TelemetryPoint, WorkHistoryItem
+
+    # No retries: writers of new wells at the same time must queue, not deadlock (MERGE … HOLDLOCK). Small
+    # tables, as in a new database, are where the plans lock the widest key ranges.
+    monkeypatch.setattr(db, "DEADLOCK_ATTEMPTS", 1)
+    with db.engine().begin() as conn:
+        for table in (db.telemetry, db.ingestion_batches, db.history_events, db.history_batches):
+            conn.execute(table.delete())
+    prefix = f"PAR-{uuid.uuid4().hex[:6]}"
+    start = datetime(2026, 9, 1, 8, tzinfo=timezone.utc)
+
+    def push(index: int) -> str:
+        well = f"{prefix}-{index:03d}"
+        db.save_batch(well, None, [TelemetryPoint.model_validate({"timestamp": start - timedelta(days=day),
+                                                                  "water_cut_pct": index + day, "source_id": "DARS"})
+                                   for day in range(12)])
+        db.save_history(well, None, [WorkHistoryItem(date=start + timedelta(days=day), work_type="Ремонт")
+                                     for day in range(5)], [], source_id="ERA")
+        return well
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        wells = list(pool.map(push, range(100)))
+    assert all(len(db.load_telemetry(well)) == 12 and len(db.load_history_events(well)) == 5 for well in wells)

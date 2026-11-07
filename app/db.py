@@ -14,10 +14,13 @@ JSON is NVARCHAR(MAX).
 """
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import logging
+import random
 import re
+import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -228,12 +231,13 @@ def qualified(name: str) -> str:
     return (quote(settings.database_schema) + "." if settings.database_schema else "") + quote(name)
 
 
-def _applock(conn, resource: str, timeout_ms: int) -> bool:
+def _applock(conn, resource: str, timeout_ms: int, owner: str = "Session") -> bool:
+    """Owner "Session": until _release; "Transaction": until the commit or rollback."""
     # NOCOUNT only around the call: rowcount of later statements on this connection must stay.
     result = conn.execute(text(
         "SET NOCOUNT ON; DECLARE @result int; "
         "EXEC @result = sp_getapplock @Resource = :resource, @LockMode = 'Exclusive', "
-        "@LockOwner = 'Session', @LockTimeout = :timeout; "
+        f"@LockOwner = '{'Transaction' if owner == 'Transaction' else 'Session'}', @LockTimeout = :timeout; "
         "SET NOCOUNT OFF; SELECT @result"), {"resource": resource, "timeout": timeout_ms}).scalar()
     return result is not None and result >= 0
 
@@ -360,6 +364,40 @@ def advisory_lock(key) -> Iterator[bool]:
                 conn.commit()
 
 
+# --------------------------------------------------------------------------- deadlocks
+DEADLOCK_ATTEMPTS = 4
+WRITE_QUEUE_TIMEOUT_MS = 60_000
+
+
+def _queue_writes(conn, table: str) -> None:
+    """Writers of a table wait for each other until the commit: MERGE … HOLDLOCK of wells written at the
+    same time locks the same key ranges and deadlocks, a wait of a few milliseconds is cheaper."""
+    if not _applock(conn, _lock_name(f"write:{table}"), WRITE_QUEUE_TIMEOUT_MS, owner="Transaction"):
+        raise TimeoutError(f"Запись в {table} ждёт другую запись дольше {WRITE_QUEUE_TIMEOUT_MS // 1000} с.")
+
+
+def _deadlocked(exc: DBAPIError) -> bool:
+    """SQL Server chose the transaction as a deadlock victim (error 1205; SQLSTATE 40001 through ODBC)."""
+    args = getattr(exc.orig, "args", None) or ()
+    return bool(args) and (args[0] in (1205, "40001") or "deadlock" in str(exc.orig).lower())
+
+
+def _retry_deadlocks(function):
+    """Concurrent writes (parallel pushes, the documents worker, the daily cycle) may deadlock: the victim's
+    transaction is rolled back whole, so the write is run again after a short random pause."""
+    @functools.wraps(function)
+    def wrapper(*args, **kwargs):
+        for attempt in range(1, DEADLOCK_ATTEMPTS + 1):
+            try:
+                return function(*args, **kwargs)
+            except DBAPIError as exc:
+                if attempt == DEADLOCK_ATTEMPTS or not _deadlocked(exc):
+                    raise
+                logger.warning("Deadlock in %s, attempt %d of %d", function.__name__, attempt, DEADLOCK_ATTEMPTS)
+                time.sleep(random.uniform(0.05, 0.25) * attempt)
+    return wrapper
+
+
 # --------------------------------------------------------------------------- insert or update (MERGE)
 class _Merge(Executable, ClauseElement):
     """Insert the rows whose key is new; for the others update the given columns from the row
@@ -433,6 +471,7 @@ def _json_hash(value: object) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+@_retry_deadlocks
 def save_batch(well_id: str, requested_batch_id: str | None, records: Iterable[TelemetryPoint],
                replace: bool = False) -> dict:
     """Store telemetry; a value at a moment already stored for the source replaces the old one.
@@ -461,6 +500,7 @@ def save_batch(well_id: str, requested_batch_id: str | None, records: Iterable[T
     batch = {"batch_id": batch_id, "well_id": well_id, "record_count": len(rows),
              "created_at": datetime.now(timezone.utc), "payload_sha256": digest}
     with engine().begin() as conn:
+        _queue_writes(conn, "telemetry")
         if not _merge(conn, ingestion_batches, [batch], ("batch_id",)):
             existing = conn.execute(select(ingestion_batches).where(
                 ingestion_batches.c.batch_id == batch_id)).mappings().one()
@@ -538,6 +578,7 @@ def known_well_ids() -> list[str]:
     return sorted(wells | set(settings.configured_well_ids))
 
 
+@_retry_deadlocks
 def save_history(well_id: str, requested_batch_id: str | None,
                  work_history: list[WorkHistoryItem], failure_history: list[FailureHistoryItem],
                  source_id: str | None = None, replace: bool = False) -> dict:
@@ -562,6 +603,7 @@ def save_history(well_id: str, requested_batch_id: str | None,
     batch = {"batch_id": batch_id, "well_id": well_id, "work_count": len(work_history),
              "failure_count": len(failure_history), "payload_sha256": digest, "created_at": datetime.now(timezone.utc)}
     with engine().begin() as conn:
+        _queue_writes(conn, "history")
         if not _merge(conn, history_batches, [batch], ("batch_id",)):
             existing = conn.execute(select(history_batches).where(
                 history_batches.c.batch_id == batch_id)).mappings().one()
@@ -610,6 +652,7 @@ def load_history(well_id: str) -> dict[str, list]:
     return {"work_history": work, "failure_history": failures}
 
 
+@_retry_deadlocks
 def record_source_status(source_id: str, well_id: str, status: str, message: str | None = None,
                          record_count: int | None = None, origin: str = "api_refresh") -> dict:
     row = {"source_id": source_id, "well_id": well_id,
@@ -654,6 +697,7 @@ def effective_source_statuses(well_id: str | None = None) -> list[dict]:
     return effective
 
 
+@_retry_deadlocks
 def save_source_payload(source_id: str, well_id: str, payload: dict) -> None:
     with engine().begin() as conn:
         _merge(conn, source_documents, [{"source_id": source_id, "well_id": well_id, "payload_json": payload,
@@ -691,6 +735,7 @@ def well_has_data(well_id: str) -> bool:
     return False
 
 
+@_retry_deadlocks
 def forget_well(well_id: str) -> None:
     """Remove what was derived for a well that has no data left (its rating row and source
     statuses), e.g. a well a deleted document had created."""
@@ -704,12 +749,14 @@ def _iso(value) -> str | None:
     return value.isoformat() if value is not None else None
 
 
+@_retry_deadlocks
 def create_monitor_job(job_id: str) -> dict:
     with engine().begin() as conn:
         conn.execute(monitor_jobs.insert().values(job_id=job_id, status="queued", created_at=datetime.now(timezone.utc)))
     return get_monitor_job(job_id)
 
 
+@_retry_deadlocks
 def update_monitor_job(job_id: str, **values) -> None:
     with engine().begin() as conn:
         conn.execute(monitor_jobs.update().where(monitor_jobs.c.job_id == job_id).values(**values))
@@ -744,6 +791,7 @@ def _rating_row(row) -> dict:
     return data
 
 
+@_retry_deadlocks
 def save_computed_rating(well_id: str, values: dict, *, measure: str | None, provenance: dict) -> dict:
     """Store a well's computed rating, keeping the operator fields.
 
@@ -786,6 +834,7 @@ def rating_scores() -> list[tuple[float | None, float | None]]:
         return [(row[0], row[1]) for row in conn.execute(select(well_rating.c.model_ntc, well_rating.c.model_math)).all()]
 
 
+@_retry_deadlocks
 def update_rating_row(well_id: str, values: dict) -> bool:
     """Change operator fields only (plan, Промайн document status, comment)."""
     values = {key: value for key, value in values.items() if key in OPERATOR_RATING_FIELDS}
@@ -795,6 +844,7 @@ def update_rating_row(well_id: str, values: dict) -> bool:
         return result.rowcount == 1
 
 
+@_retry_deadlocks
 def save_ai_proposal(well_id: str, proposal: dict) -> bool:
     with engine().begin() as conn:
         result = conn.execute(well_rating.update().where(well_rating.c.well_id == well_id).values(
@@ -817,6 +867,7 @@ def _document_row(row, with_text: bool = False) -> dict:
     return data
 
 
+@_retry_deadlocks
 def create_document(values: dict) -> tuple[dict, bool]:
     """Insert a document row; a file with the same SHA-256 returns the existing row instead.
 
@@ -853,11 +904,13 @@ def document_status_counts() -> dict[str, int]:
     return {status: count for status, count in rows}
 
 
+@_retry_deadlocks
 def update_document(document_id: str, **values) -> None:
     with engine().begin() as conn:
         conn.execute(update(documents).where(documents.c.document_id == document_id).values(**values))
 
 
+@_retry_deadlocks
 def claim_next_document(document_id: str | None = None) -> dict | None:
     """Mark the oldest queued document (or the given one) as processing and return it; safe
     across workers. A document returned to the queue after a failed attempt waits
@@ -882,6 +935,7 @@ def claim_next_document(document_id: str | None = None) -> dict | None:
     return get_document(row[0]) if row else None
 
 
+@_retry_deadlocks
 def requeue_stale_documents(older_than_minutes: int = 30) -> int:
     """Documents left in processing by a stopped worker go back to the queue."""
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=older_than_minutes)
@@ -890,6 +944,7 @@ def requeue_stale_documents(older_than_minutes: int = 30) -> int:
                             .values(status="queued")).rowcount or 0
 
 
+@_retry_deadlocks
 def delete_document_data(document_id: str, extra_batch_ids: Iterable[str] = ()) -> None:
     """Remove the telemetry, history and passport rows loaded from one document (and the
     batches of a source import made from it, when given)."""
@@ -905,6 +960,7 @@ def delete_document_data(document_id: str, extra_batch_ids: Iterable[str] = ()) 
             func.json_value(source_documents.c.payload_json, "$.document_id") == document_id))
 
 
+@_retry_deadlocks
 def delete_document_row(document_id: str) -> None:
     with engine().begin() as conn:
         conn.execute(delete(documents).where(documents.c.document_id == document_id))

@@ -196,6 +196,43 @@ def test_push_json(client):
     assert everywhere["status"] == "ok" and everywhere["targets"] == ["PUSH-1"]
 
 
+def test_time_without_zone_is_read_in_the_sources_zone(client):
+    from datetime import datetime, time
+    from zoneinfo import ZoneInfo
+
+    from app.config import settings
+
+    local = datetime.combine(TODAY, time(10), tzinfo=ZoneInfo(settings.source_timezone))
+    naive = local.replace(tzinfo=None).isoformat()
+    body = {"well_id": "PUSH-TZ", "source_id": "dars", "records": [{"timestamp": naive, "water_cut_pct": 40}]}
+    assert client.post("/api/v1/ingestion/telemetry", json=body).status_code == 201
+    stored = client.get("/api/v1/ingestion/wells/PUSH-TZ/telemetry").json()["records"][0]["timestamp"]
+    assert datetime.fromisoformat(stored) == local
+    history = {"well_id": "PUSH-TZ", "work_history": [{"date": naive, "work_type": "Разбор на базе"}]}
+    assert client.post("/api/v1/ingestion/history", json=history).status_code == 201
+    event = client.get("/api/v1/ingestion/wells/PUSH-TZ/history").json()["work_history"][0]
+    assert datetime.fromisoformat(event["date"]) == local
+    zoned = {**body, "records": [{"timestamp": f"{TODAY.isoformat()}T10:00:00Z", "water_cut_pct": 41}]}
+    assert client.post("/api/v1/ingestion/telemetry", json=zoned).status_code == 201
+    stamps = [datetime.fromisoformat(item["timestamp"]) for item in
+              client.get("/api/v1/ingestion/wells/PUSH-TZ/telemetry").json()["records"]]
+    assert datetime.combine(TODAY, time(10), tzinfo=ZoneInfo("UTC")) in stamps
+
+    missing = client.get("/api/v1/ingestion/wells/NO-SUCH-WELL/history")
+    assert missing.status_code == 404 and missing.json()["detail"] == "Нет данных по скважине"
+
+
+def test_api_key_is_asked_in_russian(client, monkeypatch):
+    import dataclasses
+
+    from app import main
+
+    monkeypatch.setattr(main, "settings", dataclasses.replace(main.settings, api_key="secret"))
+    refused = client.get("/api/v1/rating")
+    assert refused.status_code == 401 and refused.json()["detail"].startswith("Ключ API не указан или неверный")
+    assert client.get("/api/v1/rating", headers={"X-API-Key": "secret"}).status_code == 200
+
+
 def test_liquid_rate_headers():
     from app.core.documents import nkt_registry
     from app.core.excel_cells import field_for

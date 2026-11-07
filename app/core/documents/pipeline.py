@@ -83,6 +83,7 @@ def _import_by_profile(document: dict, content: bytes, profile_id: str) -> dict:
               "records": sum(item.get("record_count") or 0 for item in imported),
               "batch_ids": [item["batch_id"] for item in imported if item.get("batch_id")],
               "rows_rejected": result.get("rows_rejected"),
+              "skipped_cells": result.get("skipped_cells") or [],
               # Which columns were taken: mapped to system fields, kept as additional
               # indicators (not in the rating), or not used at all.
               "source_columns": result.get("source_columns") or {},
@@ -98,6 +99,10 @@ def _import_by_profile(document: dict, content: bytes, profile_id: str) -> dict:
     message = f"Импорт как {result.get('source_id')}: {loaded['records']} записей по {len(wells)} скв."
     if rejected:
         message += f" Отклонено строк: {rejected}."
+    if result.get("skipped_cell_count"):
+        first = result["skipped_cells"][0]
+        message += (f" Пропущено нечисловых значений: {result['skipped_cell_count']} "
+                    f"(строка {first['row']}, «{first['column']}»: «{first['value']}»).")
     return _finish(document["document_id"], "loaded", message, doc_type=f"source:{profile_id}",
                    text_method="excel_profile", loaded=loaded, well_ids=wells)
 
@@ -367,40 +372,87 @@ def reset_for_processing(document_id: str) -> dict | None:
 def delete_documents(statuses: set[str] | None) -> dict:
     """Delete documents with the given statuses (None = every document except those being
     processed) and the data they loaded; the rating of the affected wells is recomputed once."""
-    deleted, wells = 0, set()
-    for row in db.list_documents(limit=100000):
-        if row["status"] in {"queued", "processing"} or (statuses is not None and row["status"] not in statuses):
-            continue
-        removed = delete_document(row["document_id"], recompute=False)
-        if removed is not None:
-            deleted += 1
-            wells |= set((removed.get("loaded") or {}).get("wells") or [])
-    _recompute([well for well in sorted(wells) if db.well_has_data(well)])
-    return {"deleted": deleted, "wells": sorted(wells)}
+    selected = [row["document_id"] for row in db.list_documents(limit=100000)
+                if row["status"] not in {"queued", "processing"} and (statuses is None or row["status"] in statuses)]
+    removed, remaining = _delete(selected)
+    _recompute(remaining)
+    return {"deleted": len(removed), "wells": sorted({well for document in removed for well in _loaded_wells(document)})}
 
 
-def delete_document(document_id: str, recompute: bool = True) -> dict | None:
+def delete_document(document_id: str) -> dict | None:
     """Remove a document, the data it loaded and its stored original; recompute its wells."""
-    document = db.get_document(document_id)
-    if document is None:
+    removed, remaining = _delete([document_id])
+    if not removed:
         return None
-    loaded = document.get("loaded") or {}
-    db.delete_document_data(document_id, extra_batch_ids=loaded.get("batch_ids") or [])
-    db.delete_document_row(document_id)
-    try:
-        (settings.docs_storage_dir / document["storage_path"]).unlink(missing_ok=True)
-    except OSError:
-        logger.warning("Stored original could not be removed document_id=%s", document_id)
-    # A well the document had created (no other data) leaves the rating with it.
+    _recompute(remaining)
+    return removed[0]
+
+
+def _loaded_wells(document: dict) -> list[str]:
+    return (document.get("loaded") or {}).get("wells") or []
+
+
+def _delete(document_ids: list[str]) -> tuple[list[dict], list[str]]:
+    """Remove the documents with their data and originals, write again the documents left that shared rows
+    with them, and forget a well left without any data (one the documents had created). Returns the removed
+    documents and the wells to recompute."""
+    removed = []
+    for document_id in document_ids:
+        document = db.get_document(document_id)
+        if document is None:
+            continue
+        db.delete_document_data(document_id, extra_batch_ids=(document.get("loaded") or {}).get("batch_ids") or [])
+        db.delete_document_row(document_id)
+        try:
+            (settings.docs_storage_dir / document["storage_path"]).unlink(missing_ok=True)
+        except OSError:
+            logger.warning("Stored original could not be removed document_id=%s", document_id)
+        removed.append(document)
+    wells = {well for document in removed for well in _loaded_wells(document)} | _restore_shared(removed)
     remaining = []
-    for well in loaded.get("wells") or []:
+    for well in sorted(wells):
         if db.well_has_data(well):
             remaining.append(well)
         else:
             db.forget_well(well)
-    if recompute:
-        _recompute(remaining)
-    return document
+    return removed, remaining
+
+
+def _restore_shared(removed: list[dict]) -> set[str]:
+    """The same act or sample loaded from two documents is stored once: the event under the document that
+    wrote it first, the sample and the passport under the last one. Deleting that document took the row
+    from the other one too, so the documents left with the same source and wells are written again, oldest
+    first. Returns their wells."""
+    keys = {(loaded["source_id"], well) for loaded in (document.get("loaded") or {} for document in removed)
+            if loaded.get("source_id") for well in loaded.get("wells") or []}
+    if not keys:
+        return set()
+    shared = [row for row in reversed(db.list_documents(status="loaded", limit=100000))
+              if any(((row.get("loaded") or {}).get("source_id"), well) in keys for well in _loaded_wells(row))]
+    wells: set[str] = set()
+    for row in shared:
+        document = db.get_document(row["document_id"])
+        if document is not None:
+            wells |= set(_reload(document))
+    return wells
+
+
+def _reload(document: dict) -> list[str]:
+    """Write a loaded document's data again as it was read, without a model call: an Excel file is read
+    again by its rules, any other document is loaded from its stored extraction. Returns its wells."""
+    if document["file_kind"] in {"xlsx", "xls"}:
+        db.delete_document_data(document["document_id"],
+                                extra_batch_ids=(document.get("loaded") or {}).get("batch_ids") or [])
+        return _loaded_wells(process_document(document["document_id"]))
+    try:
+        spec = load_document_types().get(document.get("doc_type") or "")
+    except DocumentTypesError:
+        spec = None
+    if spec is None:
+        logger.warning("Document type is not configured any more, data not reloaded document_id=%s",
+                       document["document_id"])
+        return []
+    return load.load_records(document, spec, (document.get("extraction") or {}).get("records") or [])["wells"]
 
 
 class DocumentWorker:

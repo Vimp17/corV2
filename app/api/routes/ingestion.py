@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Query, UploadFile, Form
 from starlette.concurrency import run_in_threadpool
 
@@ -8,6 +10,7 @@ from app.core.excel_ingestion import ExcelImportError, load_profiles
 from app.core.source_connectors import crew_rows, ingest_excel_bytes, save_crews
 from app.schemas import HistoryIngestionRequest, IngestionRequest
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/ingestion", tags=["ingestion"])
 
 
@@ -51,8 +54,8 @@ def get_sources() -> dict:
     except ExcelImportError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return {
-        # The dashboard builds one upload card per profile from this list, so a new profile in
-        # config/source_profiles.json appears in the UI without code changes.
+        # Clients (n8n, scripts) learn the profiles from this list, so a new profile in
+        # config/source_profiles.json needs no code changes.
         "sources": [{"profile_id": profile_id,
                      "source_id": str(profile.get("source_id", profile_id)).upper(),
                      "kind": profile.get("kind"),
@@ -92,12 +95,7 @@ async def ingest_excel(background_tasks: BackgroundTasks,
         result = await run_in_threadpool(ingest_excel_bytes, content, filename, profile_id, well_id)
     except ExcelImportError as exc:
         if well_id:
-            try:
-                profile = load_profiles().get(profile_id, {})
-                source_id = str(profile.get("source_id", profile_id)).upper()
-                db.record_source_status(source_id, well_id, "error", str(exc)[:2000], 0)
-            except Exception:
-                pass
+            await run_in_threadpool(_record_upload_error, profile_id, well_id, str(exc))
         raise HTTPException(status_code=422, detail={
             "message": str(exc),
             "next_step": "Check the worksheet/header row and update config/source_profiles.json aliases.",
@@ -107,6 +105,16 @@ async def ingest_excel(background_tasks: BackgroundTasks,
     wells = [item["well_id"] for item in result.get("imported_wells") or [] if item.get("well_id")]
     result["rating"] = await run_in_threadpool(_recompute, wells, background_tasks)
     return result
+
+
+def _record_upload_error(profile_id: str, well_id: str, message: str) -> None:
+    """The well's source status after a rejected workbook (best effort: the upload error is answered anyway)."""
+    try:
+        profile = load_profiles().get(profile_id, {})
+        source_id = str(profile.get("source_id", profile_id)).upper()
+        db.record_source_status(source_id, well_id, "error", message[:2000], 0)
+    except Exception:
+        logger.warning("Source status of a rejected workbook was not recorded well_id=%s", well_id)
 
 
 @router.post("/crew-schedule", status_code=201)
@@ -142,7 +150,7 @@ def ingest_crew_schedule(payload: dict, well_id: str | None = Query(default=None
 def get_telemetry(well_id: str) -> dict:
     records = db.load_telemetry(well_id)
     if not records:
-        raise HTTPException(status_code=404, detail="No telemetry found for well_id")
+        raise HTTPException(status_code=404, detail="Нет телеметрии по скважине")
     return {"well_id": well_id, "records": records}
 
 
@@ -174,4 +182,6 @@ def ingest_history(request: HistoryIngestionRequest, background_tasks: Backgroun
 
 @router.get("/wells/{well_id}/history")
 def get_history(well_id: str) -> dict:
+    if not db.well_has_data(well_id):
+        raise HTTPException(status_code=404, detail="Нет данных по скважине")
     return {"well_id": well_id, **db.load_history(well_id)}
