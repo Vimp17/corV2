@@ -84,7 +84,7 @@ def ready():
         logger.warning("Database readiness check failed (%s)", type(exc).__name__)
         raise HTTPException(status_code=503, detail="Database is unavailable") from exc
     return {
-        # storage: the SQLAlchemy dialect, always "mssql" (app/db.py).
+        # storage: the SQLAlchemy dialect, always "mssql" (app/db).
         "status": "ready", "storage": db.engine().dialect.name, "database_connected": True,
         "llm_agent": "configured" if settings.llm_api_url and settings.llm_model else "not_configured",
         "ocr_model": "configured" if settings.ocr_url and settings.ocr_model else "not_configured",

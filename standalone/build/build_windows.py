@@ -2,7 +2,7 @@
 
 Runs on the build machine (Linux) inside a Python 3.12 container — see standalone/build/build.sh.
 The result is one zip: unpack it on Windows Server and run mai.cmd. The database is Microsoft SQL
-Server (app/db.py); the archive holds no database server. Inside:
+Server (app/db); the archive holds no database server. Inside:
 
   runtime/            official portable Python 3.12.10 for Windows (NuGet package "python",
                       signed by the Python Software Foundation) with every package already
@@ -50,7 +50,7 @@ APP_NAME = "mai-demo"
 # No scripts/ (sample data for tests and demos) and no README.md of the repository: README-DEMO.md
 # describes the build.
 PROJECT_ITEMS = ["app", "dashboard", "config", "n8n", "examples/documents"]
-STANDALONE_ITEMS = ["__init__.py", "asgi.py", "envfile.py", "manage.py", "env.template",
+STANDALONE_ITEMS = ["__init__.py", "asgi.py", "envfile.py", "manage.py", "cli", "env.template",
                     "README.md"]
 TEXT_CRLF = {".cmd", ".md", ".txt", ".template"}
 # DLLs every supported Windows (Server 2016 and later) has: system libraries and the Universal CRT.
@@ -219,7 +219,11 @@ def copy_project(root: Path) -> None:
             shutil.copy2(source, target)
     (root / "standalone").mkdir(exist_ok=True)
     for item in STANDALONE_ITEMS:
-        shutil.copy2(SRC / "standalone" / item, root / "standalone" / item)
+        source, target = SRC / "standalone" / item, root / "standalone" / item
+        if source.is_dir():
+            shutil.copytree(source, target, ignore=ignore)
+        else:
+            shutil.copy2(source, target)
     shutil.copy2(SRC / "standalone" / "mai.cmd", root / "mai.cmd")
     shutil.copy2(SRC / "standalone" / "README.md", root / "README-DEMO.md")
     for folder in ("data/documents", "inbox", "logs", "run"):

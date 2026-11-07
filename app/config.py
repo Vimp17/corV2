@@ -56,7 +56,7 @@ def _project_path(name: str, default: str) -> Path:
 @dataclass(frozen=True)
 class Settings:
     # Microsoft SQL Server: mssql+pyodbc://…?driver=ODBC+Driver+18+for+SQL+Server or mssql+pymssql://…
-    # (app/db.py); the schema of the tables, empty = the default schema of the login (dbo). The schema
+    # (app/db); the schema of the tables, empty = the default schema of the login (dbo). The schema
     # was MAI_STANDALONE_MSSQL_SCHEMA in earlier versions; .env files written then still work.
     database_url: str = os.getenv("MAI_DATABASE_URL", "").strip()
     database_schema: str = (os.getenv("MAI_DATABASE_SCHEMA") or os.getenv("MAI_STANDALONE_MSSQL_SCHEMA", "")).strip()

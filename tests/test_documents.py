@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 
 import pytest
@@ -347,7 +347,7 @@ def test_ocr_unavailable_is_retried_then_failed(client, generated, fake, monkeyp
     document = _upload(client, generated / "documents" / "akt_demontazha_DEMO-005_scan.jpg")
     assert document["status"] == "queued" and "Повтор" in document["status_message"]
     for _ in range(settings.docs_max_attempts - 1):
-        db.update_document(document["document_id"], started_at=db.datetime.now(db.timezone.utc) - timedelta(minutes=5))
+        db.update_document(document["document_id"], started_at=datetime.now(timezone.utc) - timedelta(minutes=5))
         db.claim_next_document()
         from app.core.documents.pipeline import process_document
         row = process_document(document["document_id"])
@@ -453,7 +453,6 @@ def test_data_shared_by_two_documents_stays_until_both_are_deleted(client, tmp_p
 
 
 def test_a_document_without_a_date_counts_from_the_day_it_was_received():
-    from datetime import datetime, timezone
     from zoneinfo import ZoneInfo
 
     from app.config import settings

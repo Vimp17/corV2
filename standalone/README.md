@@ -505,7 +505,7 @@ schtasks /Create /TN "MAI demo" /SC ONLOGON /TR "C:\mai-demo\mai.cmd start" /RL 
   - входящий — один TCP-порт (по умолчанию 8000), HTTP;
   - исходящий — SQL Server, LiteLLM и API источников, если их адреса заданы в `.env` (`MAI_SOURCE_<ID>_URL`).
 - **Доступ.** Ключ `MAI_API_KEY`. Клиенты передают его в заголовке `X-API-Key`, браузер — через cookie `mai_api_key` (HttpOnly, SameSite=Lax, 30 дней), который ставит ссылка `/dashboard?key=…`.
-- **База.** Microsoft SQL Server 2016+ (`app\db.py`): таблицы создаются по описанию приложения в схеме `MAI_DATABASE_SCHEMA` (в `.env` прежних версий — `MAI_STANDALONE_MSSQL_SCHEMA`) или схеме входа по умолчанию; новые столбцы добавляются `ALTER TABLE … ADD`, таблицы и столбцы прежних версий удаляются. Подключение — `pyodbc` через установленный ODBC-драйвер Microsoft или `pymssql` (свой клиент FreeTDS, без ODBC).
+- **База.** Microsoft SQL Server 2016+ (`app\db\`): таблицы создаются по описанию приложения в схеме `MAI_DATABASE_SCHEMA` (в `.env` прежних версий — `MAI_STANDALONE_MSSQL_SCHEMA`) или схеме входа по умолчанию; новые столбцы добавляются `ALTER TABLE … ADD`, таблицы и столбцы прежних версий удаляются. Подключение — `pyodbc` через установленный ODBC-драйвер Microsoft или `pymssql` (свой клиент FreeTDS, без ODBC).
 - **Записывает на диск** только в папку сборки: `.env`, `data\documents`, `inbox`, `logs`, `run`, `n8n-demo`, `diag`, кэш байт-кода `__pycache__`.
 
 ---
@@ -523,4 +523,4 @@ standalone/build/build.sh      # → standalone/dist/mai-demo-win64-<дата>-<
   ```bash
   standalone/build/build.sh --relock
   ```
-- Логику команд (`standalone/manage.py`, `standalone/asgi.py`) можно проверить и на Linux: `python standalone/manage.py <команда>` из корня репозитория, при установленных зависимостях `requirements.txt`.
+- Логику команд (`standalone/manage.py` и модули `standalone/cli/`, `standalone/asgi.py`) можно проверить и на Linux: `python standalone/manage.py <команда>` из корня репозитория, при установленных зависимостях `requirements.txt`.

@@ -1,4 +1,4 @@
-"""SQL Server specifics of app/db.py: run with MAI_TEST_DATABASE_URL (see tests/conftest.py)."""
+"""SQL Server specifics of app/db: run with MAI_TEST_DATABASE_URL (see tests/conftest.py)."""
 from __future__ import annotations
 
 import os
@@ -108,7 +108,7 @@ def test_a_login_that_only_reads_and_writes_starts_when_the_tables_exist(db, mon
     restricted = create_engine(url, poolclass=NullPool, connect_args=db.connect_args(settings.database_url))
     if settings.database_schema:
         restricted = restricted.execution_options(schema_translate_map={None: settings.database_schema})
-    monkeypatch.setattr(db, "_engine", restricted)
+    monkeypatch.setattr(db.base, "_engine", restricted)
     try:
         assert not any(db.init_db().values())             # nothing to create: no right to create is needed
         with admin.connect() as conn:
@@ -143,17 +143,17 @@ def test_a_column_added_by_a_new_version_is_created(db):
 def test_a_deadlock_victim_is_run_again(db, monkeypatch):
     from sqlalchemy.exc import OperationalError
 
-    monkeypatch.setattr(db.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(db.base.time, "sleep", lambda seconds: None)
     calls = []
 
-    @db._retry_deadlocks
+    @db.base._retry_deadlocks
     def write():
         calls.append("write")
         if len(calls) < 3:
             raise OperationalError("MERGE …", {}, Exception(1205, b"Transaction was deadlocked on lock resources"))
         return "done"
 
-    @db._retry_deadlocks
+    @db.base._retry_deadlocks
     def duplicate():
         calls.append("duplicate")
         raise OperationalError("INSERT …", {}, Exception(2627, b"Violation of UNIQUE KEY constraint"))
@@ -172,7 +172,7 @@ def test_parallel_writes_of_new_wells_do_not_deadlock(db, monkeypatch):
 
     # No retries: writers of new wells at the same time must queue, not deadlock (MERGE … HOLDLOCK). Small
     # tables, as in a new database, are where the plans lock the widest key ranges.
-    monkeypatch.setattr(db, "DEADLOCK_ATTEMPTS", 1)
+    monkeypatch.setattr(db.base, "DEADLOCK_ATTEMPTS", 1)
     with db.engine().begin() as conn:
         for table in (db.telemetry, db.ingestion_batches, db.history_events, db.history_batches):
             conn.execute(table.delete())

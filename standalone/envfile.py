@@ -1,7 +1,7 @@
 """The .env file of the standalone build: read, normalise and update it.
 
 The application reads .env itself (app/config.py, UTF-8, variables already set in the environment
-win). This module is used by standalone/manage.py and standalone/asgi.py, which must also cope
+win). This module is used by the commands (standalone/cli) and standalone/asgi.py, which must also cope
 with a file saved by an old Notepad: a UTF-8 byte order mark or the ANSI code page (cp1251) are
 converted back to plain UTF-8 before the application starts.
 """
