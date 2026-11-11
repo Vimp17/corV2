@@ -138,6 +138,9 @@ def field_for(label: Any, aliases: dict[str, str]) -> str | None:
     text = norm(label)
     if not text:
         return None
+    # v4 scores are not gas composition measurements.
+    if header_key(text).startswith("sco2"):
+        return None
     field = aliases.get(header_key(text))
     if field in {"timestamp", "well_id", "in_operation", "water_compatibility_issue"}:
         return None

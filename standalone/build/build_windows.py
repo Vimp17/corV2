@@ -49,7 +49,7 @@ APP_NAME = "mai-demo"
 # Project files copied into the build (directories are copied without caches and tests).
 # No scripts/ (sample data for tests and demos) and no README.md of the repository: README-DEMO.md
 # describes the build.
-PROJECT_ITEMS = ["app", "dashboard", "config", "n8n", "examples/documents"]
+PROJECT_ITEMS = ["app", "dashboard", "config", "n8n", "examples/documents", "examples/co2"]
 STANDALONE_ITEMS = ["__init__.py", "asgi.py", "envfile.py", "manage.py", "cli", "env.template",
                     "README.md"]
 TEXT_CRLF = {".cmd", ".md", ".txt", ".template"}
@@ -296,6 +296,7 @@ def main() -> int:
     compile_bytecode(root)
     info = build_info(root, nupkg_sha256)
     info["dll_problems"] = problems
+    (root / "BUILD_INFO.json").write_text(json.dumps(info, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     (DIST / "last-build.json").write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
     if args.no_zip:
         log(f"build folder: {root}")
