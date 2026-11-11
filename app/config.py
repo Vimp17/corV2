@@ -95,6 +95,7 @@ class Settings:
     rating_ud_to: int = _int_env("MAI_RATING_UD_TO", "60", 0, 100)
     # The index from the two forecasts, the НТЦ rules and the math model: their maximum (max) or mean.
     rating_combine: str = os.getenv("MAI_RATING_COMBINE", "max").strip().lower()
+    co2_enabled: bool = os.getenv("MAI_CO2_ENABLED", "true").lower() in {"1", "true", "yes"}
     # Math model: its JSON file and the horizon of its failure probability.
     math_model_path: Path = _project_path("MAI_MATH_MODEL_PATH", "./config/math_model.json")
     rating_horizon_days: int = _int_env("MAI_RATING_HORIZON_DAYS", "90", 1, 3650)

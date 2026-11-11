@@ -1,0 +1,83 @@
+name: Test and build Windows demo
+on:
+  push:
+    branches: [main, 'codex/**']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: demo-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: 'Y'
+          MSSQL_SA_PASSWORD: 'CI-only-CorV2-2026!'
+        ports: ['1433:1433']
+    env:
+      MAI_TEST_DATABASE_URL: 'mssql+pymssql://sa:CI-only-CorV2-2026!@localhost:1433/mai_test'
+      MAI_TEST_DATABASE_SCHEMA: ci
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -r requirements-dev.txt -c standalone/requirements-windows.lock
+      - name: Prepare isolated SQL Server database
+        run: python scripts/prepare_test_db.py
+      - run: python -m pytest -q -p no:cacheprovider
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Build with the locked Windows dependencies
+        env:
+          MAI_BUILD_GIT_COMMIT: ${{ github.sha }}
+          MAI_BUILD_GIT_BRANCH: ${{ github.head_ref || github.ref_name }}
+          MAI_BUILD_GIT_DIRTY: 'no'
+        run: python standalone/build/build_windows.py
+      - name: Verify package manifest and checksums
+        run: python scripts/check_demo_archive.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mai-demo-win64
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            standalone/dist/mai-demo-win64-*.zip
+            standalone/dist/mai-demo-win64-*.zip.sha256
+            standalone/dist/last-build.json
+  windows-smoke:
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: mai-demo-win64
+          path: standalone/dist
+      - name: Test the shipped Python, native dependencies and CO2 model
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem standalone/dist/mai-demo-win64-*.zip | Select-Object -First 1
+          $expected = (Get-Content ($zip.FullName + '.sha256')).Split(' ')[0]
+          if ((Get-FileHash $zip.FullName -Algorithm SHA256).Hash.ToLower() -ne $expected) { throw 'Checksum mismatch' }
+          Expand-Archive $zip.FullName -DestinationPath smoke
+          $root = (Get-ChildItem smoke -Directory | Select-Object -First 1).FullName
+          Copy-Item scripts/smoke_demo.py $root
+          Push-Location $root
+          try {
+            & ./runtime/python.exe ./smoke_demo.py
+            if ($LASTEXITCODE -ne 0) { throw 'Runtime smoke failed' }
+          } finally { Pop-Location }

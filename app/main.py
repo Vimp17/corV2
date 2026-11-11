@@ -14,6 +14,7 @@ from app.api.routes.documents import router as documents_router
 from app.api.routes.ingestion import router as ingestion_router
 from app.api.routes.monitoring import router as monitoring_router
 from app.api.routes.rating import router as rating_router
+from app.api.routes.co2 import router as co2_router
 from app.config import settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -104,4 +105,5 @@ v1.include_router(ingestion_router)
 v1.include_router(monitoring_router)
 v1.include_router(rating_router)
 v1.include_router(documents_router)
+v1.include_router(co2_router)
 app.include_router(v1)

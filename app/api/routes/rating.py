@@ -27,6 +27,10 @@ router = APIRouter(tags=["rating"])
 
 def _rated_wells() -> list[dict]:
     wells = rating.build_rating(db.list_rating_rows())
+    from app.db.co2 import latest_by_well
+    co2_results = latest_by_well() if settings.co2_enabled else {}
+    for well in wells:
+        well["co2_assessment"] = co2_results.get(well["well_id"])
     for well in wells:
         # The full AI proposal, the НТЦ rules and the math model inputs are served with the well card only.
         well.pop("ai_proposal", None)
@@ -83,7 +87,7 @@ def _payload() -> dict:
                            "max_rate": settings.rating_protection_max_rate,
                            "labels": rating.PROTECTION_LABELS},
             "thresholds": rating.thresholds(),
-            "models": {"combine": settings.rating_combine, "horizon_days": settings.rating_horizon_days},
+            "models": {"combine": settings.rating_combine, "horizon_days": settings.rating_horizon_days, "co2_enabled": settings.co2_enabled},
             "measures": rating.measures_catalog(),
             "gap_labels": rating.GAP_LABELS,
             "ai_agent_configured": proposal_agent.configured(),
@@ -117,7 +121,9 @@ def get_rating_well(well_id: str) -> dict:
     if well is None:
         raise HTTPException(status_code=404, detail="Скважины нет в рейтинге")
     titles = document_pipeline.type_titles()
-    return {**well,
+    from app.db.co2 import history
+    return {**well, "co2_enabled": settings.co2_enabled,
+            "co2_assessments": history(well_id) if settings.co2_enabled else [],
             "documents": [document_pipeline.decorate(row, titles) for row in db.list_documents(well_id=well_id, limit=50)],
             "extra_measurements": rating_builder.extra_measurements(well_id),
             "nkt_registry": nkt_registry.well_registry(well_id),

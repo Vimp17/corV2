@@ -74,6 +74,9 @@ COLUMNS = [
     ("plan_status", "Статус плана", 15, "Решение и график ППР"),
     ("data_gaps", "Полнота данных", 30, ""),
     ("comment", "Комментарий", 34, ""),
+    ("co2_rate", "CO₂: скорости, мм/год", 32, "CO₂-коррозия (вне индекса)"),
+    ("co2_version", "CO₂: версия / режим", 28, "CO₂-коррозия (вне индекса)"),
+    ("co2_quality", "CO₂: качество и ограничения", 60, "CO₂-коррозия (вне индекса)"),
 ]
 FIELD_LABELS = {key: header for key, header, *_ in COLUMNS}
 
@@ -82,7 +85,7 @@ FIELD_LABELS = {key: header for key, header, *_ in COLUMNS}
 NUMBER_FORMATS = {"model_ntc": "0.00", "model_math": "0.00", "tonnage_t": "0.0", "liquid_rate_m3_day": "0.0", "oil_pct": "0.0",
                   "noo_days": "0", "index": "0", "index_raw": "0", "oil_l_day": "0",
                   "deadline": "DD.MM.YYYY", "plan_date": "DD.MM.YYYY"}
-TEXT_COLUMNS = {"field", "equipment", "measure", "comment", "category", "action", "data_gaps"}
+TEXT_COLUMNS = {"field", "equipment", "measure", "comment", "category", "action", "data_gaps", "co2_rate", "co2_version", "co2_quality"}
 # Values shown in red bold on «Рейтинг».
 BAD_VALUES = {"corrosive_environment": "Коррозионная", "demount_corrosion": "Есть коррозия",
               "base_corrosion": "Есть коррозия", "category": "Коррозионная", "protection": "Недостаточна"}
@@ -127,7 +130,16 @@ def _title(sheet, title: str, note: str | None = None) -> None:
 def _cell_values(well: dict) -> dict[str, Any]:
     """The «Рейтинг» row of a well: values as they are, yes/no and dates in words."""
     measure, era = well.get("measure"), well.get("era_required")
+    co2 = well.get("co2_assessment") or {}
+    scenarios = co2.get("scenarios") or []
+    rates = "; ".join(f"CO₂={r['co2_mole_fraction']*100:g}%: {r['rate_mm_year']:.6g}" for r in scenarios)
+    if not rates:
+        rates = "; ".join(f"{k}: {v:.6g}" for k, v in (co2.get("imported_results") or {}).items()
+                          if k.startswith("V_") and isinstance(v, (int, float)))
     return {key: well.get(key) for key, *_ in COLUMNS} | {
+        "co2_rate": rates or None,
+        "co2_version": co2.get("model_version"),
+        "co2_quality": "\n".join(co2.get("quality_flags") or []) or None,
         "in_operation": _yn(well.get("in_operation"), "В работе", "Не в работе"),
         "data_gaps": "\n".join(f"{rating.GAP_LABELS.get(gap['key'], gap['key'])}: {gap.get('note') or ''}"
                                for gap in well.get("data_gaps") or []) or "полные",

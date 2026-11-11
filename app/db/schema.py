@@ -160,3 +160,13 @@ documents = Table(
 )
 Index("idx_documents_status_created", documents.c.status, documents.c.created_at)
 Index("idx_documents_created", documents.c.created_at)
+
+# Scenario rates kept separate from probabilities and measured telemetry.
+co2_assessments = Table(
+    "co2_assessments", metadata,
+    Column("assessment_id", NVarchar(64), primary_key=True),
+    Column("well_id", NVarchar(128), nullable=False),
+    Column("state_at", UTCDateTime), Column("created_at", UTCDateTime, nullable=False),
+    Column("model_version", NVarchar(64), nullable=False), Column("result_json", JSON, nullable=False),
+)
+Index("idx_co2_well_created", co2_assessments.c.well_id, co2_assessments.c.created_at)

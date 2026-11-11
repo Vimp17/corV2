@@ -12,7 +12,7 @@ from sqlalchemy import delete, func, literal_column, select, union
 from app.config import settings
 from app.db.base import _merge, _queue_writes, _retry_deadlocks, engine
 from app.db.schema import (_UNSPECIFIED_SOURCE, history_batches, history_events, ingestion_batches,
-                           source_documents, source_health, telemetry, well_rating)
+                           source_documents, source_health, telemetry, well_rating, co2_assessments)
 from app.schemas import FailureHistoryItem, TelemetryPoint, WorkHistoryItem
 
 
@@ -115,7 +115,7 @@ def load_telemetry(well_id: str) -> list[TelemetryPoint]:
 def list_wells() -> list[dict]:
     """Wells with telemetry, history or a source status: telemetry count and time span, history count."""
     ids = union(select(telemetry.c.well_id), select(history_events.c.well_id),
-                select(source_health.c.well_id)).subquery("w")
+                select(source_health.c.well_id), select(co2_assessments.c.well_id)).subquery("w")
     history_count = (select(func.count()).select_from(history_events)
                      .where(history_events.c.well_id == ids.c.well_id).scalar_subquery())
     query = (select(ids.c.well_id, func.count(telemetry.c.id).label("record_count"),
@@ -131,7 +131,7 @@ def list_wells() -> list[dict]:
 def known_well_ids() -> list[str]:
     """Wells the system knows from any source, the rating or MAI_WELL_IDS."""
     query = union(select(telemetry.c.well_id), select(history_events.c.well_id),
-                  select(well_rating.c.well_id), select(source_health.c.well_id))
+                  select(well_rating.c.well_id), select(source_health.c.well_id), select(co2_assessments.c.well_id))
     with engine().connect() as conn:
         wells = {row[0] for row in conn.execute(query).all()}
     return sorted(wells | set(settings.configured_well_ids))
@@ -288,7 +288,7 @@ def load_extra_measurements(well_id: str) -> list[dict]:
 def well_has_data(well_id: str) -> bool:
     """Whether any source data of the well remain: telemetry, history events or source documents."""
     with engine().connect() as conn:
-        for table in (telemetry, history_events, source_documents):
+        for table in (telemetry, history_events, source_documents, co2_assessments):
             if conn.execute(select(table.c.well_id).where(table.c.well_id == well_id).limit(1)).first():
                 return True
     return False

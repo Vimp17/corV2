@@ -224,3 +224,33 @@ class RatingWellPatch(APIModel):
     plan_date: date | None = None
     promine_status: PromineStatus | None = None
     comment: str | None = Field(default=None, max_length=2000)
+
+
+class CO2Calculation(WellRequest):
+    """A single state; pressure explicitly absolute, gas composition in mole fractions."""
+    temperature_c: float = Field(gt=-273.15, allow_inf_nan=False, strict=True)
+    pressure_abs_bar: float = Field(gt=0, allow_inf_nan=False, strict=True)
+    co2_mole_fractions: list[float] = Field(default_factory=lambda: [.005, .015, .03], min_length=1, max_length=10)
+    composition_source: Literal["measured", "scenario"] = "scenario"
+    state_at: datetime | None = None
+    source: str = Field(default="Ручной ввод", min_length=1, max_length=256)
+    synthetic: bool = False
+    create_well: bool = False
+
+    @field_validator("co2_mole_fractions", mode="before")
+    @classmethod
+    def fractions(cls, values):
+        if not isinstance(values, list) or any(isinstance(x, bool) or not isinstance(x, (int, float)) or
+                not math.isfinite(x) or not 0 <= x <= 1 for x in values):
+            raise ValueError("Доли CO₂ должны быть конечными числами от 0 до 1 (не проценты).")
+        if len(set(values)) != len(values):
+            raise ValueError("Сценарии не должны повторяться.")
+        return sorted(values)
+
+    @model_validator(mode="after")
+    def state_and_composition(self):
+        if self.composition_source == "measured" and len(self.co2_mole_fractions) != 1:
+            raise ValueError("Для измеренного состава требуется одна доля CO₂.")
+        if self.state_at is not None:
+            self.state_at = in_source_zone(self.state_at)
+        return self
