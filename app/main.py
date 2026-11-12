@@ -26,6 +26,8 @@ logger = logging.getLogger("mai_api")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
+    from app.core.recompute import process_pending
+    process_pending()
     app.state.document_worker = None
     if settings.docs_worker_enabled:
         from app.core.documents.pipeline import DocumentWorker

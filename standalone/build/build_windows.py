@@ -30,6 +30,9 @@ import re
 import shutil
 import subprocess
 import sys
+import ssl
+import time
+import urllib.error
 import urllib.request
 import zipfile
 from datetime import datetime, timezone
@@ -80,11 +83,19 @@ def download(url: str, target: Path) -> Path:
         return target
     target.parent.mkdir(parents=True, exist_ok=True)
     partial = target.with_suffix(target.suffix + ".part")
-    log(f"download {url}")
-    with urllib.request.urlopen(url, timeout=900) as response, partial.open("wb") as out:
-        shutil.copyfileobj(response, out, 1024 * 1024)
-    partial.replace(target)
-    return target
+    for attempt in range(3):
+        log(f"download {url} (attempt {attempt+1}/3)")
+        try:
+            with urllib.request.urlopen(url, timeout=20) as response, partial.open("wb") as out:
+                shutil.copyfileobj(response, out, 1024 * 1024)
+            partial.replace(target)
+            return target
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+            partial.unlink(missing_ok=True)
+            if (attempt == 2 or isinstance(getattr(exc, "reason", exc), ssl.SSLCertVerificationError)
+                    or isinstance(exc, urllib.error.HTTPError) and exc.code not in {429, 502, 503, 504}):
+                raise
+            time.sleep(attempt+1)
 
 
 def tools() -> Path:
@@ -99,12 +110,10 @@ def python_runtime(target: Path) -> str:
     """Unpack the NuGet Python into target; returns the package SHA-256 (after the SHA-512 check)."""
     package = download(NUPKG_URL, CACHE / "downloads" / f"python.{PYTHON_VERSION}.nupkg")
     data = package.read_bytes()
-    with urllib.request.urlopen(NUPKG_CATALOG, timeout=300) as response:
-        leaf = json.load(response)
+    leaf = json.loads(download(NUPKG_CATALOG, CACHE / "downloads" / f"python.{PYTHON_VERSION}.registration.json").read_bytes())
     entry = leaf.get("catalogEntry")
     if isinstance(entry, str):
-        with urllib.request.urlopen(entry, timeout=300) as response:
-            entry = json.load(response)
+        entry = json.loads(download(entry, CACHE / "downloads" / f"python.{PYTHON_VERSION}.catalog.json").read_bytes())
     expected = (entry or {}).get("packageHash")
     algorithm = str((entry or {}).get("packageHashAlgorithm") or "SHA512").lower()
     if not expected:
@@ -275,7 +284,8 @@ def validate_archive(archive: Path, info: dict) -> None:
         raise SystemExit("Invalid archive checksum or unresolved DLL dependencies")
     with zipfile.ZipFile(archive) as package:
         required = ("app/main.py", "app/core/co2_corrosion.py", "app/core/source_catalog.py",
-                    "dashboard/co2.js", "runtime/python.exe", "BUILD_INFO.json")
+                    "app/core/recompute.py", "app/db/recompute.py", "dashboard/co2.js",
+                    "runtime/python.exe", "BUILD_INFO.json")
         if package.testzip() or any(f"{APP_NAME}/{name}" not in package.namelist() for name in required):
             raise SystemExit("Archive is incomplete or corrupted")
         manifest = json.loads(package.read(f"{APP_NAME}/BUILD_INFO.json"))

@@ -76,23 +76,22 @@ def _commit(document: dict, contributions: list[dict], loaded: dict, message: st
     loaded = {**loaded, "storage_version": 2}
     wells = db.replace_document_data(document, contributions, status="loaded", loaded=loaded,
         status_message=message[:2000], processed_at=datetime.now(timezone.utc), **values)
-    for row in contributions:
-        db.record_source_status(row["source_id"], row["well_id"], "ok", message[:2000], origin="document")
-    # Recoverable derived state: a failure here keeps the accepted version and the next cycle retries.
     try:
-        _recompute(wells)
+        for row in contributions:
+            db.record_source_status(row["source_id"], row["well_id"], "ok", message[:2000], origin="document")
+        failed = _recompute(wells)["failed"]
     except Exception:
         logger.exception("Accepted document needs rating recompute document_id=%s", document["document_id"])
+        failed = True
+    if failed:
         db.update_document(document["document_id"], claim_id=document.get("claim_id"),
-            status_message=(message + " Рейтинг обновится в следующем дневном цикле.")[:2000])
+            status_message=(message + " При принятии данных пересчёт не завершился; создана заявка на повтор.")[:2000])
     return db.get_document(document["document_id"]) or {}
 
 
-def _recompute(wells: list[str]) -> None:
-    if wells:
-        from app.core import rating_builder
-
-        rating_builder.recompute_wells(wells)
+def _recompute(wells: list[str]) -> dict:
+    from app.core.recompute import process_pending
+    return process_pending(wells, limit=max(1, len(wells)))
 
 
 def _import_by_profile(document: dict, content: bytes, profile_id: str) -> dict:
@@ -367,6 +366,8 @@ def load_date_field(spec: dict) -> str:
 
 def process_queue(limit: int = 20) -> list[dict]:
     """Process up to `limit` queued documents; returns their final rows."""
+    from app.core.recompute import process_pending
+    process_pending()
     done = []
     for _ in range(limit):
         document = db.claim_next_document()

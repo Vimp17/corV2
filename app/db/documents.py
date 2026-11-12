@@ -4,10 +4,11 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import uuid
 
-from sqlalchemy import bindparam, delete, func, select, text, update
+from sqlalchemy import bindparam, case, delete, func, literal_column, select, text, update
 
 from app.config import settings
 from app.db.base import _iso, _merge, _retry_deadlocks, engine, qualified
+from app.db.recompute import enqueue
 from app.db.schema import (BINARY_COLLATION, documents, history_batches, ingestion_batches, source_documents,
                            UTCDateTime, telemetry, history_events, document_contributions)
 
@@ -137,7 +138,9 @@ def replace_document_data(document: dict, contributions: list[dict], **values) -
             conn.execute(document_contributions.insert(), [{**row, "document_id": document_id,
                 "updated_at": datetime.now(timezone.utc)} for row in contributions])
         conn.execute(update(documents).where(documents.c.document_id == document_id).values(**values))
-    return sorted(set(old_wells) | {row["well_id"] for row in contributions})
+        wells = sorted(set(old_wells) | {row["well_id"] for row in contributions})
+        enqueue(conn, wells)
+    return wells
 
 
 def contribution_rows(well_id: str) -> list[dict]:
@@ -156,15 +159,20 @@ def delete_document_row(document_id: str) -> dict | None:
             return None
         if row["status"] == "processing":
             raise ValueError("Документ уже обрабатывается.")
+        enqueue(conn, (row["loaded"] or {}).get("wells") or [])
         conn.execute(delete(documents).where(documents.c.document_id == document_id))
     return _document_row(row)
 
 
 def migrate_document_data(conn) -> None:
     """Move proven legacy ownership; keep ambiguous external/profile batches conservatively."""
-    for document in conn.execute(select(documents)).mappings().all():
+    loaded_json = case((func.isjson(documents.c.loaded) == 1, documents.c.loaded), else_=literal_column("N'{}'"))
+    query = select(documents.c.document_id, documents.c.loaded, documents.c.processed_at, documents.c.created_at).where(
+        func.isjson(documents.c.loaded) == 1,
+        func.coalesce(func.json_value(loaded_json, "$.storage_version"), "") != "2")
+    for document in conn.execute(query).mappings().all():
         loaded = document["loaded"] or {}
-        if not loaded or loaded.get("storage_version") == 2:
+        if not loaded:
             continue
         document_id = document["document_id"]
         prefix = f"doc-{document_id}-%"
@@ -175,7 +183,7 @@ def migrate_document_data(conn) -> None:
         extra = loaded.get("batch_ids") or []
         batches = [prefix] + [extra[i:i+1000] for i in range(0, len(extra), 1000)]
         for selection in batches:
-            for table, batch_table in ((telemetry, ingestion_batches), (history_events, history_batches)):
+            for table in (telemetry, history_events):
                 condition = table.c.batch_id.like(selection) if isinstance(selection, str) else table.c.batch_id.in_(selection)
                 for row in conn.execute(select(table).where(condition)).mappings():
                     data = group(row["well_id"], row["source_id"])
@@ -194,3 +202,4 @@ def migrate_document_data(conn) -> None:
             func.json_value(source_documents.c.payload_json, "$.document_id") == document_id))
         conn.execute(update(documents).where(documents.c.document_id == document_id).values(
             loaded={**loaded, "storage_version": 2, "legacy_external_batches_preserved": bool(extra)}))
+        enqueue(conn, loaded.get("wells") or [])

@@ -9,7 +9,7 @@ from io import BytesIO
 from openpyxl import load_workbook
 
 from app.config import settings
-from app.core.co2_corrosion import LIMITATIONS, digest
+from app.core.co2_corrosion import LIMITATIONS, digest, rate
 
 REQUIRED = {"№ скважины", "T_C", "P_bar", "V_1975_median", "V_A1_median", "V_A2_median"}
 NUMERIC = {"T_C", "P_atm", "P_bar", "Q_m3d", "D_mm", "v_mps", "pH_measured", "pH_used",
@@ -17,6 +17,37 @@ NUMERIC = {"T_C", "P_atm", "P_bar", "Q_m3d", "D_mm", "v_mps", "pH_measured", "pH
            "V_1975_median", "V_A1_median", "V_A2_median", "S_CO2_1975", "S_CO2_A1", "S_CO2_A2", "S_CO2_final"}
 ALLOWED = REQUIRED | NUMERIC | {"Пласт", "Класс_1975", "Класс_A1", "Класс_A2", "Класс_final",
                                "validation_status", "flags_anomaly", "excel_row"}
+
+
+def _validate(row: dict) -> list[str]:
+    for key in ("pH_measured", "pH_used"):
+        if row.get(key) is not None and not 0 <= row[key] <= 14:
+            raise ValueError(f"{key}: диапазон формата v4 — 0–14.")
+    if row.get("pH_estimated") is not None and row["pH_estimated"] not in (0, 1):
+        raise ValueError("pH_estimated: требуется флаг 0 или 1.")
+    if any(row.get(key) is not None and row[key] <= 0 for key in ("D_mm", "P_atm")):
+        raise ValueError("Диаметр и исходное давление должны быть положительными.")
+    pressures = [row[key] for key in ("pCO2_low", "pCO2_mid", "pCO2_high") if row.get(key) is not None]
+    if any(p > row["P_bar"] for p in pressures) or pressures != sorted(pressures):
+        raise ValueError("Требуется pCO2_low ≤ pCO2_mid ≤ pCO2_high ≤ P_bar.")
+    warnings = []
+    if row.get("pCO2_mid") is None:
+        warnings.append("Базовая формула не проверена: отсутствует pCO2_mid.")
+    elif not math.isclose(row["V_1975_median"], rate(row["T_C"], row["pCO2_mid"]), rel_tol=1e-6, abs_tol=1e-6):
+        raise ValueError("V_1975_median не соответствует базовой формуле v4 (допуск 1e-6).")
+    scores = ("S_CO2_1975", "S_CO2_A1", "S_CO2_A2")
+    for score, velocity in zip(scores, ("V_1975_median", "V_A1_median", "V_A2_median")):
+        if row.get(score) is not None and not math.isclose(row[score], min(100, 200*row[velocity]), rel_tol=1e-6, abs_tol=1e-6):
+            raise ValueError(f"{score} не соответствует min(100; 200×{velocity}).")
+    if any(row.get(key) is not None and not 0 <= row[key] <= 100 for key in (*scores, "S_CO2_final")):
+        raise ValueError("Балл CO₂ должен находиться в диапазоне 0–100.")
+    if row.get("S_CO2_final") is not None:
+        if all(row.get(key) is not None for key in scores):
+            if not math.isclose(row["S_CO2_final"], sum(row[key] for key in scores)/3, rel_tol=1e-6, abs_tol=1e-6):
+                raise ValueError("S_CO2_final не соответствует среднему трёх баллов.")
+        else:
+            warnings.append("Среднее S_CO2_final не проверено: отсутствуют отдельные баллы.")
+    return warnings
 
 
 def parse(content: bytes, filename: str, synthetic: bool) -> dict:
@@ -76,11 +107,12 @@ def parse(content: bytes, filename: str, synthetic: bool) -> dict:
                 raise ValueError("Недопустимая температура или давление.")
             if any(row.get(k, 0) is not None and row.get(k, 0) < 0 for k in NUMERIC - {"T_C"}):
                 raise ValueError("Отрицательное значение скорости, давления или состава.")
+            verification_flags = _validate(row)
             source_row = row.get("excel_row", number)
             if isinstance(source_row, bool) or not isinstance(source_row, int) or source_row < 2:
                 raise ValueError("Некорректный номер исходной строки.")
             seen.add(well)
-            flags = list(LIMITATIONS) + [
+            flags = list(LIMITATIONS) + verification_flags + [
                 "Импорт внешнего расчёта v4: A1 имеет противоречие знака поправки скорости; полный A2 не воспроизведён.",
                 "Тип исходного давления и дата состояния среды не подтверждены."]
             if synthetic:
