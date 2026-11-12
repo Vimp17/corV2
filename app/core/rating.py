@@ -228,10 +228,12 @@ def build_rating(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Evaluate and rank rows: highest index first; equal indexes share a rank (Excel RANK)."""
     evaluated = [evaluate(row) for row in rows]
     evaluated.sort(key=lambda item: (item["index"] is None, -(item["index"] or 0), str(item["well_id"])))
-    scored = [item["index"] for item in evaluated if item["index"] is not None]
-    for item in evaluated:
-        item["rank"] = (1 + sum(1 for value in scored if value > item["index"])
-                        if item["index"] is not None else None)
+    previous, rank = None, None
+    for position, item in enumerate(evaluated, 1):
+        if item["index"] != previous:
+            rank = position
+        item["rank"] = rank if item["index"] is not None else None
+        previous = item["index"]
     return evaluated
 
 

@@ -32,14 +32,18 @@ def normalize_records(records: list[TelemetryPoint], max_forward_fill_days: int,
     rows: list[dict] = []
     for point in sorted(records, key=lambda item: as_utc(item.timestamp)):
         timestamp = as_utc(point.timestamp)
-        fill_days = long_fill if point_sources(point) & sample_sources else max_forward_fill_days
         row = {"timestamp": timestamp, "calculated": {}, "imputed_fields": [],
-               "snapshot": is_snapshot(point, snapshot_sources)}
+               "snapshot": is_snapshot(point, snapshot_sources), "observed_fields": []}
         for field, (low, high) in RANGE_LIMITS.items():
             value = getattr(point, field)
             if value is not None and low <= value <= high:
                 row["calculated"][field] = float(value)
+                source = getattr(point, "field_sources", {}).get(field, getattr(point, "source_id", ""))
+                ids = point_sources({"source_id": source})
+                fill_days = long_fill if ids & sample_sources else max_forward_fill_days
                 last_valid[field] = (timestamp, float(value), fill_days)
+                if not ids or not ids <= snapshot_sources:
+                    row["observed_fields"].append(field)
                 continue
             previous = last_valid.get(field)
             if previous and (timestamp - previous[0]).total_seconds() <= previous[2] * 86400:
@@ -50,3 +54,10 @@ def normalize_records(records: list[TelemetryPoint], max_forward_fill_days: int,
         row["calculated"]["water_compatibility_issue"] = point.water_compatibility_issue
         rows.append(row)
     return rows
+
+
+def field_observations(rows: list[dict], field: str) -> list[dict]:
+    """One real observation per moment; fills and snapshot fields are never measurements."""
+    return list({row["timestamp"]: row for row in rows if not row.get("snapshot")
+                 and field not in row.get("imputed_fields", ()) and row["calculated"].get(field) is not None
+                 and field in row.get("observed_fields", (field,))}.values())

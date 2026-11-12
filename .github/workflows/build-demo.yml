@@ -33,6 +33,7 @@ jobs:
       - name: Prepare isolated SQL Server database
         run: python scripts/prepare_test_db.py
       - run: python -m pytest -q -p no:cacheprovider
+      - run: node tests/dashboard.test.cjs
   build:
     needs: test
     runs-on: ubuntu-latest
@@ -78,6 +79,6 @@ jobs:
           Copy-Item scripts/smoke_demo.py $root
           Push-Location $root
           try {
-            & ./runtime/python.exe ./smoke_demo.py
+            & ./runtime/python.exe -X utf8 ./smoke_demo.py
             if ($LASTEXITCODE -ne 0) { throw 'Runtime smoke failed' }
           } finally { Pop-Location }

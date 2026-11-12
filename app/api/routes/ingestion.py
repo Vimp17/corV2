@@ -127,7 +127,7 @@ def ingest_crew_schedule(payload: dict, well_id: str | None = Query(default=None
         crews, errors = crew_rows(payload, source_id)
     except ExcelImportError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    if not crews:
+    if not crews and errors:
         raise HTTPException(status_code=422, detail={"message": "No valid crew records", "errors": errors[:20]})
     if all_wells:
         targets = [row["well_id"] for row in db.list_wells()]

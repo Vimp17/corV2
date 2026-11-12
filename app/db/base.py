@@ -146,6 +146,9 @@ def init_db() -> dict[str, list[str]]:
         try:
             changes = schema_changes(conn)
             if not any(changes.values()):
+                from app.db.documents import migrate_document_data
+                migrate_document_data(conn)
+                conn.commit()
                 logger.info("Таблицы базы данных на месте: %d из %d.", len(metadata.tables), len(metadata.tables))
                 return changes
             try:
@@ -160,6 +163,9 @@ def init_db() -> dict[str, list[str]]:
             if left["create"] or left["add"]:
                 raise RuntimeError("После создания в базе нет таблиц и столбцов: "
                                    + ", ".join(left["create"] + left["add"]))
+            from app.db.documents import migrate_document_data
+            migrate_document_data(conn)
+            conn.commit()
             logger.info("Таблицы базы данных: %s.", describe_changes(changes))
             return changes
         finally:

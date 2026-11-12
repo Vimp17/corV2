@@ -71,9 +71,9 @@ def _read(path: str, modified: int) -> Model:
         base, trend = (key[:-6], True) if key.endswith("_trend") else (key, False)
         if base not in (TREND_FIELDS if trend else INDICATORS):
             raise ValueError(f"unknown input {key}")
-    baseline = tuple(sorted((float(item["time_days"]), float(item["survival"])) for item in raw["baseline_survival"]))
-    if not inputs or not baseline or any(not 0 <= survival <= 1 or days < 0 for days, survival in baseline) or any(
-            later[1] > earlier[1] for earlier, later in zip(baseline, baseline[1:])):
+    baseline = tuple((float(item["time_days"]), float(item["survival"])) for item in raw["baseline_survival"])
+    if not inputs or not baseline or any(not math.isfinite(days) or not math.isfinite(survival) or not 0 <= survival <= 1 or days < 0 for days, survival in baseline) or any(
+            (later[0] <= earlier[0] or later[1] > earlier[1]) for earlier, later in zip(baseline, baseline[1:])):
         raise ValueError("inputs and a non-increasing baseline_survival between 0 and 1 are required")
     return Model(version=str(raw.get("model_version", "1.0")), inputs=inputs,
                     coefficients={key: _finite(raw["coefficients"], key) for key in inputs},

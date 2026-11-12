@@ -30,7 +30,8 @@ from app.db.rating import (
     create_monitor_job, get_monitor_job, get_rating_row, list_rating_rows, rating_scores, save_ai_proposal,
     save_computed_rating, update_monitor_job, update_rating_row)
 from app.db.documents import (
-    claim_next_document, create_document, delete_document_data, delete_document_row, document_status_counts,
+    claim_next_document, create_document, delete_document_row, document_status_counts,
+    replace_document_data, reset_document,
     get_document, list_documents, requeue_stale_documents, update_document)
 
 __all__ = [
@@ -42,6 +43,6 @@ __all__ = [
     "record_source_status", "save_batch", "save_history", "save_source_payload", "well_has_data",
     "create_monitor_job", "get_monitor_job", "get_rating_row", "list_rating_rows", "rating_scores",
     "save_ai_proposal", "save_computed_rating", "update_monitor_job", "update_rating_row",
-    "claim_next_document", "create_document", "delete_document_data", "delete_document_row",
+    "claim_next_document", "create_document", "delete_document_row", "replace_document_data", "reset_document",
     "document_status_counts", "get_document", "list_documents", "requeue_stale_documents", "update_document",
 ]

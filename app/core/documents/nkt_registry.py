@@ -346,17 +346,15 @@ def _stored(record: dict) -> dict:
             "new_well": record.get("new_well", False), "fields": record["fields"]}
 
 
-def load(document: dict, result: dict) -> dict:
+def prepare(document: dict, result: dict) -> tuple[list[dict], dict]:
     """Store the accepted rows: a sample per well (system fields) and the registry entry."""
-    from app.core.documents.load import batch_id
-
     document_id = document["document_id"]
-    db.delete_document_data(document_id)
     moment = datetime.combine(result["date"], time(12, 0), tzinfo=timezone.utc)
     by_well: dict[str, list[dict]] = defaultdict(list)
     for record in result["records"]:
         by_well[record["well_id"]].append(record)
     samples = 0
+    contributions = []
     for well_id, rows in by_well.items():
         # The latest row in the file gives the sample; every row is kept in the registry entry.
         values = {}
@@ -374,15 +372,14 @@ def load(document: dict, result: dict) -> dict:
                 continue
         if valid:
             point = TelemetryPoint.model_validate({"timestamp": moment, "source_id": SOURCE_ID, **valid})
-            db.save_batch(well_id, batch_id(document_id, well_id), [point])
             samples += 1
-        db.save_source_payload(SOURCE_ID, well_id, {
+        payload = {
             "document_id": document_id, "filename": document["filename"], "date": result["date"].isoformat(),
             "rows": [{key: field["value"] for key, field in record["fields"].items()} for record in rows],
-            "labels": {key: result["labels"].get(key, key) for record in rows for key in record["fields"]}})
-        db.record_source_status(SOURCE_ID, well_id, "ok", f"{TITLE}: «{document['filename']}»", len(rows),
-                                origin="document")
-    return {"wells": sorted(by_well), "records": len(result["records"]), "samples": samples, "source_id": SOURCE_ID,
+            "labels": {key: result["labels"].get(key, key) for record in rows for key in record["fields"]}}
+        contributions.append({"well_id": well_id, "source_id": SOURCE_ID,
+            "data": {"records": [point.model_dump(mode="json")] if valid else [], "payload": payload}})
+    return contributions, {"wells": sorted(by_well), "records": len(result["records"]), "samples": samples, "source_id": SOURCE_ID,
             "new_wells": sorted({record["well_id"] for record in result["records"] if record.get("new_well")}),
             "source_columns": {name: name for name in result["columns"]["system"]},
             "extra_columns": result["columns"]["other"], "unused_columns": result["columns"]["unused"]}

@@ -182,9 +182,20 @@ def value_agrees(value: Any, field_type: str, quote: str, field_name: str) -> bo
     if field_type == "number":
         # Numbers are read from the quote as written: normalize() turns table pipes into spaces.
         for number in _numbers_in(str(quote)):
-            if abs(number - value) < 1e-6 or abs(number - value * 100) < 1e-6 or abs(number / 100 - value) < 1e-9:
+            if abs(number - value) < 1e-6 or (field_name == "inhibitor_efficiency" and "%" in quote
+                                              and abs(number / 100 - value) < 1e-9):
                 return True
         return False
+    if field_type == "boolean":
+        if field_name != "corrosion_detected" or re.search(r"возмож|не исключ|не подтвержд|проверить", text):
+            return False
+        negative = re.search(r"(?:коррози\w*[^.;]{0,20}(?:не обнаруж|не выяв|отсутств|нет)|"
+                             r"(?:нет|без|отсутствие)\s+(?:признак\w*\s+)?коррози|"
+                             r"не (?:обнаруж|выяв)\w*[^.;]{0,30}коррози)", text)
+        if negative:
+            return value is False
+        positive = re.search(r"обнаруж|выяв|следы корроз|коррозионн\w* износ|язвенн|свищ", text)
+        return value is True and bool(positive)
     if field_type == "date":
         years = {str(value.year), f".{value.year % 100:02d}"}
         if not any(year in text for year in years):

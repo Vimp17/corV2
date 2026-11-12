@@ -26,6 +26,9 @@ sys.path.insert(0, str(ROOT))
 _TMP = Path(os.environ.setdefault("MAI_TESTS_TMP", tempfile.mkdtemp(prefix="mai-tests-")))
 os.environ["MAI_DATABASE_URL"] = os.environ.get("MAI_TEST_DATABASE_URL", "")
 os.environ["MAI_DATABASE_SCHEMA"] = os.environ.get("MAI_TEST_DATABASE_SCHEMA", "")
+if os.environ["MAI_DATABASE_URL"].startswith("mssql+pyodbc"):
+    import pyodbc
+    pyodbc.pooling = False  # NullPool must physically close the temporary-login test sessions.
 os.environ.update({
     "MAI_API_KEY": "",
     "MAI_LLM_API_URL": "http://fake-litellm.local/v1/chat/completions",

@@ -10,6 +10,7 @@ Statuses: queued -> processing -> loaded | not_recognized | failed.
 from __future__ import annotations
 
 import logging
+from contextvars import ContextVar
 import threading
 import time
 from datetime import datetime, timezone
@@ -20,6 +21,7 @@ from app.core.documents import extract, intake, load, text as doc_text
 from app.core.documents.types import DocumentTypesError, load_document_types
 
 logger = logging.getLogger(__name__)
+_active_document = ContextVar("processing_document", default=None)
 
 MAX_STORED_TEXT = 200_000
 MIN_TEXT_CHARS = 30
@@ -59,9 +61,31 @@ def llm_configured() -> bool:
 
 
 def _finish(document_id: str, status: str, message: str | None, **values) -> dict:
-    db.update_document(document_id, status=status, status_message=(message or "")[:2000] or None,
-                       processed_at=datetime.now(timezone.utc), **values)
+    document = _active_document.get() or db.get_document(document_id) or {}
+    if document.get("loaded") and status != "loaded":
+        # A rejected attempt does not replace the last accepted version or its evidence.
+        values = {}
+        message = f"{message or ''} Предыдущие подтверждённые данные сохранены."
+    db.update_document(document_id, claim_id=document.get("claim_id"), status=status,
+        status_message=(message or "")[:2000] or None,
+        processed_at=None if status == "queued" else datetime.now(timezone.utc), **values)
     return db.get_document(document_id) or {}
+
+
+def _commit(document: dict, contributions: list[dict], loaded: dict, message: str, **values) -> dict:
+    loaded = {**loaded, "storage_version": 2}
+    wells = db.replace_document_data(document, contributions, status="loaded", loaded=loaded,
+        status_message=message[:2000], processed_at=datetime.now(timezone.utc), **values)
+    for row in contributions:
+        db.record_source_status(row["source_id"], row["well_id"], "ok", message[:2000], origin="document")
+    # Recoverable derived state: a failure here keeps the accepted version and the next cycle retries.
+    try:
+        _recompute(wells)
+    except Exception:
+        logger.exception("Accepted document needs rating recompute document_id=%s", document["document_id"])
+        db.update_document(document["document_id"], claim_id=document.get("claim_id"),
+            status_message=(message + " Рейтинг обновится в следующем дневном цикле.")[:2000])
+    return db.get_document(document["document_id"]) or {}
 
 
 def _recompute(wells: list[str]) -> None:
@@ -73,11 +97,18 @@ def _recompute(wells: list[str]) -> None:
 
 def _import_by_profile(document: dict, content: bytes, profile_id: str) -> dict:
     """An Excel table in the ДАРС / ХИМИК / ЭРА layout goes through the usual source import."""
-    from app.core.source_connectors import ingest_excel_bytes
+    from app.core.excel_ingestion import parse_excel
 
     filename = document["filename"] if document["filename"].casefold().endswith(".xlsx") else "document.xlsx"
-    result = ingest_excel_bytes(content, filename, profile_id, origin="document", auto_header=True)
-    imported = result.get("imported_wells") or []
+    result = parse_excel(content, filename, profile_id, auto_header=True)
+    contributions, imported = [], []
+    for well, group in result["groups"].items():
+        data = {key: [item.model_dump(mode="json") for item in group.get(key) or []]
+                for key in ("records", "work_history", "failure_history")}
+        count = sum(len(items) for items in data.values())
+        if count:
+            contributions.append({"well_id": well, "source_id": result["source_id"], "data": data})
+            imported.append({"well_id": well, "record_count": count})
     wells = sorted({item["well_id"] for item in imported})
     loaded = {"import_profile": profile_id, "source_id": result.get("source_id"), "wells": wells,
               "records": sum(item.get("record_count") or 0 for item in imported),
@@ -94,7 +125,6 @@ def _import_by_profile(document: dict, content: bytes, profile_id: str) -> dict:
         return _finish(document["document_id"], "not_recognized",
                        "Таблица похожа на выгрузку источника, но строк для загрузки нет.",
                        doc_type=f"source:{profile_id}", text_method="excel_profile", loaded=loaded, well_ids=[])
-    _recompute(wells)
     rejected = result.get("rows_rejected") or 0
     message = f"Импорт как {result.get('source_id')}: {loaded['records']} записей по {len(wells)} скв."
     if rejected:
@@ -103,8 +133,8 @@ def _import_by_profile(document: dict, content: bytes, profile_id: str) -> dict:
         first = result["skipped_cells"][0]
         message += (f" Пропущено нечисловых значений: {result['skipped_cell_count']} "
                     f"(строка {first['row']}, «{first['column']}»: «{first['value']}»).")
-    return _finish(document["document_id"], "loaded", message, doc_type=f"source:{profile_id}",
-                   text_method="excel_profile", loaded=loaded, well_ids=wells)
+    return _commit(document, contributions, loaded, message, doc_type=f"source:{profile_id}",
+                   text_method="excel_profile", well_ids=wells)
 
 
 EXCEL_SPEC = {"title": "Таблица показателей (Excel)", "target": "telemetry", "source_id": "DOC_LAB"}
@@ -130,7 +160,6 @@ def _read_excel(document: dict, content: bytes) -> dict:
     except Exception:
         logger.exception("Excel reading failed document_id=%s", document_id)
         return _finish(document_id, "failed", "Не удалось прочитать книгу Excel.")
-    db.delete_document_data(document_id)
     spec = dict(EXCEL_SPEC)
     try:
         lab = next((item for item in load_document_types().values() if item.get("target") == "telemetry"), None)
@@ -147,8 +176,7 @@ def _read_excel(document: dict, content: bytes) -> dict:
     if not result["accepted"]:
         return _finish(document_id, "not_recognized", excel_reader.not_found_reason(result), doc_type=doc_type,
                        well_ids=mentioned, extraction=extraction, loaded=None, doc_date=None, **text_values)
-    loaded = load.load_records(document, spec, result["records"])
-    _recompute(loaded["wells"])
+    contributions, loaded = load.prepare_records(document, spec, result["records"])
     dates = sorted(record["fields"]["sample_date"]["value"] for record in result["records"]
                    if record["accepted"] and record["fields"]["sample_date"]["value"])
     message = f"Excel: загружено проб — {loaded['records']}, скважин — {len(loaded['wells'])}."
@@ -157,8 +185,8 @@ def _read_excel(document: dict, content: bytes) -> dict:
         reasons = list(dict.fromkeys(issue for record in result["records"] if not record["accepted"]
                                      for issue in record["issues"]))
         message += f" Не принято строк: {result['rejected']} ({' '.join(reasons[:3])})"
-    return _finish(document_id, "loaded", message[:2000], doc_type=doc_type, well_ids=sorted(set(loaded["wells"]) | set(mentioned)),
-                   extraction=extraction, loaded=loaded,
+    return _commit(document, contributions, loaded, message[:2000], doc_type=doc_type, well_ids=sorted(set(loaded["wells"]) | set(mentioned)),
+                   extraction=extraction,
                    doc_date=datetime.fromisoformat(dates[-1]).date() if dates else None, **text_values)
 
 
@@ -185,7 +213,6 @@ def _read_registry(document: dict, content: bytes) -> dict:
     except Exception:
         logger.exception("Registry reading failed document_id=%s", document_id)
         return _finish(document_id, "failed", "Не удалось прочитать реестр коррозии НКТ.")
-    db.delete_document_data(document_id)
     extraction = nkt_registry.extraction(result)
     # A rejected row names a well only when the system knows it (a rejected new well has no card).
     mentioned = sorted({record["well_id"] for record in result["records"] + result["rejected"]
@@ -194,8 +221,7 @@ def _read_registry(document: dict, content: bytes) -> dict:
         return _finish(document_id, "not_recognized", nkt_registry.not_loaded_reason(result),
                        doc_type=nkt_registry.DOC_TYPE, well_ids=mentioned, extraction=extraction, loaded=None,
                        doc_date=None, **text_values)
-    loaded = nkt_registry.load(document, result)
-    _recompute(loaded["wells"])
+    contributions, loaded = nkt_registry.prepare(document, result)
     message = f"{nkt_registry.TITLE}: загружено строк — {loaded['records']}, скважин — {len(loaded['wells'])}."
     if loaded["new_wells"]:
         message += f" Новых скважин в системе: {len(loaded['new_wells'])}."
@@ -204,24 +230,33 @@ def _read_registry(document: dict, content: bytes) -> dict:
         message += f" Не принято строк: {len(result['rejected'])} ({' '.join(reasons[:3])})"
     if result["date_note"]:
         message += f" {result['date_note']}"
-    return _finish(document_id, "loaded", message[:2000], doc_type=nkt_registry.DOC_TYPE,
-                   well_ids=sorted(set(loaded["wells"]) | set(mentioned)), extraction=extraction, loaded=loaded,
+    return _commit(document, contributions, loaded, message[:2000], doc_type=nkt_registry.DOC_TYPE,
+                   well_ids=sorted(set(loaded["wells"]) | set(mentioned)), extraction=extraction,
                    doc_date=result["date"], **text_values)
 
 
 def _retry_or_fail(document: dict, reason: str, configured: bool) -> dict:
     if configured and (document.get("attempts") or 0) < settings.docs_max_attempts:
-        db.update_document(document["document_id"], status="queued",
-                           status_message=f"Повтор через {settings.docs_retry_minutes} мин: {reason}"[:2000])
-        return db.get_document(document["document_id"]) or {}
+        return _finish(document["document_id"], "queued", f"Повтор через {settings.docs_retry_minutes} мин: {reason}")
     return _finish(document["document_id"], "failed", reason)
 
 
 def process_document(document_id: str) -> dict:
-    """Run one claimed document through text -> type -> fields -> checks -> data."""
     document = db.get_document(document_id)
-    if document is None:
-        return {}
+    if document is None or document["status"] != "processing":
+        return document or {}
+    token = _active_document.set(document)
+    try:
+        return _process_document(document)
+    except Exception:
+        logger.exception("Document processing failed document_id=%s", document_id)
+        return _finish(document_id, "failed", "Внутренняя ошибка обработки.")
+    finally:
+        _active_document.reset(token)
+
+
+def _process_document(document: dict) -> dict:
+    document_id = document["document_id"]
     try:
         content = intake.read_original(document)
     except OSError:
@@ -259,7 +294,6 @@ def process_document(document_id: str) -> dict:
     text = result.text[:MAX_STORED_TEXT]
     text_values = {"text": text, "text_method": result.method, "text_chars": len(result.text),
                    "pages": result.pages}
-    db.delete_document_data(document_id)
     if len("".join(text.split())) < MIN_TEXT_CHARS:
         return _finish(document_id, "not_recognized", "В документе не найден читаемый текст.",
                        well_ids=[], loaded=None, extraction=None, doc_type=None, **text_values)
@@ -287,7 +321,6 @@ def process_document(document_id: str) -> dict:
         spec = types[type_id]
         raw_records = extract.extract_records(text, spec)
     except extract.ExtractionUnavailable as exc:
-        db.update_document(document_id, **text_values)
         return _retry_or_fail(document, str(exc), llm_configured())
 
     normalized = extract.normalize(text)
@@ -306,15 +339,14 @@ def process_document(document_id: str) -> dict:
         return _finish(document_id, "not_recognized", message, doc_type=type_id, well_ids=mentioned,
                        extraction=extraction, loaded=None, doc_date=None, **text_values)
 
-    loaded = load.load_records(document, spec, checked)
+    contributions, loaded = load.prepare_records(document, spec, checked)
     wells = sorted(set(loaded["wells"]) | set(mentioned))
-    _recompute(loaded["wells"])
     message = f"{spec.get('title')}: загружено записей — {loaded['records']}, скважин — {len(loaded['wells'])}."
     message += _new_wells_note(checked)
     if len(accepted) < len(checked):
         message += f" Не подтверждено записей: {len(checked) - len(accepted)}."
-    return _finish(document_id, "loaded", message, doc_type=type_id, well_ids=wells, extraction=extraction,
-                   loaded=loaded, doc_date=doc_date and datetime.fromisoformat(doc_date).date(), **text_values)
+    return _commit(document, contributions, loaded, message, doc_type=type_id, well_ids=wells, extraction=extraction,
+                   doc_date=doc_date and datetime.fromisoformat(doc_date).date(), **text_values)
 
 
 def _new_wells_note(records: list[dict]) -> str:
@@ -340,11 +372,7 @@ def process_queue(limit: int = 20) -> list[dict]:
         document = db.claim_next_document()
         if document is None:
             break
-        try:
-            done.append(process_document(document["document_id"]))
-        except Exception:
-            logger.exception("Document processing failed document_id=%s", document["document_id"])
-            done.append(_finish(document["document_id"], "failed", "Внутренняя ошибка обработки."))
+        done.append(process_document(document["document_id"]))
     return done
 
 
@@ -354,19 +382,11 @@ def process_now(document_id: str) -> dict | None:
     document = db.claim_next_document(document_id)
     if document is None:
         return None
-    try:
-        return process_document(document_id)
-    except Exception:
-        logger.exception("Document processing failed document_id=%s", document_id)
-        return _finish(document_id, "failed", "Внутренняя ошибка обработки.")
+    return process_document(document_id)
 
 
 def reset_for_processing(document_id: str) -> dict | None:
-    if db.get_document(document_id) is None:
-        return None
-    db.update_document(document_id, status="queued", attempts=0, started_at=None,
-                       status_message="Отправлен на повторную обработку.")
-    return db.get_document(document_id)
+    return db.reset_document(document_id)
 
 
 def delete_documents(statuses: set[str] | None) -> dict:
@@ -393,66 +413,23 @@ def _loaded_wells(document: dict) -> list[str]:
 
 
 def _delete(document_ids: list[str]) -> tuple[list[dict], list[str]]:
-    """Remove the documents with their data and originals, write again the documents left that shared rows
-    with them, and forget a well left without any data (one the documents had created). Returns the removed
-    documents and the wells to recompute."""
     removed = []
     for document_id in document_ids:
-        document = db.get_document(document_id)
+        document = db.delete_document_row(document_id)
         if document is None:
             continue
-        db.delete_document_data(document_id, extra_batch_ids=(document.get("loaded") or {}).get("batch_ids") or [])
-        db.delete_document_row(document_id)
         try:
             (settings.docs_storage_dir / document["storage_path"]).unlink(missing_ok=True)
         except OSError:
             logger.warning("Stored original could not be removed document_id=%s", document_id)
         removed.append(document)
-    wells = {well for document in removed for well in _loaded_wells(document)} | _restore_shared(removed)
     remaining = []
-    for well in sorted(wells):
+    for well in sorted({w for document in removed for w in _loaded_wells(document)}):
         if db.well_has_data(well):
             remaining.append(well)
         else:
             db.forget_well(well)
     return removed, remaining
-
-
-def _restore_shared(removed: list[dict]) -> set[str]:
-    """The same act or sample loaded from two documents is stored once: the event under the document that
-    wrote it first, the sample and the passport under the last one. Deleting that document took the row
-    from the other one too, so the documents left with the same source and wells are written again, oldest
-    first. Returns their wells."""
-    keys = {(loaded["source_id"], well) for loaded in (document.get("loaded") or {} for document in removed)
-            if loaded.get("source_id") for well in loaded.get("wells") or []}
-    if not keys:
-        return set()
-    shared = [row for row in reversed(db.list_documents(status="loaded", limit=100000))
-              if any(((row.get("loaded") or {}).get("source_id"), well) in keys for well in _loaded_wells(row))]
-    wells: set[str] = set()
-    for row in shared:
-        document = db.get_document(row["document_id"])
-        if document is not None:
-            wells |= set(_reload(document))
-    return wells
-
-
-def _reload(document: dict) -> list[str]:
-    """Write a loaded document's data again as it was read, without a model call: an Excel file is read
-    again by its rules, any other document is loaded from its stored extraction. Returns its wells."""
-    if document["file_kind"] in {"xlsx", "xls"}:
-        db.delete_document_data(document["document_id"],
-                                extra_batch_ids=(document.get("loaded") or {}).get("batch_ids") or [])
-        return _loaded_wells(process_document(document["document_id"]))
-    try:
-        spec = load_document_types().get(document.get("doc_type") or "")
-    except DocumentTypesError:
-        spec = None
-    if spec is None:
-        logger.warning("Document type is not configured any more, data not reloaded document_id=%s",
-                       document["document_id"])
-        return []
-    return load.load_records(document, spec, (document.get("extraction") or {}).get("records") or [])["wells"]
 
 
 class DocumentWorker:

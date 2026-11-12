@@ -25,19 +25,8 @@ def point_sources(point: Any) -> set[str]:
 
 
 def lab_source_ids() -> set[str]:
-    from app.core.documents.types import lab_source_ids as document_lab_ids
-    from app.core.excel_ingestion import load_profiles
-
-    ids = set(document_lab_ids())
-    try:
-        profiles = load_profiles()
-    except Exception:  # a broken profile file must not stop the analysis
-        logger.exception("Source profiles could not be loaded for the source kinds")
-        profiles = {}
-    for profile_id, profile in profiles.items():
-        if profile.get("lab_samples"):
-            ids.add(str(profile.get("source_id", profile_id)).strip().upper())
-    return ids
+    from app.core.source_catalog import SourceCatalog
+    return SourceCatalog().lab_ids
 
 
 def snapshot_source_ids() -> set[str]:

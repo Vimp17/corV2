@@ -39,7 +39,7 @@ _GLOSSARY_PATTERN = re.compile(r"(?<![A-Za-z_])(" + "|".join(
 _WORD = re.compile(r"[0-9a-zа-яё₂]+")
 # Stems that only say «something is missing»: «Отсутствует расписание бригад» repeats «Нет расписания бригад».
 _FILLER = {"нет", "отсутс", "данных", "данные", "информ", "сведен", "значен", "поэтом", "также", "требуе",
-           "необхо", "для", "что", "или", "это", "его", "так"}
+           "необхо", "рассчи", "для", "что", "или", "это", "его", "так"}
 
 
 def _yes_no(value: Any, yes: str = "да", no: str = "нет") -> str:
@@ -72,7 +72,7 @@ def merge_gaps(known: list[str], extra: list[str]) -> list[str]:
     for item in [*known, *extra]:
         item = " ".join(str(item).split())
         words = _key(item)
-        if not words or any(words <= other or other <= words or len(words & other) / len(words | other) >= 0.6
+        if not words or any(words <= other
                             for other in keys):
             continue
         result.append(item)

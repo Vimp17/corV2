@@ -77,6 +77,7 @@ def test_document_queue_takes_the_oldest_once(db):
     assert db.claim_next_document(ids[1])["document_id"] == ids[1]
     assert db.claim_next_document(ids[1]) is None                      # already taken
     for document_id in ids:
+        db.update_document(document_id, status="failed")  # complete the test claim before cleanup
         db.delete_document_row(document_id)
 
 

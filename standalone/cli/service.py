@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import signal
 import socket
@@ -34,8 +35,9 @@ def _http_status(url: str, timeout: float = 3.0) -> tuple[int | None, str]:
 
 def _read_pid() -> int | None:
     try:
-        return int(PID_FILE.read_text(encoding="ascii").strip())
-    except (OSError, ValueError):
+        raw = json.loads(PID_FILE.read_text(encoding="ascii"))
+        return int(raw["pid"] if isinstance(raw, dict) else raw)
+    except (OSError, ValueError, KeyError, TypeError):
         return None
 
 
@@ -48,6 +50,7 @@ if WINDOWS:
     _kernel32.OpenProcess.restype = wintypes.HANDLE
     _kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
     _kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    _kernel32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
     _kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
     _kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
     _kernel32.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
@@ -56,33 +59,52 @@ if WINDOWS:
     _STILL_ACTIVE, _SYNCHRONIZE = 259, 0x00100000
 
 
-def _alive(pid: int | None) -> bool:
-    """The process runs and is our API (python running uvicorn), not a reused process id."""
+def _identity(pid: int | None) -> str | None:
+    """Creation identity of our runtime; never accept an arbitrary python or unreadable process."""
     if not pid:
-        return False
+        return None
     if WINDOWS:
         handle = _kernel32.OpenProcess(_PROCESS_QUERY, False, pid)
         if not handle:
-            return False
+            return None
         try:
             code = wintypes.DWORD()
             if not _kernel32.GetExitCodeProcess(handle, ctypes.byref(code)) or code.value != _STILL_ACTIVE:
-                return False
-            size = wintypes.DWORD(1024)
-            buffer = ctypes.create_unicode_buffer(1024)
-            if _kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
-                return buffer.value.lower().endswith(("python.exe", "pythonw.exe"))
-            return True
+                return None
+            size, buffer = wintypes.DWORD(32768), ctypes.create_unicode_buffer(32768)
+            if not _kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+                return None
+            if os.path.normcase(buffer.value) != os.path.normcase(str(Path(sys.executable).resolve())):
+                return None
+            times = [wintypes.FILETIME() for _ in range(4)]
+            if not _kernel32.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)):
+                return None
+            return str((times[0].dwHighDateTime << 32) | times[0].dwLowDateTime)
         finally:
             _kernel32.CloseHandle(handle)
     try:
-        os.kill(pid, 0)
-    except OSError:
-        return False
+        command = Path(f"/proc/{pid}/cmdline").read_bytes().decode().split("\0")
+        if ENTRY not in command or "uvicorn" not in command:
+            return None
+        return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _alive(pid: int | None) -> bool:
+    identity = _identity(pid)
     try:
-        return "uvicorn" in Path(f"/proc/{pid}/cmdline").read_bytes().decode(errors="replace")
-    except OSError:
-        return True
+        record = json.loads(PID_FILE.read_text(encoding="ascii"))
+        return bool(identity) and record == {"pid": pid, "created": identity}
+    except (OSError, ValueError):
+        return False
+
+
+def _save_pid(pid: int) -> None:
+    identity = _identity(pid)
+    if identity is None:
+        raise Stop("Не удалось подтвердить процесс API; проверьте журнал перед повторным запуском.")
+    PID_FILE.write_text(json.dumps({"pid": pid, "created": identity}), encoding="ascii")
 
 
 def _terminate(pid: int) -> None:
@@ -109,19 +131,6 @@ def _terminate(pid: int) -> None:
         pass
 
 
-def _pid_on_port(port: int) -> int | None:
-    """Windows: the process listening on the port (when the pid file was lost)."""
-    if not WINDOWS:
-        return None
-    try:
-        output = subprocess.run(["netstat", "-ano", "-p", "TCP"], capture_output=True, timeout=20).stdout
-    except (OSError, subprocess.SubprocessError):
-        return None
-    for line in output.decode("ascii", errors="replace").splitlines():
-        parts = line.split()
-        if len(parts) >= 5 and parts[1].endswith(f":{port}") and parts[2].endswith((":0", ":*")) and parts[-1].isdigit():
-            return int(parts[-1])
-    return None
 
 
 def _api_command(values: dict[str, str]) -> list[str]:
@@ -195,7 +204,7 @@ def cmd_start(args) -> int:
                 process = subprocess.Popen(_api_command(values), creationflags=detached | new_group, **options)
         else:
             process = subprocess.Popen(_api_command(values), start_new_session=True, **options)
-    PID_FILE.write_text(str(process.pid), encoding="ascii")
+    _save_pid(process.pid)
     say(f"Запуск (журнал: {LOG_FILE.relative_to(ROOT)})", )
     started = time.monotonic()
     while time.monotonic() - started < START_TIMEOUT_SECONDS:
@@ -224,7 +233,17 @@ def cmd_stop(args) -> int:
     if not _alive(pid):
         pid = None
         if values and _running(values)[1]:
-            pid = _pid_on_port(port_of(values))
+            status, body = _http_status(f"{local_url(values)}/health/live")
+            try:
+                live = json.loads(body)
+                root = hashlib.sha256(str(ROOT.resolve()).encode()).hexdigest()
+                pid = int(live["pid"]) if live.get("root") == root else None
+                if pid and _identity(pid):
+                    _save_pid(pid)
+                else:
+                    pid = None
+            except (ValueError, KeyError, TypeError):
+                pid = None
             if pid is None:
                 raise Stop("API отвечает, но его процесс не найден (файл run/api.pid потерян). "
                            "Закройте python.exe в Диспетчере задач.")
@@ -233,14 +252,17 @@ def cmd_stop(args) -> int:
         say("API не запущен.")
     else:
         _terminate(pid)
+        if _alive(pid):
+            warn("Не удалось остановить API — проверьте процесс в Диспетчере задач.")
+            return 1
         PID_FILE.unlink(missing_ok=True)
-        say("API остановлен." if not _alive(pid) else
-            "Не удалось остановить API — закройте python.exe в Диспетчере задач.")
+        say("API остановлен.")
     return 0
 
 
 def cmd_restart(args) -> int:
-    cmd_stop(args)
+    if cmd_stop(args):
+        return 1
     time.sleep(1)
     return cmd_start(args)
 

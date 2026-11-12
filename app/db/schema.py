@@ -154,6 +154,7 @@ documents = Table(
     Column("extraction", JSON),
     Column("loaded", JSON),
     Column("attempts", Integer, nullable=False, server_default="0"),
+    Column("claim_id", NVarchar(36)),
     Column("created_at", UTCDateTime, nullable=False),
     Column("started_at", UTCDateTime),
     Column("processed_at", UTCDateTime),
@@ -170,3 +171,13 @@ co2_assessments = Table(
     Column("model_version", NVarchar(64), nullable=False), Column("result_json", JSON, nullable=False),
 )
 Index("idx_co2_well_created", co2_assessments.c.well_id, co2_assessments.c.created_at)
+
+# A document owns its contribution; independent imports keep their existing tables.
+document_contributions = Table(
+    "document_contributions", metadata,
+    Column("document_id", NVarchar(36), ForeignKey("documents.document_id", ondelete="CASCADE"), primary_key=True),
+    Column("well_id", NVarchar(128), primary_key=True),
+    Column("source_id", NVarchar(128), primary_key=True),
+    Column("data", JSON, nullable=False), Column("updated_at", UTCDateTime, nullable=False),
+)
+Index("idx_document_contributions_well", document_contributions.c.well_id)

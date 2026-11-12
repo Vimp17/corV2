@@ -5,6 +5,7 @@ from datetime import datetime
 from math import isfinite
 
 from app.config import settings
+from app.core.normalization import field_observations
 
 TREND_FIELDS = ("water_cut_pct", "co2_pct", "chlorides_mg_l", "inhibitor_efficiency")
 
@@ -22,7 +23,7 @@ def _slope(rows: list[dict], field: str) -> float | None:
     minimum number of values are MAI_TREND_WINDOW_DAYS and MAI_MIN_TREND_OBSERVATIONS, as in readiness."""
     latest = rows[-1]["timestamp"]
     samples: list[tuple[float, float]] = []
-    for row in rows:
+    for row in field_observations(rows, field):
         days_before_latest = (latest - row["timestamp"]).total_seconds() / 86400.0
         value = row["calculated"].get(field)
         if days_before_latest <= settings.trend_window_days and value is not None and isfinite(float(value)):
