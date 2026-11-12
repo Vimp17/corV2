@@ -169,7 +169,10 @@ def get_original(document_id: str) -> FileResponse:
 
 @router.post("/{document_id}/reprocess")
 async def reprocess_document(document_id: str, request: Request, wait: bool = Query(default=False)) -> dict:
-    row = await run_in_threadpool(pipeline.reset_for_processing, document_id)
+    try:
+        row = await run_in_threadpool(pipeline.reset_for_processing, document_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
     if row is None:
         raise HTTPException(status_code=404, detail="Документ не найден")
     if wait:
@@ -183,7 +186,10 @@ async def reprocess_document(document_id: str, request: Request, wait: bool = Qu
 @router.delete("/{document_id}")
 def delete_document(document_id: str) -> dict:
     """Delete the document and the data loaded from it; the rating of its wells is recomputed."""
-    row = pipeline.delete_document(document_id)
+    try:
+        row = pipeline.delete_document(document_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
     if row is None:
         raise HTTPException(status_code=404, detail="Документ не найден")
     return {"deleted": document_id, "wells": (row.get("loaded") or {}).get("wells") or []}

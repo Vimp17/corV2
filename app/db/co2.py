@@ -6,33 +6,38 @@ from app.db.base import engine, _merge, _queue_writes, _retry_deadlocks
 from app.db.schema import co2_assessments, well_rating
 
 
+def _known(conn, ids: set[str]) -> set[str]:
+    ids = sorted(ids)
+    return {well for offset in range(0, len(ids), 1000) for well in conn.execute(
+        select(well_rating.c.well_id).where(well_rating.c.well_id.in_(ids[offset:offset+1000]))).scalars()}
+
+
+def known_wells(ids: set[str]) -> set[str]:
+    with engine().connect() as conn:
+        return _known(conn, ids)
+
+
 @_retry_deadlocks
 def save_assessments(assessments: list[dict], create_wells: bool = False) -> dict:
     now = datetime.now(timezone.utc)
-    stored = 0
-    identities = []
+    rows = []
+    for a in assessments:
+        identity = digest({"well": a["well_id"], "version": a["model_version"], "input": a["input_hash"],
+                           "source": a.get("source_hash"), "row": a.get("source_row"), "synthetic": a["synthetic"]})
+        rows.append({"assessment_id": identity, "well_id": a["well_id"],
+            "state_at": datetime.fromisoformat(a["state_at"]) if a.get("state_at") else None,
+            "created_at": now, "model_version": a["model_version"],
+            "result_json": {**a, "assessment_id": identity, "created_at": now.isoformat()}})
     with engine().begin() as conn:
         _queue_writes(conn, "co2_assessments")
-        known = set(conn.execute(select(well_rating.c.well_id)).scalars())
-        unknown = {a["well_id"] for a in assessments} - known
+        unknown = {a["well_id"] for a in assessments} - _known(conn, {a["well_id"] for a in assessments})
         if unknown and not create_wells:
             raise ValueError("Неизвестные скважины; подтвердите создание: " + ", ".join(sorted(unknown)[:20]))
-        for well_id in sorted(unknown):
-            _merge(conn, well_rating, [{"well_id": well_id, "source": "co2", "updated_at": now,
-                                        "assessed_at": now}], ("well_id",))
-        for a in assessments:
-            identity = digest({"well": a["well_id"], "version": a["model_version"], "input": a["input_hash"],
-                               "source": a.get("source_hash"), "row": a.get("source_row"), "synthetic": a["synthetic"]})
-            identities.append(identity)
-            if conn.execute(select(co2_assessments.c.assessment_id).where(
-                    co2_assessments.c.assessment_id == identity)).first():
-                continue
-            result = {**a, "assessment_id": identity, "created_at": now.isoformat()}
-            conn.execute(co2_assessments.insert().values(assessment_id=identity, well_id=a["well_id"],
-                state_at=datetime.fromisoformat(a["state_at"]) if a.get("state_at") else None,
-                created_at=now, model_version=a["model_version"], result_json=result))
-            stored += 1
-    return {"stored": stored, "duplicates": len(assessments) - stored, "created_wells": len(unknown), "assessment_ids": identities}
+        created = _merge(conn, well_rating, [{"well_id": well, "source": "co2", "updated_at": now,
+            "assessed_at": now} for well in sorted(unknown)], ("well_id",), output="well_id")
+        inserted = _merge(conn, co2_assessments, rows, ("assessment_id",), output="assessment_id")
+    return {"stored": len(inserted), "duplicates": len(assessments)-len(inserted), "created_wells": len(created),
+            "assessment_ids": [row["assessment_id"] for row in rows]}
 
 
 def history(well_id: str, limit: int = 20) -> list[dict]:

@@ -33,6 +33,7 @@ jobs:
       - name: Prepare isolated SQL Server database
         run: python scripts/prepare_test_db.py
       - run: python -m pytest -q -p no:cacheprovider
+      - run: node tests/dashboard.test.cjs
   build:
     needs: test
     runs-on: ubuntu-latest

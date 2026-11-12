@@ -12,7 +12,8 @@ from sqlalchemy import delete, func, literal_column, select, union
 from app.config import settings
 from app.db.base import _merge, _queue_writes, _retry_deadlocks, engine
 from app.db.schema import (_UNSPECIFIED_SOURCE, history_batches, history_events, ingestion_batches,
-                           source_documents, source_health, telemetry, well_rating, co2_assessments)
+                           source_documents, source_health, telemetry, well_rating, co2_assessments, document_contributions)
+from app.db.documents import contribution_rows
 from app.schemas import FailureHistoryItem, TelemetryPoint, WorkHistoryItem
 
 
@@ -78,44 +79,48 @@ def save_batch(well_id: str, requested_batch_id: str | None, records: Iterable[T
 
 
 def load_telemetry(well_id: str) -> list[TelemetryPoint]:
-    """The well's telemetry in time order; points of different sources at the same moment are merged
-    into one point with source_id "A+B" (the first value of each field wins)."""
+    """Merge a display slice without losing the source of each field or document ownership."""
     with engine().connect() as conn:
-        rows = conn.execute(select(telemetry.c.payload_json).where(
-            telemetry.c.well_id == well_id).order_by(telemetry.c.timestamp, telemetry.c.id)).all()
-    combined: list[TelemetryPoint] = []
-    for point in (TelemetryPoint.model_validate(row[0]) for row in rows):
-        point_utc = _utc(point.timestamp)
-        point_source = str(getattr(point, "source_id", ""))
-        merge_index = None
-        merge_sources: set[str] = set()
-        for index in range(len(combined) - 1, -1, -1):
-            prior = combined[index]
-            prior_utc = _utc(prior.timestamp)
-            if prior_utc < point_utc:
-                break
-            prior_sources = set(str(getattr(prior, "source_id", "")).split("+")) - {""}
-            if prior_utc == point_utc and prior_sources and point_source and point_source not in prior_sources:
-                merge_index, merge_sources = index, prior_sources
-                break
-        if merge_index is None:
-            combined.append(point)
+        rows = conn.execute(select(telemetry.c.payload_json, ingestion_batches.c.created_at)
+            .join(ingestion_batches, telemetry.c.batch_id == ingestion_batches.c.batch_id)
+            .where(telemetry.c.well_id == well_id).order_by(telemetry.c.id)).all()
+    versions = [(payload, when) for payload, when in rows]
+    for row in contribution_rows(well_id):
+        versions.extend((payload, row["updated_at"]) for payload in row["data"].get("records", []))
+    # Identical observations from independent owners remain stored separately, exposed once.
+    selected = {}
+    occurrences = {}
+    for payload, updated in sorted(versions, key=lambda item:item[1]):
+        point = TelemetryPoint.model_validate(payload)
+        source = str(getattr(point, "source_id", "") or "")
+        key = (source, _utc(point.timestamp), updated)
+        occurrence = occurrences.get(key, 0)
+        occurrences[key] = occurrence + 1
+        selected[(source, _utc(point.timestamp), occurrence)] = point
+    combined, group = [], []
+    for point in sorted(selected.values(), key=lambda p:_utc(p.timestamp)):
+        source = str(getattr(point, "source_id", "") or "")
+        fields = {key: source for key in TelemetryPoint.model_fields if key != "timestamp" and getattr(point, key) is not None}
+        if group and _utc(group[0].timestamp) != _utc(point.timestamp):
+            group = []
+        previous = next((p for p in reversed(group) if source not in str(getattr(p, "source_id", "")).split("+")), None)
+        if previous is None:
+            merged = point.model_copy(update={"field_sources": fields})
+            combined.append(merged)
+            group.append(merged)
             continue
-        merged = combined[merge_index].model_dump()
-        for field in TelemetryPoint.model_fields:
-            value = getattr(point, field)
-            if field != "timestamp" and value is not None and merged.get(field) is None:
-                merged[field] = value
-        merge_sources.add(point_source)
-        merged["source_id"] = "+".join(sorted(merge_sources))
-        combined[merge_index] = TelemetryPoint.model_validate(merged)
+        for key in fields:
+            if getattr(previous, key) is None:
+                setattr(previous, key, getattr(point, key))
+                previous.field_sources[key] = source
+        previous.source_id = "+".join(sorted(set(previous.source_id.split("+")) | {source}))
     return combined
 
 
 def list_wells() -> list[dict]:
-    """Wells with telemetry, history or a source status: telemetry count and time span, history count."""
+    """Stored observation/event counts and time span, including document-owned data."""
     ids = union(select(telemetry.c.well_id), select(history_events.c.well_id),
-                select(source_health.c.well_id), select(co2_assessments.c.well_id)).subquery("w")
+                select(source_health.c.well_id), select(co2_assessments.c.well_id), select(document_contributions.c.well_id)).subquery("w")
     history_count = (select(func.count()).select_from(history_events)
                      .where(history_events.c.well_id == ids.c.well_id).scalar_subquery())
     query = (select(ids.c.well_id, func.count(telemetry.c.id).label("record_count"),
@@ -125,13 +130,23 @@ def list_wells() -> list[dict]:
              .select_from(ids.outerjoin(telemetry, telemetry.c.well_id == ids.c.well_id))
              .group_by(ids.c.well_id).order_by(ids.c.well_id))
     with engine().connect() as conn:
-        return [dict(row) for row in conn.execute(query).mappings().all()]
+        result = {row['well_id']: dict(row) for row in conn.execute(query).mappings()}
+        for well_id, data in conn.execute(select(document_contributions.c.well_id, document_contributions.c.data)):
+            row = result[well_id]
+            records = data.get('records', [])
+            row['record_count'] += len(records)
+            row['history_count'] += len(data.get('work_history', [])) + len(data.get('failure_history', []))
+            moments = [_utc(datetime.fromisoformat(item['timestamp'])) for item in records]
+            if moments:
+                row['first_timestamp'] = min(moments + ([row['first_timestamp']] if row['first_timestamp'] else []))
+                row['last_timestamp'] = max(moments + ([row['last_timestamp']] if row['last_timestamp'] else []))
+        return list(result.values())
 
 
 def known_well_ids() -> list[str]:
     """Wells the system knows from any source, the rating or MAI_WELL_IDS."""
     query = union(select(telemetry.c.well_id), select(history_events.c.well_id),
-                  select(well_rating.c.well_id), select(source_health.c.well_id), select(co2_assessments.c.well_id))
+                  select(well_rating.c.well_id), select(source_health.c.well_id), select(co2_assessments.c.well_id), select(document_contributions.c.well_id))
     with engine().connect() as conn:
         wells = {row[0] for row in conn.execute(query).all()}
     return sorted(wells | set(settings.configured_well_ids))
@@ -195,9 +210,18 @@ def load_history_events(well_id: str) -> list[dict]:
                                    history_events.c.event_date, history_events.c.payload_json)
                             .where(history_events.c.well_id == well_id)
                             .order_by(history_events.c.event_date, history_events.c.id)).mappings().all()
-    return [{"event_type": row["event_type"],
-             "source_id": None if row["source_id"] == _UNSPECIFIED_SOURCE else row["source_id"],
-             "event_date": row["event_date"], "payload": row["payload_json"]} for row in rows]
+    result = [{"event_type": row["event_type"],
+               "source_id": None if row["source_id"] == _UNSPECIFIED_SOURCE else row["source_id"],
+               "event_date": row["event_date"], "payload": row["payload_json"]} for row in rows]
+    for row in contribution_rows(well_id):
+        for key, kind, model, date_key in (("work_history", "work", WorkHistoryItem, "date"),
+                                           ("failure_history", "failure", FailureHistoryItem, "failure_date")):
+            for raw in row["data"].get(key, []):
+                item = model.model_validate(raw)
+                result.append({"event_type": kind, "source_id": row["source_id"],
+                    "event_date": _utc(getattr(item, date_key)), "payload": item.model_dump(mode="json")})
+    unique = {(r["source_id"], r["event_type"], _json_hash(r["payload"])): r for r in result}
+    return sorted(unique.values(), key=lambda r:r["event_date"])
 
 
 def load_history(well_id: str) -> dict[str, list]:
@@ -268,27 +292,22 @@ def load_source_payloads(well_id: str) -> dict[str, dict]:
     with engine().connect() as conn:
         rows = conn.execute(select(source_documents.c.source_id, source_documents.c.payload_json)
                             .where(source_documents.c.well_id == well_id)).all()
-    return {source_id: payload for source_id, payload in rows}
+    result = {source_id: payload for source_id, payload in rows}
+    for row in contribution_rows(well_id):
+        if row["data"].get("payload"):
+            result[row["source_id"]] = row["data"]["payload"]
+    return result
 
 
 def load_extra_measurements(well_id: str) -> list[dict]:
-    """Rows with additional indicators (pH, hardness…) of a well, oldest first."""
-    extras = func.json_query(telemetry.c.payload_json, "$.extra_measurements")
-    query = (select(telemetry.c.source_id, telemetry.c.timestamp, extras.label("extras"))
-             .where(telemetry.c.well_id == well_id, func.left(extras, 1) == literal_column("'{'"))
-             .order_by(telemetry.c.timestamp, telemetry.c.id))
-    with engine().connect() as conn:
-        rows = conn.execute(query).mappings().all()
-    return [{"source_id": None if row["source_id"] == _UNSPECIFIED_SOURCE else row["source_id"],
-             "timestamp": row["timestamp"],
-             "extras": json.loads(row["extras"]) if isinstance(row["extras"], str) else row["extras"]}
-            for row in rows]
+    return [{"source_id": getattr(point, "source_id", None), "timestamp": point.timestamp,
+             "extras": point.extra_measurements} for point in load_telemetry(well_id) if point.extra_measurements]
 
 
 def well_has_data(well_id: str) -> bool:
     """Whether any source data of the well remain: telemetry, history events or source documents."""
     with engine().connect() as conn:
-        for table in (telemetry, history_events, source_documents, co2_assessments):
+        for table in (telemetry, history_events, source_documents, co2_assessments, document_contributions):
             if conn.execute(select(table.c.well_id).where(table.c.well_id == well_id).limit(1)).first():
                 return True
     return False

@@ -203,8 +203,9 @@ def compile_bytecode(root: Path) -> None:
     checked = py_compile.PycInvalidationMode.CHECKED_HASH
     for folder, mode in ((root / "runtime" / "Lib", unchecked), (root / "app", checked),
                          (root / "standalone", checked)):
-        compileall.compile_dir(str(folder), quiet=1, invalidation_mode=mode, workers=0,
-                               rx=re.compile(r"[\\/](test|tests|idle_test)[\\/]"))
+        if not compileall.compile_dir(str(folder), quiet=1, invalidation_mode=mode, workers=0,
+                               rx=re.compile(r"[\\/](test|tests|idle_test)[\\/]")):
+            raise SystemExit(f"Python compilation failed: {folder}")
 
 
 def copy_project(root: Path) -> None:
@@ -267,6 +268,21 @@ def make_zip(root: Path, info: dict) -> Path:
     return archive
 
 
+def validate_archive(archive: Path, info: dict) -> None:
+    """One verification path for local and CI builds, before announcing a release."""
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    if digest != archive.with_suffix(".zip.sha256").read_text().split()[0] or info.get("dll_problems"):
+        raise SystemExit("Invalid archive checksum or unresolved DLL dependencies")
+    with zipfile.ZipFile(archive) as package:
+        required = ("app/main.py", "app/core/co2_corrosion.py", "app/core/source_catalog.py",
+                    "dashboard/co2.js", "runtime/python.exe", "BUILD_INFO.json")
+        if package.testzip() or any(f"{APP_NAME}/{name}" not in package.namelist() for name in required):
+            raise SystemExit("Archive is incomplete or corrupted")
+        manifest = json.loads(package.read(f"{APP_NAME}/BUILD_INFO.json"))
+        if manifest != info or any(name.endswith("/.env") or "calculation_rows.json" in name for name in package.namelist()):
+            raise SystemExit("Invalid manifest or private data in archive")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--relock", action="store_true", help="resolve the Windows packages again")
@@ -290,6 +306,7 @@ def main() -> int:
         log("DLLs not shipped and not part of Windows (needs Microsoft Visual C++ Redistributable 2015-2022 x64):")
         for problem in problems:
             log("  " + problem)
+        raise SystemExit("Unresolved DLL dependencies; archive was not produced")
     else:
         log("every extension module finds its DLLs (Python runtime, package folders or Windows)")
     copy_project(root)
@@ -302,6 +319,7 @@ def main() -> int:
         log(f"build folder: {root}")
         return 0
     archive = make_zip(root, info)
+    validate_archive(archive, info)
     log(f"archive: {archive} ({archive.stat().st_size / 1048576:.0f} MB)")
     log(f"sha256: {archive.with_suffix('.zip.sha256').read_text().split()[0]}")
     return 0

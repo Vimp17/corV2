@@ -23,7 +23,7 @@ from zoneinfo import ZoneInfo
 from app import db
 from app.config import settings
 from app.core import math_model, rating, readiness
-from app.core.excel_ingestion import load_profiles
+from app.core.source_catalog import SourceCatalog, normalize_label as _norm
 from app.core.features import Features, build_features
 from app.core.indicators import INDICATORS, MAIN, fmt
 from app.core.normalization import RANGE_LIMITS, normalize_records
@@ -32,15 +32,6 @@ from app.core.source_kinds import is_snapshot, lab_source_ids, observations, sna
 from app.schemas import TelemetryPoint
 
 logger = logging.getLogger(__name__)
-# Words in the equipment description that mean a protective design (coated or corrosion-
-# resistant tubing, inhibitor containers). Profiles may override them ("protection_keywords").
-_DEFAULT_PROTECTION_WORDS = ["покрыт", "коррозионностойк", "нержав", "стеклопластик", "футеров",
-                             "протектор", "контейнер ингибитора", "ингибиторный контейнер"]
-_DEFAULT_WORK_TYPES = {
-    "install": ["спуск оборудования", "спуск", "монтаж оборудования"],
-    "demount": ["демонтаж", "акт демонтажа", "подъем оборудования"],
-    "base_inspection": ["разбор на базе", "акт разбора", "разбор", "дефектовка на базе"],
-}
 
 
 def _utc(value: datetime) -> datetime:
@@ -53,64 +44,11 @@ def _local(value: datetime) -> datetime:
     return _utc(value).astimezone(ZoneInfo(settings.source_timezone))
 
 
-def _norm(value: Any) -> str:
-    return str(value or "").strip().casefold().replace("ё", "е")
-
-
-class _Sources:
-    """Source titles, laboratory sources and ERA work-type keywords from the profiles."""
-
-    def __init__(self) -> None:
-        try:
-            profiles = load_profiles()
-        except Exception:  # a broken profile file must not stop the rating
-            logger.exception("Source profiles could not be loaded for the rating")
-            profiles = {}
-        self.titles: dict[str, str] = {}
-        self.lab_ids: set[str] = set()
-        work_types: dict[str, list[str]] = {}
-        protection_words: list[str] = []
-        for profile_id, profile in profiles.items():
-            source_id = str(profile.get("source_id", profile_id)).upper()
-            self.titles[source_id] = str(profile.get("short_title") or profile.get("title") or source_id)
-            if profile.get("lab_samples"):
-                self.lab_ids.add(source_id)
-            for key, words in (profile.get("rating_work_types") or {}).items():
-                work_types.setdefault(key, []).extend(_norm(word) for word in words)
-            protection_words.extend(_norm(word) for word in profile.get("protection_keywords") or [])
-        # Data taken from documents (acts, lab protocols, passports) is stored under the
-        # document type's source_id; lab protocols count as laboratory samples.
-        from app.core.documents.types import lab_source_ids, source_titles
-
-        self.titles.update(source_titles())
-        self.lab_ids |= lab_source_ids()
-        self.protection_words = protection_words or [_norm(word) for word in _DEFAULT_PROTECTION_WORDS]
-        self.work_types = {key: work_types.get(key) or _DEFAULT_WORK_TYPES[key] for key in _DEFAULT_WORK_TYPES}
-
-    def title(self, source_id: str | None) -> str:
-        parts = [part for part in str(source_id or "").split("+") if part]
-        return " + ".join(self.titles.get(part, part) for part in parts) or "источник не указан"
-
-    def classify(self, work_type: Any) -> str | None:
-        text = _norm(work_type)
-        if not text:
-            return None
-        # Base inspection first: «разбор на базе после демонтажа» is a base inspection.
-        for key in ("base_inspection", "demount", "install"):
-            if any(word and word in text for word in self.work_types[key]):
-                return key
-        return None
-
-    def protective_equipment(self, equipment: Any) -> bool:
-        text = _norm(equipment)
-        return bool(text) and any(word in text for word in self.protection_words)
-
-
 def _record_sources(point: TelemetryPoint) -> str:
     return str(getattr(point, "source_id", "") or "")
 
 
-def _prov(sources: _Sources, source_id: str | None, when: datetime | None, note: str | None = None) -> dict:
+def _prov(sources: SourceCatalog, source_id: str | None, when: datetime | None, note: str | None = None) -> dict:
     return {"source_id": source_id or None, "source": sources.title(source_id) if source_id else None,
             "date": _local(when).isoformat() if when else None, "note": note}
 
@@ -119,7 +57,8 @@ def _latest(records: list[TelemetryPoint], field: str) -> tuple[Any, TelemetryPo
     for point in reversed(records):
         value = getattr(point, field, None)
         if value is not None:
-            return value, point
+            source = getattr(point, "field_sources", {}).get(field)
+            return value, point.model_copy(update={"source_id": source}) if source else point
     return None, None
 
 
@@ -328,7 +267,7 @@ def _data_gaps(values: dict, records: list[TelemetryPoint], current: dict, ready
     return gaps
 
 
-def _ntc_score(checks: list[Check] | None, when: datetime, sources: _Sources,
+def _ntc_score(checks: list[Check] | None, when: datetime, sources: SourceCatalog,
                protection: str | None) -> tuple[dict, dict]:
     """The НТЦ score from the rule points. With confirmed effective protection (and
     MAI_RATING_PROTECTION_MODE = adjust) the environment rule points count with
@@ -361,7 +300,7 @@ def extra_measurements(well_id: str) -> list[dict]:
 
     These indicators have no system field: they are shown in the well card and given to the AI
     agent, but do not enter the risk models or the rating."""
-    sources = _Sources()
+    sources = SourceCatalog()
     latest: dict[str, dict] = {}
     for row in db.load_extra_measurements(well_id):
         for name, value in (row["extras"] or {}).items():
@@ -392,7 +331,7 @@ Part = tuple[dict, dict]   # values and their provenance for some columns of the
 
 
 def _reported(records: list[TelemetryPoint], passports: list[tuple[str, dict, datetime | None]],
-              sources: _Sources) -> Part:
+              sources: SourceCatalog) -> Part:
     """Field, tonnage, НОО and liquid rate: the latest reported value (the field also from a passport);
     the oil share from the latest water cut."""
     values: dict[str, Any] = {}
@@ -414,7 +353,7 @@ def _reported(records: list[TelemetryPoint], passports: list[tuple[str, dict, da
     return values, prov
 
 
-def _operation(records: list[TelemetryPoint], now: datetime, sources: _Sources) -> Part:
+def _operation(records: list[TelemetryPoint], now: datetime, sources: SourceCatalog) -> Part:
     """Operating status: the latest DARS status, else a fresh measurement implies the well runs.
     A registry row (snapshot) is not a measurement and says nothing about the status."""
     snapshot_ids = snapshot_source_ids()
@@ -432,7 +371,7 @@ def _operation(records: list[TelemetryPoint], now: datetime, sources: _Sources) 
         else "Статус не передан, телеметрия устарела.")}
 
 
-def _sampling(records: list[TelemetryPoint], now: datetime, sources: _Sources) -> tuple[dict, dict, list]:
+def _sampling(records: list[TelemetryPoint], now: datetime, sources: SourceCatalog) -> tuple[dict, dict, list]:
     """A laboratory sample within the configured window; also the laboratory points themselves."""
     lab_points = [point for point in records if sources.lab_ids & set(_record_sources(point).split("+"))]
     if lab_points:
@@ -446,7 +385,7 @@ def _sampling(records: list[TelemetryPoint], now: datetime, sources: _Sources) -
     return {"sampling": False}, {"sampling": _prov(sources, None, None, f"Проб {lab_titles} нет.")}, lab_points
 
 
-def _history(events: list[dict], now: datetime, sources: _Sources) -> tuple[dict, dict, dict[str, list[dict]]]:
+def _history(events: list[dict], now: datetime, sources: SourceCatalog) -> tuple[dict, dict, dict[str, list[dict]]]:
     """ERA: the equipment and its run, demount and base-inspection acts; also the events by kind."""
     values: dict[str, Any] = {}
     prov: dict[str, dict] = {}
@@ -493,7 +432,7 @@ def _history(events: list[dict], now: datetime, sources: _Sources) -> tuple[dict
 
 
 def _condition(records: list[TelemetryPoint], prepared: Prepared | None, acts: dict,
-               sources: _Sources) -> tuple[dict, dict, float | None]:
+               sources: SourceCatalog) -> tuple[dict, dict, float | None]:
     """Environment (CO₂, water cut, chlorides of the latest values) and the category from the corrosion
     evidence (approved rule); also the current corrosion rate."""
     values: dict[str, Any] = {"corrosive_environment": None}
@@ -531,7 +470,7 @@ def _condition(records: list[TelemetryPoint], prepared: Prepared | None, acts: d
     return values, prov, rate
 
 
-def _protection(values: dict, prepared: Prepared | None, rate: float | None, sources: _Sources) -> Part:
+def _protection(values: dict, prepared: Prepared | None, rate: float | None, sources: SourceCatalog) -> Part:
     protection, note = _assess_protection(values, prepared, rate, sources)
     current = prepared.features.current_values if prepared is not None else {}
     means = (["ингибитор"] if current.get("inhibitor_efficiency") is not None else []) + (
@@ -542,7 +481,7 @@ def _protection(values: dict, prepared: Prepared | None, rate: float | None, sou
     return {"protection": protection}, {"protection": {**_prov(sources, None, when, note), "means": means}}
 
 
-def _math_score(features: Features, when: datetime, sources: _Sources) -> Part:
+def _math_score(features: Features, when: datetime, sources: SourceCatalog) -> Part:
     """The math model's failure probability; the inputs replaced by the median are named in the note
     and the inputs themselves kept in the provenance for the well card."""
     try:
@@ -560,7 +499,7 @@ def _math_score(features: Features, when: datetime, sources: _Sources) -> Part:
 
 
 def _models(prepared: Prepared | None, ready: readiness.Readiness, protection: str | None,
-            sources: _Sources) -> Part:
+            sources: SourceCatalog) -> Part:
     """The НТЦ rules and the math model, when the well has enough measurements (app.core.readiness)."""
     if prepared is None or not ready.ready:
         return {"model_ntc": None, "model_ntc_raw": None, "model_math": None}, {}
@@ -574,7 +513,7 @@ def build_values(records: list[TelemetryPoint], events: list[dict], now: datetim
                  passports: list[tuple[str, dict, datetime | None]] | None = None) -> tuple[dict, dict]:
     """Rating field values and their provenance for one well, column by column."""
     now = now or datetime.now(timezone.utc)
-    sources = _Sources()
+    sources = SourceCatalog()
     records = sorted(records, key=lambda point: _utc(point.timestamp))
     prepared = prepare(records) if records else None
     ready = readiness.assess(records)
@@ -603,7 +542,7 @@ def build_values(records: list[TelemetryPoint], events: list[dict], now: datetim
 
 
 def _assess_protection(values: dict, prepared: Prepared | None, rate: float | None,
-                       sources: _Sources) -> tuple[str | None, str | None]:
+                       sources: SourceCatalog) -> tuple[str | None, str | None]:
     """Protection status: effective / unconfirmed / insufficient, or None without data.
 
     Measures: inhibitor efficiency at or above MAI_RATING_PROTECTION_MIN_INHIBITOR with the
@@ -625,12 +564,13 @@ def _assess_protection(values: dict, prepared: Prepared | None, rate: float | No
     if design:
         measures.append(f"защитное исполнение: {values.get('equipment')}")
     if inhibitor is not None:
-        if inhibitor >= min_inhibitor and (deviation is None or deviation < max_deviation):
-            measures.append(f"ингибитор {fmt(inhibitor)}"
-                            + (f", отклонение закачки {fmt(deviation)} %" if deviation is not None else ""))
+        if inhibitor >= min_inhibitor and deviation is None and not design:
+            return "unconfirmed", "Защита не подтверждена: нет отклонения закачки ингибитора."
+        if inhibitor >= min_inhibitor and deviation is not None and deviation < max_deviation:
+            measures.append(f"ингибитор {fmt(inhibitor)}, отклонение закачки {fmt(deviation)} %")
         elif inhibitor < min_inhibitor:
             problems.append(f"эффективность ингибитора {fmt(inhibitor)} ниже {fmt(min_inhibitor)}")
-        else:
+        elif deviation is not None:
             problems.append(f"отклонение закачки {fmt(deviation)} % (порог {fmt(max_deviation)} %)")
     if not measures and not problems:
         return None, None

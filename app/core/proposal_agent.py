@@ -101,9 +101,9 @@ def build_context(well_id: str) -> dict | None:
     stored = db.get_rating_row(well_id)
     if stored is None:
         return None
-    from app.core.rating_builder import _Sources  # source titles, lab sources, act kinds
+    from app.core.source_catalog import SourceCatalog
 
-    sources = _Sources()
+    sources = SourceCatalog()
     row = rating.build_rating([stored])[0]
     provenance = row.get("provenance") or {}
     rules = (provenance.get("model_ntc") or {}).get("rules")
@@ -228,8 +228,16 @@ def _check(answer: dict, context: dict) -> dict:
             notes.append(f"Предложенной бригады «{crew_id[:60]}» нет в расписании — бригада не назначена.")
             crew = None
         else:
-            crew = {"crew_id": crew_id, "date": _date_or_none(crew.get("date")),
-                    "specialties": known_crews[crew_id].get("specialties") or []}
+            scheduled = known_crews[crew_id]
+            day = _date_or_none(crew.get("date"))
+            earliest, latest = (_date_or_none(scheduled.get(key)) for key in ("available_from", "available_to"))
+            limit = _date_or_none(context["rating"].get("deadline"))
+            if (scheduled.get("status") != "available" or not day or day < context["today"]
+                    or (earliest and day < earliest) or (latest and day > latest) or (limit and day > limit)):
+                notes.append(f"Бригада «{crew_id}» недоступна в указанную дату — бригада не назначена.")
+                crew = None
+            else:
+                crew = {"crew_id": crew_id, "date": day, "specialties": scheduled.get("specialties") or []}
     if measure == "—" and crew is not None:
         notes.append("Мероприятия не требуются — бригада не назначается.")
         crew = None

@@ -8,7 +8,10 @@ V3.0 notebook; calibrate them against field evidence before operational use.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from zoneinfo import ZoneInfo
 from datetime import timedelta
+
+from app.core.normalization import field_observations
 
 from app.config import settings
 from app.core.features import Features
@@ -79,17 +82,11 @@ def _persistent(normalized: list[dict], field: str, predicate) -> bool:
     """The field met the predicate on each of the last 7 days with a measurement (no carried values)."""
     if not normalized:
         return False
-    latest = normalized[-1]["timestamp"]
-    window = []
-    for row in reversed(normalized):
-        timestamp = row["timestamp"]
-        if latest - timestamp > timedelta(days=6):
-            break
-        if timestamp.date() not in {item[0] for item in window}:
-            if field in row.get("imputed_fields", []):
-                return False
-            window.append((timestamp.date(), row["calculated"].get(field)))
-    return len(window) >= 7 and all(value is not None and predicate(value) for _, value in window[:7])
+    zone = ZoneInfo(settings.source_timezone)
+    latest = normalized[-1]["timestamp"].astimezone(zone).date()
+    daily = {row["timestamp"].astimezone(zone).date(): row["calculated"][field]
+             for row in field_observations(normalized, field)}
+    return all((day := latest - timedelta(days=i)) in daily and predicate(daily[day]) for i in range(7))
 
 
 def evaluate_rules(features: Features, normalized: list[dict]) -> list[Check] | None:

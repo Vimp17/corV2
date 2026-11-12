@@ -1,4 +1,4 @@
-"""Writing accepted document records into the usual source data.
+"""Prepare accepted records as an owned contribution for an atomic document commit.
 
   work_event (acts)       -> an ERA-like work event with the corrosion finding, so the rating
                              sees the demount / base-inspection act exactly as from ERA;
@@ -7,8 +7,7 @@
 Whatever the type, the well card fields the document holds are loaded too (types.CARD_FIELDS): the
 measurements (tonnage, liquid rate, environment, wall thickness, other indicators…) as a well data
 row dated by the document, the equipment with its run date as an equipment-run event.
-Rows are stored under batch ids "doc-<document_id>-<well_id>", so reprocessing or deleting a
-document removes exactly what it loaded.
+The pipeline commits these records together with the accepted document metadata.
 """
 from __future__ import annotations
 
@@ -16,7 +15,6 @@ from collections import defaultdict
 from datetime import date, datetime, time, timezone
 from zoneinfo import ZoneInfo
 
-from app import db
 from app.config import settings
 from app.core.documents.extract import values_of
 from app.core.documents.types import DATE_FIELD
@@ -27,10 +25,6 @@ LAB_FIELDS = ("water_cut_pct", "chlorides_mg_l", "co2_pct", "corrosion_rate_mm_y
               "wall_thickness_mm", "initial_wall_thickness_mm", "injection_deviation_pct", "metal_loss_mm",
               "liquid_rate_m3_day", "tonnage_t", "noo_days", "field")
 INSTALL_WORK_TYPE = "Спуск оборудования (документ)"
-
-
-def batch_id(document_id: str, well_id: str) -> str:
-    return f"doc-{document_id}-{well_id}"[:128]
 
 
 def _moment(value: str) -> datetime:
@@ -84,9 +78,8 @@ def _install_item(values: dict) -> WorkHistoryItem | None:
                            equipment=str(values["equipment"])[:256])
 
 
-def load_records(document: dict, spec: dict, records: list[dict]) -> dict:
-    """Store accepted records; returns {"wells": [...], "records": n, "by_well": {...}}."""
-    db.delete_document_data(document["document_id"])
+def prepare_records(document: dict, spec: dict, records: list[dict]) -> tuple[list[dict], dict]:
+    """Prepare the complete contribution without touching storage."""
     source_id = spec["source_id"]
     accepted = [record for record in records if record["accepted"] and record["well_id"]]
     by_well: dict[str, list[dict]] = defaultdict(list)
@@ -95,6 +88,7 @@ def load_records(document: dict, spec: dict, records: list[dict]) -> dict:
     # A passport without a date: its measurements count from the day the file was received.
     received = _received_day(document)
     summary: dict[str, dict] = {}
+    contributions = []
     for well_id, items in by_well.items():
         work: list[WorkHistoryItem] = []
         points: list[TelemetryPoint] = []
@@ -113,18 +107,12 @@ def load_records(document: dict, spec: dict, records: list[dict]) -> dict:
                 attributes = {"field": values["field"], "passport_date": day}
         if spec["target"] == "passport":  # the latest passport of the well wins
             attributes = items[-1]
-        if attributes:
-            # Well attributes (the field) are read like a passport: app.core.rating_builder.well_passports.
-            db.save_source_payload(source_id, well_id, {
-                "document_id": document["document_id"], "filename": document["filename"], "passport": attributes})
-        key = batch_id(document["document_id"], well_id)
-        if work:
-            db.save_history(well_id, key, work, [], source_id=source_id)
-        if points:
-            db.save_batch(well_id, key, points)
+        payload = ({"document_id": document["document_id"], "filename": document["filename"],
+                    "passport": attributes} if attributes else {})
+        contributions.append({"well_id": well_id, "source_id": source_id, "data": {
+            "records": [p.model_dump(mode="json") for p in points],
+            "work_history": [w.model_dump(mode="json") for w in work], "payload": payload}})
         count = len(items)
-        db.record_source_status(source_id, well_id, "ok",
-                                f"{spec.get('title')}: «{document['filename']}»", count, origin="document")
         summary[well_id] = {"records": count}
-    return {"wells": sorted(summary), "records": sum(item["records"] for item in summary.values()),
+    return contributions, {"wells": sorted(summary), "records": sum(item["records"] for item in summary.values()),
             "by_well": summary, "source_id": source_id}

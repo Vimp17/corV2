@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import hashlib
 import secrets
 import uuid
 from contextlib import asynccontextmanager
@@ -74,7 +76,8 @@ async def unexpected_error_handler(request: Request, exc: Exception):
 
 @app.get("/health/live", tags=["health"])
 def live():
-    return {"status": "alive", "service": settings.app_name, "version": settings.app_version}
+    return {"status": "alive", "service": settings.app_name, "version": settings.app_version,
+            "pid": os.getpid(), "root": hashlib.sha256(str(Path(__file__).resolve().parents[1]).encode()).hexdigest()}
 
 
 @app.get("/health/ready", tags=["health"])
@@ -98,6 +101,11 @@ def ready():
 def dashboard():
     page = Path(__file__).resolve().parents[1] / "dashboard" / "index.html"
     return FileResponse(page)
+
+
+@app.get("/dashboard/co2.js", include_in_schema=False)
+def co2_script():
+    return FileResponse(Path(__file__).resolve().parents[1] / "dashboard/co2.js", media_type="text/javascript")
 
 
 v1 = APIRouter(prefix="/api/v1", dependencies=[Depends(require_api_key)])
