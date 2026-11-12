@@ -45,6 +45,10 @@ def import_v4(file: UploadFile = File(...), confirm: bool = Form(False),
     ids = {a["well_id"] for a in report["assessments"]}
     unknown = sorted(ids - co2.known_wells(ids))
     response = {k: v for k, v in report.items() if k != "assessments"}
+    warnings = [{"row": a.get("source_row"), "well_id": a["well_id"], "message": flag}
+                for a in report["assessments"] for flag in a["quality_flags"]]
+    response.update(warning_count=len(warnings), warnings=warnings[:100],
+                    verification="Проверен формат и доступные зависимости v4. Это не полевая валидация модели.")
     response.update(unknown_wells=unknown, synthetic=synthetic, confirmed=False)
     if confirm:
         if report["errors"]:

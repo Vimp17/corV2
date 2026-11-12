@@ -124,8 +124,13 @@ def cmd_check(args) -> int:
         from app.core.source_connectors import source_modes
 
         for source in source_modes():
-            ok(f"{source['title']}: " + {"api": "запрос по API (MAI_SOURCE_…_URL)", "adapter": "адаптер",
-                                          "adapter_missing": "адаптер не установлен"}.get(source["mode"], "загрузка файлов"))
+            if source["mode"] == "adapter_missing":
+                fail(f"{source['title']}: адаптер не установлен")
+            elif source["mode"] in {"api", "adapter"}:
+                warn(f"{source['title']}: подключение задано, связь ещё не проверена")
+            else:
+                ok(f"{source['title']}: загрузка файлов / push API")
+        note("Проверка ответа без импорта: mai.cmd sources check --well <ID>")
     except Exception as exc:  # noqa: BLE001
         fail(f"профили источников не читаются: {str(exc)[:200]}")
     if prepared["windows"]:

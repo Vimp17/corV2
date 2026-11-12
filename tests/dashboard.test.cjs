@@ -48,3 +48,24 @@ test('pending CO2 request survives redraw and cannot replace another well histor
   assert.deepEqual(calls,['/api/v1/co2/calculate']);
   assert.equal(control(root,'Скважина').value,'B');
 });
+test('measured composition asks for one value and validates it before sending',async()=>{
+  const {context:c,root}=create();c.renderCo2(detail('A'));
+  const measured=descendants(root).find(n=>n.tag==='label' && n.children.some(x=>typeof x==='string' && x.includes('Измеренная доля'))).children.find(n=>n.tag==='input');
+  measured.checked=true;await measured.dispatch('change');
+  const fraction=control(root,'Доля CO₂');assert.equal(fraction.value,'');
+  fraction.value='1;2';control(root,'Температура').value='60';control(root,'Абсолютное').value='50';
+  let calls=0;c.api=async()=>{calls++;return {};};
+  await descendants(root).find(n=>n.tag==='form').dispatch('submit');
+  assert.equal(calls,0);assert.match(descendants(root).filter(n=>n.tag==='span').map(n=>n.textContent||'').join(' '),/одно значение/);
+});
+test('global result opens the submitted well after refresh even if the form changes',async()=>{
+  const {context:c}=create(); const form=c.co2Form();
+  control(form,'Скважина').value='QA-A'; control(form,'Температура').value='60'; control(form,'Абсолютное').value='50';
+  let finish; c.api=async()=>new Promise(resolve=>{finish=resolve;});
+  let refreshed=false,opened; c.refresh=async()=>{refreshed=true;};c.openWell=id=>{assert.equal(refreshed,true);opened=id;};
+  const pending=form.dispatch('submit'); control(form,'Скважина').value='QA-B';
+  finish({assessment:{calculation_mode:'calculated',model_version:'test',scenarios:[],quality_flags:[],inputs:{}},duplicates:0});
+  await pending;
+  const link=descendants(form).find(n=>n.tag==='button' && n.textContent?.startsWith('Открыть скважину'));
+  await link.dispatch('click'); assert.equal(opened,'QA-A');
+});

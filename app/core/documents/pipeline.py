@@ -395,9 +395,13 @@ def delete_documents(statuses: set[str] | None) -> dict:
     processed) and the data they loaded; the rating of the affected wells is recomputed once."""
     selected = [row["document_id"] for row in db.list_documents(limit=100000)
                 if row["status"] not in {"queued", "processing"} and (statuses is None or row["status"] in statuses)]
-    removed, remaining = _delete(selected)
+    safe_only = statuses is not None and statuses <= {"failed", "not_recognized"}
+    removed, remaining = _delete(selected, only_without_data=safe_only)
     _recompute(remaining)
-    return {"deleted": len(removed), "wells": sorted({well for document in removed for well in _loaded_wells(document)})}
+    result = {"deleted": len(removed), "wells": sorted({well for document in removed for well in _loaded_wells(document)})}
+    if safe_only and len(removed) < len(selected):
+        result["skipped_with_data"] = len(selected) - len(removed)
+    return result
 
 
 def delete_document(document_id: str) -> dict | None:
@@ -413,10 +417,10 @@ def _loaded_wells(document: dict) -> list[str]:
     return (document.get("loaded") or {}).get("wells") or []
 
 
-def _delete(document_ids: list[str]) -> tuple[list[dict], list[str]]:
+def _delete(document_ids: list[str], *, only_without_data=False) -> tuple[list[dict], list[str]]:
     removed = []
     for document_id in document_ids:
-        document = db.delete_document_row(document_id)
+        document = db.delete_document_row(document_id, only_without_data=only_without_data)
         if document is None:
             continue
         try:

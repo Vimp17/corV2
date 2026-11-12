@@ -49,11 +49,19 @@ async def _read_limited(upload: UploadFile) -> bytes:
 @router.get("")
 def list_documents(status: str | None = Query(default=None, max_length=32),
                    well_id: str | None = Query(default=None, max_length=128),
-                   limit: int = Query(default=200, ge=1, le=1000)) -> dict:
+                   limit: int = Query(default=200, ge=1, le=1000),
+                   q: str | None = Query(default=None, max_length=200),
+                   cursor: str | None = Query(default=None, max_length=512)) -> dict:
     titles = pipeline.type_titles()
     inbox = intake.inbox_path()
+    from app.db.documents import document_page
+    try:
+        page = document_page(well_id=well_id, status=status, limit=limit, q=q, cursor=cursor)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    page["documents"] = [pipeline.decorate(row, titles) for row in page["documents"]]
     return {
-        "documents": [pipeline.decorate(row, titles) for row in db.list_documents(well_id=well_id, status=status, limit=limit)],
+        **page,
         "counts": db.document_status_counts(),
         "status_labels": pipeline.STATUS_LABELS,
         "types": [{"type_id": key, "title": value} for key, value in titles.items()],

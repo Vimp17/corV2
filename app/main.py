@@ -17,6 +17,7 @@ from app.api.routes.ingestion import router as ingestion_router
 from app.api.routes.monitoring import router as monitoring_router
 from app.api.routes.rating import router as rating_router
 from app.api.routes.co2 import router as co2_router
+from app.api.routes.sources import router as sources_router
 from app.config import settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -110,10 +111,16 @@ def co2_script():
     return FileResponse(Path(__file__).resolve().parents[1] / "dashboard/co2.js", media_type="text/javascript")
 
 
+@app.get("/dashboard/sources.js", include_in_schema=False)
+def sources_script():
+    return FileResponse(Path(__file__).resolve().parents[1] / "dashboard/sources.js", media_type="text/javascript")
+
+
 v1 = APIRouter(prefix="/api/v1", dependencies=[Depends(require_api_key)])
 v1.include_router(ingestion_router)
 v1.include_router(monitoring_router)
 v1.include_router(rating_router)
 v1.include_router(documents_router)
 v1.include_router(co2_router)
+v1.include_router(sources_router)
 app.include_router(v1)

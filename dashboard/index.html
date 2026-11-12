@@ -333,6 +333,57 @@
     .co2-history { display:flex; flex-direction:column; gap:10px; }
     #co2Feature .hint, #wellCo2 .hint { overflow-wrap:anywhere; }
     footer { color:var(--muted); font-size:12px }
+    /* A readable overview; the complete 13-column table remains available. */
+    [hidden] { display:none !important }
+    .tiles { grid-template-columns:repeat(auto-fit,minmax(155px,1fr)); gap:10px }
+    .tile { padding:10px 14px }
+    .tile .tn { font-size:24px }
+    .source-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr)); gap:12px; margin:16px 0 }
+    .source-grid .box { margin:0 }
+    .source-grid input, #accessSettings input, .co2-form input { max-width:100%; padding:6px 8px; border:1px solid #C9D2DC; border-radius:4px }
+    .co2-form input[type=checkbox], .co2-form input[type=radio] { width:auto }
+    .co2-form .field-error { color:var(--repair); font-size:13px; display:block }
+    .source-grid .btn { margin-top:8px }
+    .source-grid code, .box code { overflow-wrap:anywhere }
+    .table-box:not(.compact) .grid-row > .deadline-cell { display:none }
+    .table-box.compact .grid-row { grid-template-columns:minmax(130px,1.2fr) 80px minmax(180px,2fr) 112px minmax(130px,1.3fr); column-gap:18px; padding:0 16px }
+    .table-box.compact .grid-row > div { grid-row:1 }
+    .table-box.compact .grid-row > div:not(:nth-child(2)):not(:nth-child(3)):not(:nth-child(5)):not(:nth-child(13)):not(:nth-child(14)) { display:none }
+    .table-box.compact .grid-row > div:nth-child(2) { grid-column:1 }
+    .table-box.compact .grid-row > div:nth-child(3) { grid-column:2 }
+    .table-box.compact .grid-row > div:nth-child(5) { grid-column:3; display:block }
+    .table-box.compact .grid-row > div:nth-child(13) { grid-column:5; display:block }
+    .table-box.compact .grid-row > div:nth-child(14) { grid-column:4; display:block }
+    .table-box.compact .grid-row > div::before { content:none }
+    .table-box.compact .thead-wrap { display:block }
+    .table-box.compact .thead { font-size:13px; min-height:44px }
+    .table-box.compact .trow { font-size:14px; min-height:72px }
+    .table-box.compact .trow > div { padding:12px 0 }
+    .table-box.compact .wellbtn { font-size:15px }
+    .table-box.compact .gapbox .names { font-size:12px }
+    .table-box.compact .trow > div:nth-child(5) > div > span:last-child { font-size:13px !important }
+    .late { color:var(--repair) }
+    @container (max-width: 699px) {
+      .table-box.compact .thead-wrap { display:none }
+      .table-box.compact .grid-row.trow { grid-template-columns:minmax(0,1fr) 64px; padding:12px 16px; row-gap:10px }
+      .table-box.compact .trow > div { padding:0 }
+      .table-box.compact .trow > div:nth-child(5), .table-box.compact .trow > div:nth-child(13), .table-box.compact .trow > div:nth-child(14) { grid-column:1 / -1; display:grid; grid-template-columns:110px minmax(0,1fr); gap:8px }
+      .table-box.compact .trow > div:nth-child(5) { grid-row:2 }
+      .table-box.compact .trow > div:nth-child(14) { grid-row:3 }
+      .table-box.compact .trow > div:nth-child(13) { grid-row:4 }
+      .table-box.compact .trow > div:nth-child(n+4)::before { content:attr(data-label); font-size:12px; color:var(--muted) }
+    }
+    @media(max-width:600px) {
+      .appbar { padding:10px 14px; gap:8px }
+      .appbar .brand { flex:1 1 100% }
+      .appbar .btn { min-height:36px; padding:6px 10px; font-size:12px }
+      .tiles { grid-template-columns:repeat(2,minmax(0,1fr)) }
+      .tile { min-height:90px }
+      .toolbar { padding:12px; gap:10px }
+      .toolbar label { flex-wrap:wrap; max-width:100% }
+      .toolbar input { max-width:100% }
+      .docs { padding:16px 12px }
+    }
   </style>
 </head>
 <body>
@@ -344,9 +395,10 @@
       </div>
     </div>
     <div class="spacer"></div>
-    <label class="key">Ключ API <input id="apiKey" type="password" autocomplete="off" placeholder="если включена защита"></label>
+    <a class="btn secondary" href="#sec-sources">Источники и настройки</a>
     <button class="btn secondary" id="refresh" type="button">Обновить</button>
     <button class="btn" id="run" type="button">Выполнить дневной цикл</button>
+    <button class="btn secondary" id="checkJob" type="button" hidden>Проверить цикл</button>
   </header>
 
   <div class="shell">
@@ -358,6 +410,7 @@
         <div class="nav-sep" aria-hidden="true"></div>
         <a href="#sec-docs">Документы</a>
         <a href="#co2Feature" id="co2Nav">CO₂-коррозия</a>
+        <a href="#sec-sources">Источники и настройки</a>
         <div class="nav-summary" id="navSummary" role="group" aria-label="Сводка по мероприятиям"></div>
       </div>
     </nav>
@@ -389,17 +442,19 @@
         <div class="toolbar">
           <label>Поиск скважины <input id="search" type="search" placeholder="номер" autocomplete="off"></label>
           <label>Месторождение <select id="fieldFilter"><option value="">Все</option></select></label>
+          <label>Вид <select id="tableView"><option value="compact">Кратко</option><option value="full">Полно</option></select></label>
           <label class="check" title="Скважины без индекса (мало данных для прогноза). В фильтрах «Нет данных» они видны всегда."><input id="showUnscored" type="checkbox"> Показывать без оценки <b id="unscoredCount"></b></label>
           <span class="sub" id="updated">Загрузка…</span>
+          <span class="sub" id="ratingCount"></span>
           <span class="spacer-x"></span>
           <button class="btn secondary small" id="export" type="button">Скачать рейтинг (Excel)</button>
         </div>
-        <div class="table-box"><div class="table-inner">
+        <div class="table-box compact" id="ratingTable"><div class="table-inner">
           <div class="thead-wrap">
             <div class="grid-row thead" role="row">
               <div>Место</div><div>Скважина</div><div>Индекс корро&shy;зии на НКТ</div><div>Прогноз НТЦ / Мат.</div><div>Мероприятие и предложение</div><div>Категория фонда</div>
               <div>Среда</div><div title="Последний акт из истории ремонтов (ЭРА ремонта, документы) — исторические данные, а не текущее состояние скважины">Демонтаж<span class="hsub">исторические данные</span></div><div title="Последний акт из истории ремонтов (ЭРА ремонта, документы) — исторические данные, а не текущее состояние скважины">Разбор на базе<span class="hsub">исторические данные</span></div><div>Оборудование и защита</div>
-              <div>Нара&shy;ботка, сут</div><div>Жидкость, м³ / нефть, л (%)</div><div>Полнота данных</div>
+              <div>Нара&shy;ботка, сут</div><div>Жидкость, м³ / нефть, л (%)</div><div>Полнота данных</div><div class="deadline-cell">Крайний срок</div>
             </div>
           </div>
           <div id="rows"><div class="empty">Загружаем рейтинг…</div></div>
@@ -453,11 +508,17 @@
         </div>
         <div class="doc-history" id="docHistory" hidden>
           <div class="docs-bar">
-            <div class="hint">Все полученные файлы, новые сверху. Нажмите на строку — откроются извлечённые данные.</div>
+            <div class="hint">Новые файлы сверху. Откройте строку, чтобы увидеть принятые данные и действия.</div>
             <div class="clearwrap">
               <button class="btn secondary small" id="docClear" type="button" aria-expanded="false" aria-controls="docClearMenu" hidden>Очистить список ▾</button>
               <div class="gapmenu" id="docClearMenu" role="menu" hidden></div>
             </div>
+          </div>
+          <div class="toolbar">
+            <label>Поиск документа <input id="docSearch" type="search" maxlength="200" placeholder="файл или скважина"></label>
+            <label>Статус <select id="docStatus"><option value="">Все</option></select></label>
+            <button class="btn secondary small" id="docReset" type="button">Сбросить поиск</button>
+            <span class="sub" id="docPageInfo"></span>
           </div>
           <div class="docs-table-box">
             <table class="doc-table">
@@ -465,10 +526,32 @@
               <tbody id="docRows"><tr><td colspan="6" class="empty">Загружаем документы…</td></tr></tbody>
             </table>
           </div>
+          <div class="table-more">
+            <button class="btn secondary small" id="docPrev" type="button" disabled>Предыдущие</button>
+            <button class="btn secondary small" id="docNext" type="button" disabled>Следующие</button>
+          </div>
         </div>
       </section>
 
       <section class="panel docs anchor" id="co2Feature"></section>
+      <section class="panel docs anchor" id="sec-sources" aria-labelledby="sourcesTitle">
+        <h2 class="section" id="sourcesTitle">Источники и настройки</h2>
+        <p class="sub">ДАРС, ХИМИК и ЭРА поставляют данные для рейтинга; расписание бригад — для предложений инженеру. Загрузка файлами доступна без автоматического подключения.</p>
+        <div class="source-grid" id="sourceCards"><p class="hint">Загружаем состояние источников…</p></div>
+        <details class="box"><summary>Как подключить источники</summary>
+          <ol><li>В папке сборки запустите <code>mai.cmd sources configure</code>: выберите источник, введите URL и при необходимости токен.</li>
+            <li>Для пустого фонда задайте ID скважин. Если фонд уже загружен, повторять список не требуется.</li>
+            <li>Выполните <code>mai.cmd sources check --well &lt;ID&gt;</code> — ответ будет проверен без импорта.</li>
+            <li>Перезапустите API: <code>mai.cmd restart</code>. Дневной цикл загрузит данные в рейтинг.</li></ol>
+          <p class="hint">Прямой HTTP-источник отдаёт XLSX (ДАРС/ХИМИК/ЭРА) или JSON расписания. Адрес получит параметр well_id. Для корпоративного JSON, SSO или SQL-витрины нужен согласованный адаптер. SQL Server в setup — хранилище приложения.</p>
+        </details>
+        <details class="box" id="accessSettings"><summary>Доступ, версия и помощь</summary>
+          <label>Ключ API <input id="apiKey" type="password" autocomplete="off" placeholder="если включена защита"></label>
+          <p class="hint">Ключ действует в этой вкладке. Подключение БД и ИИ задаётся командой <code>mai.cmd setup</code>; диагностика — <code>mai.cmd check</code>.</p>
+          <p class="hint" id="buildVersion"></p>
+          <p class="hint">Первый запуск: подготовьте актуальные учебные sample_dars.xlsx, sample_khimik.xlsx и sample_era.xlsx встроенным генератором (README-DEMO.md, раздел 6.0 «Учебные данные»), затем загрузите их в «Документы». PDF и отдельный Excel-протокол уже есть в examples/documents. Откройте скважину и проверьте основания, плановую дату и комментарий.</p>
+        </details>
+      </section>
 
       <footer>Рейтинг рассчитывается системой по данным ДАРС, ХИМИК и ЭРА ремонта и по документам: из API источников, если они настроены, иначе по загруженным файлам. Пороги и сроки — переменные MAI_RATING_*. Предложения ИИ-агента требуют проверки инженером.</footer>
     </main>
@@ -492,6 +575,7 @@
   </aside>
 
   <script src="/dashboard/co2.js"></script>
+  <script src="/dashboard/sources.js"></script>
   <script>
     const $ = (id) => document.getElementById(id);
     const DAY = 86400000;
@@ -519,21 +603,46 @@
     }
     const headers = () => { const key = $('apiKey').value.trim(); return key ? { 'X-API-Key': key } : {}; };
     async function api(path, options = {}) {
-      let response;
-      try { response = await fetch(path, { ...options, headers: { ...headers(), ...(options.headers || {}) } }); }
-      catch { throw new Error('Нет связи с сервером: проверьте, что API запущен (mai.cmd status), и обновите страницу.'); }
-      let result = {};
-      try { result = await response.json(); } catch { result = {}; }
+      let response, result;
+      const controller = new AbortController();
+      const writing = options.method && options.method !== 'GET';
+      const timer = setTimeout(() => controller.abort(), writing ? 240000 : 30000);
+      try {
+        response = await fetch(path, { ...options, signal: controller.signal, headers: { ...headers(), ...(options.headers || {}) } });
+        result = await response.json();
+      }
+      catch (error) { throw new Error(error.name === 'AbortError'
+        ? `Истекло время ожидания ответа.${writing ? ' Запрос мог быть принят сервером: проверьте статус или историю перед повтором.' : ' Повторите обновление.'}`
+        : response ? `Сервер вернул неподходящий ответ (HTTP ${response.status}): ожидается JSON. Проверьте доступность API и настройки прокси.`
+        : 'Нет связи с сервером: проверьте, что API запущен (mai.cmd status), и обновите страницу.'); }
+      finally { clearTimeout(timer); }
       if (!response.ok) {
         const detail = typeof result.detail === 'string' ? result.detail
-          : Array.isArray(result.detail) ? result.detail.map(item => item.msg).join('; ')
+          : Array.isArray(result.detail) ? result.detail.map(fieldError).join('; ')
           : result.detail?.message;
         throw Object.assign(new Error(detail || result.message || `Запрос не выполнен (HTTP ${response.status}).`), { status: response.status });
       }
       return result;
     }
     // A refused key: where to enter it.
-    const keyHint = (error, tail = 'введите ключ в верхней панели.') => (error.status === 401 ? ` Если защита API включена, ${tail}` : '');
+    const keyHint = (error, tail = 'введите ключ в разделе «Источники и настройки».') => (error.status === 401 ? ` Если защита API включена, ${tail}` : '');
+    function fieldError(item) {
+      const names = { well_id: 'Скважина', temperature_c: 'Температура', pressure_abs_bar: 'Абсолютное давление',
+        co2_mole_fractions: 'Доля CO₂', composition_source: 'Источник состава', source: 'Источник значений', state_at: 'Дата состояния', plan_date: 'Плановая дата', operator_comment: 'Комментарий' };
+      const key = (item.loc || []).find(part => names[part]);
+      const reasons = { missing: 'обязательное поле', float_parsing: 'введите число', finite_number: 'введите конечное число',
+        greater_than: `значение должно быть больше ${item.ctx?.gt}`, less_than_equal: `значение должно быть не больше ${item.ctx?.le}`,
+        string_too_long: `не больше ${item.ctx?.max_length} символов`, too_long: 'слишком много значений', value_error: 'проверьте значение и допустимый диапазон' };
+      return `${names[key] || 'Поле'}: ${reasons[item.type] || 'некорректное значение'}`;
+    }
+    function actionError(button, error) {
+      const box = button.closest('form, .box, .inner');
+      if (box) {
+        box.querySelector('[data-action-error]')?.remove();
+        box.append(el('p', { class: 'hint warn', role: 'alert', 'data-action-error': '', text: error.message }));
+      }
+      notice(error.message, 'error');
+    }
     function notice(message, type = '') { const box = $('notice'); box.textContent = message || ''; box.className = `notice ${type}`; box.style.display = message ? 'block' : 'none'; }
     const isoDay = (iso) => { if (!iso) return null; const p = String(iso).slice(0, 10).split('-'); return Date.UTC(+p[0], +p[1] - 1, +p[2]); };
     const pad = (n) => (n < 10 ? '0' : '') + n;
@@ -556,6 +665,7 @@
         if (!options.keepNotice) notice('');
         if (!state.hashChecked) { state.hashChecked = true; const fromLink = hashWell(); if (fromLink) openFromLink(fromLink); }
       } catch (error) {
+        if (error.status === 401) $('accessSettings').open = true;
         if (!options.auto) notice(`${error.message}${keyHint(error)}`, 'error');
         if (!state.rating) $('rows').replaceChildren(el('div', { class: 'empty', text: `Рейтинг не загружен: ${error.message}` }));
       } finally { $('refresh').disabled = false; }
@@ -572,7 +682,7 @@
       renderFieldFilter(wells);
       renderTable();
       renderGantt();
-      if (!state.cardDirty) renderCard();
+      if (!state.cardDirty && !state.operatorSaving) renderCard();
     }
 
     const SOURCE_MODE = { api: 'API', adapter: 'API (адаптер)', adapter_missing: 'адаптер не установлен', upload: 'загрузка файлов' };
@@ -617,7 +727,7 @@
     function openGapMenu() { $('gapMenu').hidden = false; $('gapBtn').setAttribute('aria-expanded', 'true'); $('gapMenu').querySelector('button:not(:disabled)')?.focus(); }
     function closeGapMenu() { $('gapMenu').hidden = true; $('gapBtn').setAttribute('aria-expanded', 'false'); }
 
-    const TOP_MEASURES = ['repair', 'ud'];
+    const TOP_MEASURES = ['repair', 'engineer', 'ud'];
     const SHORT = { repair: 'ППР — комплекс по ремонту', ud: 'УДР' };
     function renderNavSummary(measures, counts) {
       const items = [el('div', { class: 'nav-title', text: 'Сводка' })];
@@ -727,6 +837,7 @@
       const rows = visibleWells();
       const hidden = hiddenUnscored();
       const unscored = state.rating.wells.filter(w => w.index === null).length;
+      $('ratingCount').textContent = `Показано ${Math.min(rows.length, state.tableLimit)} из ${state.rating.wells.length}${hidden ? ` · скрыто без оценки: ${hidden}` : ''}`;
       $('unscoredCount').textContent = unscored ? `(${unscored})` : '';
       if (!state.rating.wells.length) { $('rows').replaceChildren(emptyRating(state.rating.data || {})); return; }
       const showHidden = hidden ? el('button', { class: 'btn secondary small', type: 'button', text: `Показать без оценки (${hidden})`, onClick: () => setShowUnscored(true) }) : null;
@@ -763,7 +874,8 @@
             el('span', { text: `${fmtNum(w.liquid_rate_m3_day, 1)} м³` }),
             el('span', { class: 'sub', style: 'font-size:11px', text: w.oil_l_day !== null && w.oil_l_day !== undefined ? `${fmtNum(w.oil_l_day)} л нефти (${fmtNum(w.oil_pct)} %)`
               : w.oil_pct !== null && w.oil_pct !== undefined ? `нефть ${fmtNum(w.oil_pct)} %` : 'нефть —' }))),
-          el('div', { 'data-label': 'Полнота данных' }, gapsCell(w)));
+          el('div', { 'data-label': 'Полнота данных' }, gapsCell(w)),
+          el('div', { class: 'deadline-cell', 'data-label': 'Крайний срок' }, el('span', { class: w.plan_status === 'late' ? 'late' : '', text: w.deadline ? fmtIso(w.deadline) : '—' })));
       }), ...(footer ? [footer] : []));
     }
 
@@ -771,10 +883,10 @@
       const run = el('button', { class: 'btn', type: 'button', text: 'Выполнить дневной цикл', onClick: runNow });
       if (!data.known_wells) {
         const how = data.api_configured
-          ? 'API источников настроен: дневной цикл запросит данные и рассчитает рейтинг.'
-          : 'Загрузите файлы ДАРС, ХИМИК и ЭРА ремонта в разделе «Документы» — рейтинг рассчитается сразу. Чтобы данные запрашивались автоматически, задайте MAI_SOURCE_<ID>_URL и список скважин MAI_WELL_IDS.';
+          ? 'Адрес источника задан, подключение ещё нужно проверить. Укажите начальные ID скважин в мастере настройки или загрузите файлы, чтобы сформировать фонд для дневного цикла.'
+          : 'Загрузите Excel-выгрузки ДАРС, ХИМИК и ЭРА ремонта. После обработки появятся скважины и основания для расчёта. Автоматическое подключение можно настроить в разделе «Источники».';
         return el('div', { class: 'empty' }, el('div', { class: 'empty-title', text: 'Данных по скважинам пока нет' }), el('div', { text: how }),
-          el('div', { class: 'row' }, el('a', { class: 'btn secondary', href: '#sec-docs', text: 'К документам' }), data.api_configured ? run : null));
+          el('div', { class: 'row' }, el('a', { class: 'btn', href: '#sec-docs', text: 'Загрузить файлы' }), el('a', { class: 'btn secondary', href: '#sec-sources', text: 'Как подключить источники' }), data.api_configured ? run : null));
       }
       return el('div', { class: 'empty' }, el('div', { class: 'empty-title', text: `Данные есть по ${data.known_wells} скв., рейтинг ещё не рассчитан` }),
         el('div', { text: 'Дневной цикл запросит данные из настроенных API, рассчитает риск и рейтинг по всем скважинам.' }), el('div', { class: 'row' }, run));
@@ -846,6 +958,10 @@
       const match = /^#well=(.+)$/.exec(location.hash);
       try { return match ? decodeURIComponent(match[1]) : null; } catch { return null; }
     }
+    function canLeaveCard() {
+      if (state.operatorSaving) { notice('Сохраняем решение. Дождитесь результата.', 'warning'); return false; }
+      return !state.cardDirty || confirm('Несохранённые изменения будут потеряны. Закрыть карточку?');
+    }
     function openFromLink(wellId) {
       if (!state.rating) return;  // the first load opens the link
       if (state.rating.wells.some(w => w.well_id === wellId)) { openWell(wellId); return; }
@@ -854,8 +970,8 @@
     }
     function openWell(wellId, opener) {
       if (!state.rating?.wells.some(w => w.well_id === wellId)) return;
-      if (state.drawerOpen && state.selected !== wellId && state.cardDirty
-          && !confirm('Несохранённые изменения в карточке будут потеряны. Открыть другую скважину?')) return;
+      if (state.drawerOpen && state.selected === wellId) return;
+      if (state.drawerOpen && !canLeaveCard()) return;
       if (!state.drawerOpen) state.opener = opener || document.activeElement;
       state.selected = wellId;
       state.cardDirty = false;
@@ -871,7 +987,8 @@
       $('cardTitle').focus({ preventScroll: true });
     }
     function closeWell() {
-      if (!state.drawerOpen) return;
+      if (!state.drawerOpen) return true;
+      if (!canLeaveCard()) return false;
       state.drawerOpen = false;
       state.cardDirty = false;
       const drawer = $('wellDrawer');
@@ -883,6 +1000,8 @@
       const back = state.opener;
       state.opener = null;
       if (back && document.contains(back)) back.focus({ preventScroll: true });
+      else [...(document.querySelectorAll?.('#rows .wellbtn') || [])].find(node => node.textContent === state.selected)?.focus({ preventScroll: true });
+      return true;
     }
     function cardOrder() {
       const visible = visibleWells();
@@ -1007,13 +1126,20 @@
           el('span', { class: 'hint', text: 'Плановая дата снимает «Ожидает решения»; всё попадает в выгрузку Excel.' })));
     }
     async function saveOperator(wellId, values, button) {
-      button.disabled = true;
+      if (state.operatorSaving) return;
+      state.operatorSaving = true;
+      const controls = button.closest('form').querySelectorAll('input, select, textarea, button');
+      controls.forEach(node => { node.disabled = true; });
       try {
         await api(`/api/v1/rating/wells/${encodeURIComponent(wellId)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values) });
         state.cardDirty = false;
         notice(`Решение по скважине ${wellId} сохранено.`);
         await refresh({ keepNotice: true });
-      } catch (error) { notice(error.message, 'error'); button.disabled = false; }
+      } catch (error) { actionError(button, error); }
+      finally {
+        state.operatorSaving = false; controls.forEach(node => { node.disabled = false; });
+        if (!state.cardDirty) renderCard();
+      }
     }
 
     async function recomputeWell(wellId, button) {
@@ -1031,7 +1157,7 @@
       button.disabled = true;
       try {
         const response = await fetch('/api/v1/rating/export.xlsx', { headers: headers() });
-        if (!response.ok) throw new Error(response.status === 401 ? 'Нужен ключ API: введите его в верхней панели.' : `Выгрузка не удалась (HTTP ${response.status}).`);
+        if (!response.ok) throw new Error(response.status === 401 ? 'Нужен ключ API: введите его в «Источники и настройки → Доступ, версия и помощь».' : `Выгрузка не удалась (HTTP ${response.status}).`);
         const blob = await response.blob();
         const match = /filename="([^"]+)"/.exec(response.headers.get('Content-Disposition') || '');
         const link = el('a', { href: URL.createObjectURL(blob), download: match ? match[1] : 'rating.xlsx' });
@@ -1044,20 +1170,34 @@
     // ---------------------------------------------------------------- daily cycle
     async function waitForJob(jobId) {
       const started = Date.now();
-      for (;;) {
-        await new Promise(resolve => setTimeout(resolve, 3000));
-        const job = await api(`/api/v1/monitor/jobs/${encodeURIComponent(jobId)}`);
+      while (Date.now() - started < 180000) {
+        let job;
+        try { job = await api(`/api/v1/monitor/jobs/${encodeURIComponent(jobId)}`); }
+        catch (error) {
+          if (error.status !== 404) throw error;
+          state.monitorJob = null;
+          throw new Error(`Цикл ${jobId} больше не найден. Можно запустить новый дневной цикл.`);
+        }
         if (job.status === 'completed') return job.result;
-        if (job.status === 'failed' || job.status === 'rejected') throw new Error(job.error || 'Расчёт не выполнен; подробности в журнале backend.');
-        notice(`Запрашиваются данные из источников, пересчитывается рейтинг… прошло ${Math.round((Date.now() - started) / 1000)} с.`);
+        if (job.status === 'failed' || job.status === 'rejected') {
+          state.monitorJob = null;
+          throw new Error(`Цикл ${jobId}: ${job.error || 'не выполнен; подробности в журнале сервера.'}`);
+        }
+        notice(`Дневной цикл ${jobId}: запрашиваются источники и обновляется рейтинг… прошло ${Math.round((Date.now() - started) / 1000)} с.`);
+        await new Promise(resolve => setTimeout(resolve, 3000));
       }
+      throw new Error(`Ожидание цикла ${jobId} завершено. Работа на сервере может продолжаться. Нажмите «Проверить цикл», чтобы узнать результат.`);
     }
     // As the daily n8n workflow: the cycle, then an AI proposal for every well awaiting a decision.
     async function runNow() {
+      if (state.busy) return;
       state.busy = true; $('run').disabled = true; notice('Запрашиваются данные из источников, пересчитывается рейтинг…');
       try {
-        const job = await api('/api/v1/monitor/run?background=true', { method: 'POST' });
-        const result = await waitForJob(job.job_id);
+        if (!state.monitorJob) state.monitorJob = (await api('/api/v1/monitor/run?background=true', { method: 'POST' })).job_id;
+        try { sessionStorage.setItem('maiMonitorJob', state.monitorJob); } catch { /* storage may be unavailable */ }
+        $('checkJob').hidden = false;
+        const result = await waitForJob(state.monitorJob);
+        state.monitorJob = null;
         const alerts = result.alerts || [];
         const ai = Boolean(state.rating?.settings?.ai_agent_configured);
         let done = 0, errors = 0;
@@ -1067,9 +1207,16 @@
         }
         const tail = !alerts.length ? '' : ai ? ` Предложения ИИ: ${done} из ${alerts.length}${errors ? `, ошибок: ${errors}` : ''}.`
           : ' ИИ-агент не настроен — предложения не готовились.';
-        notice(`${result.message} Рейтинг пересчитан.${tail}`, errors ? 'warning' : '');
+        const failures = result.source_failures || [];
+        const issues = failures.slice(0, 5).map(f => `${f.source_id} / ${f.well_id}: ${f.message || f.status}`).join('\n');
+        const warning = result.status === 'needs_configuration' || failures.length || errors;
+        notice(`${result.message}${failures.length ? ` Ошибок источников/расчёта: ${failures.length}.\n${issues}${failures.length > 5 ? '\nОстальные ошибки — в разделе «Источники».': ''}` : ''}${tail}`, warning ? 'warning' : '');
       } catch (error) { notice(error.message, 'error'); }
-      finally { $('run').disabled = false; state.busy = false; await refresh({ keepNotice: true }); }
+      finally {
+        $('checkJob').hidden = !state.monitorJob;
+        try { state.monitorJob ? sessionStorage.setItem('maiMonitorJob', state.monitorJob) : sessionStorage.removeItem('maiMonitorJob'); } catch { /* storage may be unavailable */ }
+        $('run').disabled = false; state.busy = false; await refresh({ keepNotice: true });
+      }
     }
 
     // ---------------------------------------------------------------- documents
@@ -1083,18 +1230,29 @@
     const fmtValue = (v) => (Array.isArray(v) ? v.map(item => `${item.name}: ${Number(item.value).toLocaleString('ru-RU', { maximumFractionDigits: 3 })}`).join('; ')
       : typeof v === 'boolean' ? fmtBool(v) : (/^\d{4}-\d{2}-\d{2}$/.test(String(v)) ? fmtIso(v) : String(v)));
 
-    async function loadDocuments() {
+    async function loadDocuments({ reset = false } = {}) {
       clearTimeout(state.docTimer);
       state.docTimer = null;
+      if (reset || !state.docCursors) { state.docCursors = ['']; state.docPage = 0; }
+      const page = state.docPage;
+      const request = (state.docRequest || 0) + 1;
+      state.docRequest = request;
+      const params = new URLSearchParams({ limit: '50' });
+      if (state.docCursors[page]) params.set('cursor', state.docCursors[page]);
+      if (state.docTarget || $('docSearch').value.trim()) params.set('q', state.docTarget || $('docSearch').value.trim());
+      if ($('docStatus').value) params.set('status', $('docStatus').value);
       try {
-        const data = await api('/api/v1/documents?limit=200');
-        const wasBusy = new Set((state.docs?.documents || []).filter(docBusy).map(d => d.document_id));
+        const data = await api(`/api/v1/documents?${params}`);
+        if (request !== state.docRequest) return;
+        const wasBusy = (state.docs?.counts?.queued || 0) + (state.docs?.counts?.processing || 0);
         state.docs = data;
         renderDocuments();
         // A document finished processing: its data may have changed the rating.
-        if ([...wasBusy].some(id => { const doc = data.documents.find(d => d.document_id === id); return doc && !docBusy(doc); })) refresh({ keepNotice: true });
-        if (data.documents.some(docBusy)) state.docTimer = setTimeout(loadDocuments, DOC_POLL_MS);
+        const busy = (data.counts.queued || 0) + (data.counts.processing || 0);
+        if (busy < wasBusy) refresh({ keepNotice: true });
+        if (busy) state.docTimer = setTimeout(loadDocuments, DOC_POLL_MS);
       } catch (error) {
+        if (request !== state.docRequest) return;
         $('docRows').replaceChildren(el('tr', {}, el('td', { colspan: '6', class: 'empty', text: `${error.message}${keyHint(error, 'введите ключ и нажмите «Обновить».')}` })));
       }
     }
@@ -1116,16 +1274,22 @@
         el('span', { class: `dstatus ${key}`, text: `${label}: ${counts[key]}` })));
       $('docClear').hidden = !documents.length;
       const total = Object.values(counts).reduce((sum, n) => sum + n, 0);
+      if ($('docStatus').options.length === 1) for (const [key, label] of Object.entries(labels)) $('docStatus').append(el('option', { value: key, text: label }));
+      const offset = (state.docPage || 0) * 50;
+      $('docPageInfo').textContent = `Показано ${documents.length ? offset + 1 : 0}–${offset + documents.length} из ${state.docs.matching_count} · всего ${total}`;
+      $('docPrev').disabled = !state.docPage;
+      $('docNext').disabled = !state.docs.next_cursor;
       $('docHistCount').textContent = String(total);
       const last = documents[0];
-      $('docLast').replaceChildren(...(last ? ['Последний: ', el('span', { text: `«${last.filename}»` }), dstatus(last)] : []));
+      $('docLast').replaceChildren(...(last ? [state.docPage ? 'На странице: ' : 'Последний в выборке: ', el('span', { text: `«${last.filename}»` }), dstatus(last)] : []));
       if (state.docOpen && !state.docHistory) setDocHistory(true, { render: false });
       if (!documents.length) closeClearMenu();
       if (!documents.length) {
-        $('docRows').replaceChildren(el('tr', {}, el('td', { colspan: '6', class: 'empty', text: 'Документов пока нет. Загрузите файлы или положите их в папку-приёмник.' })));
+        $('docRows').replaceChildren(el('tr', {}, el('td', { colspan: '6', class: 'empty', text: total ? 'Документы с такими условиями не найдены. Сбросьте поиск или перейдите на предыдущую страницу.' : 'Документов пока нет. Загрузите файлы или положите их в папку-приёмник.' })));
         return;
       }
       const rows = [];
+      const existingDetail = state.docOpen ? $(`docDetail-${state.docOpen}`) : null;
       for (const doc of documents) {
         const open = state.docOpen === doc.document_id;
         const wells = (doc.well_ids || []);
@@ -1135,12 +1299,13 @@
           el('td', { 'data-label': 'Тип', text: doc.type_title || (docBusy(doc) ? '…' : '—') }),
           el('td', { 'data-label': 'Скважина' }, wells.length ? shownWells.map((id, i) => [i ? ', ' : '', el('a', { href: `#well=${encodeURIComponent(id)}`, 'data-well': id, onClick: (event) => { event.stopPropagation(); event.preventDefault(); openWell(id, event.currentTarget); }, text: id })]).concat(wells.length > shownWells.length ? [el('span', { class: 'msg', text: `и ещё ${wells.length - shownWells.length}` })] : []) : '—'),
           el('td', { 'data-label': 'Дата документа', text: doc.doc_date ? fmtIso(doc.doc_date) : '—' }),
-          el('td', {}, dstatus(doc), doc.status_message ? el('span', { class: 'msg', text: doc.status_message }) : null),
+          el('td', {}, dstatus(doc), doc.has_accepted_data && doc.status !== 'loaded' ? el('span', { class: 'msg ok', text: 'Предыдущая принятая версия учитывается' }) : null,
+            doc.status_message ? el('span', { class: 'msg', text: doc.status_message }) : null),
           el('td', { 'data-label': 'Получен', text: fmtTime(doc.created_at) })));
-        if (open) rows.push(el('tr', { class: 'doc-detail' }, el('td', { colspan: '6' }, el('div', { class: 'inner', id: `docDetail-${doc.document_id}` }, el('div', { class: 'sub', text: 'Загружаем…' })))));
+        if (open) rows.push(el('tr', { class: 'doc-detail' }, el('td', { colspan: '6' }, existingDetail || el('div', { class: 'inner', id: `docDetail-${doc.document_id}` }, el('div', { class: 'sub', text: 'Загружаем…' })))));
       }
       $('docRows').replaceChildren(...rows);
-      if (state.docOpen) loadDocDetail(state.docOpen);
+      if (state.docOpen && (!existingDetail || existingDetail.dataset.status !== documents.find(d => d.document_id === state.docOpen)?.status)) loadDocDetail(state.docOpen);
     }
 
     // Upload history: folded by default so it does not take the page; opened from the toggle.
@@ -1163,8 +1328,9 @@
       if (!box) return;
       try {
         const doc = await api(`/api/v1/documents/${encodeURIComponent(id)}?include_text=true`);
-        if (!$(`docDetail-${id}`)) return;
+        if ($(`docDetail-${id}`) !== box) return;
         box.replaceChildren(...docDetail(doc));
+        box.dataset.status = doc.status;
       } catch (error) { box.replaceChildren(el('div', { class: 'sub', text: error.message })); }
     }
 
@@ -1180,6 +1346,7 @@
 
     function docDetail(doc) {
       const parts = [];
+      if (doc.has_accepted_data && doc.status !== 'loaded') parts.push(el('p', { class: 'hint warn', text: 'Последняя попытка не заменила принятую версию. Её данные остаются в рейтинге. Обычная очистка ошибок сохранит этот документ.' }));
       const extraction = doc.extraction || {};
       const labels = doc.field_labels || {};
       if (doc.loaded?.import_profile) {
@@ -1235,13 +1402,13 @@
     // ---------------------------------------------------------------- clearing the list
     function openClearMenu() {
       const counts = state.docs?.counts || {};
-      const unneeded = (counts.failed || 0) + (counts.not_recognized || 0);
+      const unneeded = state.docs.safe_cleanup_count ?? state.docs.documents.filter(d => ['failed', 'not_recognized'].includes(d.status) && !d.has_accepted_data).length;
       const all = Object.entries(counts).filter(([key]) => !['queued', 'processing'].includes(key)).reduce((sum, [, n]) => sum + n, 0);
-      const loaded = counts.loaded || 0;
+      const loaded = state.docs.accepted_count ?? state.docs.documents.filter(d => d.has_accepted_data).length;
       $('docClearMenu').replaceChildren(
         el('button', { type: 'button', role: 'menuitem', disabled: !unneeded, onClick: () => clearDocuments('failed,not_recognized', unneeded) },
-          el('span', { text: 'Нераспознанные и с ошибкой' }), el('b', { text: String(unneeded) })),
-        el('div', { class: 'menu-note', text: 'Из них ничего не загружено — рейтинг не изменится.' }),
+          el('span', { text: 'Без принятых данных (ошибки и нераспознанные)' }), el('b', { text: String(unneeded) })),
+        el('div', { class: 'menu-note', text: 'Документы с сохранённой принятой версией останутся.' }),
         el('button', { type: 'button', role: 'menuitem', disabled: !all, onClick: () => clearDocuments(null, all, loaded) },
           el('span', { text: 'Все документы' }), el('b', { text: String(all) })),
         el('div', { class: 'menu-note', text: loaded ? `Данные из загруженных документов (${loaded}) тоже удалятся, рейтинг их скважин пересчитается.` : 'Документы в очереди и в обработке не удаляются.' }));
@@ -1259,9 +1426,9 @@
       $('docClear').disabled = true;
       try {
         const result = await api(`/api/v1/documents?${statuses ? `status=${encodeURIComponent(statuses)}` : 'all=true'}`, { method: 'DELETE' });
-        notice(`Удалено документов: ${result.deleted}.${result.wells.length ? ` Рейтинг пересчитан для скважин: ${result.wells.join(', ')}.` : ''}`);
+        notice(`Удалено документов: ${result.deleted}.${result.skipped_with_data ? ` Сохранены документы с принятыми данными: ${result.skipped_with_data}.` : ''}${result.wells.length ? ' Данные изменены, пересчёт рейтинга поставлен в очередь.' : ''}`);
         state.docOpen = null;
-        await loadDocuments();
+        await loadDocuments({ reset: true });
         if (result.wells.length) await refresh({ keepNotice: true });
       } catch (error) { notice(error.message, 'error'); }
       finally { $('docClear').disabled = false; }
@@ -1279,9 +1446,9 @@
         const errors = result.documents.filter(d => d.error).map(d => `${d.filename}: ${d.error}`);
         const text = [result.accepted ? `Новых файлов: ${result.accepted}` : null, result.requeued ? `загружены повторно и обрабатываются заново: ${result.requeued}` : null,
           result.duplicates ? `уже были загружены и обработаны: ${result.duplicates}` : null, result.rejected ? `отклонено: ${result.rejected}` : null].filter(Boolean).join(', ') || 'Файлы не приняты';
-        notice(`${text[0].toUpperCase()}${text.slice(1)}.${errors.length ? ' ' + errors.join('; ') : ' Обработка идёт в фоне — статус обновится в таблице.'}`, errors.length ? 'warning' : '');
+        notice(`${text[0].toUpperCase()}${text.slice(1)}.${errors.length ? ' ' + errors.join('; ') : ' Результаты обработки — в истории загрузок.'}`, errors.length ? 'warning' : '');
         state.docOpen = null;
-        await loadDocuments();
+        await loadDocuments({ reset: true });
       } catch (error) { notice(error.message, 'error'); }
       finally { $('docPick').disabled = false; $('docFiles').value = ''; }
     }
@@ -1309,7 +1476,7 @@
         await api(`/api/v1/documents/${encodeURIComponent(doc.document_id)}`, { method: 'DELETE' });
         notice(`Документ «${doc.filename}» удалён.`);
         state.docOpen = null;
-        await loadDocuments();
+        await loadDocuments({ reset: true });
         await refresh({ keepNotice: true });
       } catch (error) { notice(error.message, 'error'); button.disabled = false; }
     }
@@ -1361,7 +1528,7 @@
           el('td', { class: 'pts', text: rule.points ? `+${rule.points}` : none ? '—' : '0' })));
       }
       box.replaceChildren(el('details', { class: 'rules-box' },
-        el('summary', { text: `Как посчитан прогноз: сработало правил — ${fired.length} из ${rules.length}, баллов — ${total} из 14` }),
+        el('summary', { text: `Как посчитан прогноз: сработало правил — ${fired.length} из ${rules.length}, баллов — ${total}; порог критичности 14` }),
         el('table', { class: 'rules' },
           el('thead', {}, el('tr', {}, el('th', { text: 'Правило и условие' }), el('th', { text: 'Значение' }), el('th', { text: 'Баллы' }))),
           el('tbody', {}, rows)),
@@ -1408,6 +1575,7 @@
         renderExtraMeasurements(detail);
         renderRegistry(detail);
       } catch (error) {
+        if (state.selected !== wellId || request !== detailRequest) return;
         const box = $('aiBox'); if (box) box.replaceChildren(el('h3', { text: 'Предложение ИИ-агента' }), el('div', { class: 'sub', text: error.message }));
       }
     }
@@ -1491,7 +1659,13 @@
       box.replaceChildren(el('h3', { text: 'Документы скважины' }), docs.length
         ? el('ul', { class: 'welldocs' }, docs.map(doc => el('li', {},
             dstatus(doc), el('span', { text: doc.type_title || doc.filename }), doc.doc_date ? el('span', { class: 'hint', text: fmtIso(doc.doc_date) }) : null,
-            el('a', { href: '#sec-docs', onClick: () => { state.docOpen = doc.document_id; closeWell(); setDocHistory(true); }, text: doc.filename }),
+            el('a', { href: '#sec-docs', onClick: async event => {
+              event.preventDefault(); closeWell(); if (state.drawerOpen) return;
+              state.docOpen = doc.document_id; state.docTarget = doc.document_id;
+              $('docSearch').value = doc.filename; $('docStatus').value = '';
+              setDocHistory(true, { render: false }); await loadDocuments({ reset: true });
+              $('sec-docs').scrollIntoView({ block: 'start' });
+            }, text: doc.filename }),
             doc.status !== 'loaded' && doc.status_message ? el('span', { class: 'msg', text: doc.status_message }) : null)))
         : el('div', { class: 'hint', text: 'Документов по скважине нет. Загрузите акты, протоколы или паспорт в разделе «Документы».' }));
     }
@@ -1499,25 +1673,35 @@
     // ---------------------------------------------------------------- navigation highlight
     function watchSections() {
       const links = [...document.querySelectorAll('.sidenav a')];
-      const observer = new IntersectionObserver((entries) => {
-        for (const entry of entries) {
-          if (!entry.isIntersecting) continue;
-          links.forEach(link => link.setAttribute('aria-current', String(link.getAttribute('href') === '#' + entry.target.id)));
-        }
-      }, { rootMargin: '-80px 0px -60% 0px' });
-      ['sec-rating', 'sec-ppr', 'sec-docs', 'co2Feature'].forEach(id => { const node = $(id); if (node) observer.observe(node); });
+      const sections = ['sec-rating', 'sec-ppr', 'sec-docs', 'co2Feature', 'sec-sources'].map($);
+      const update = () => {
+        const current = sections.filter(node => !node.hidden && node.getBoundingClientRect().top <= parseFloat(getComputedStyle(node).scrollMarginTop) + 1).at(-1) || sections[0];
+        links.forEach(link => link.setAttribute('aria-current', String(link.getAttribute('href') === '#' + current.id)));
+      };
+      window.addEventListener('scroll', update, { passive: true });
+      window.addEventListener('resize', update);
+      update();
     }
 
     // ---------------------------------------------------------------- start
     try { $('apiKey').value = sessionStorage.getItem('maiApiKey') || ''; } catch { /* storage may be unavailable */ }
-    $('apiKey').addEventListener('change', () => { try { sessionStorage.setItem('maiApiKey', $('apiKey').value.trim()); } catch { /* ignore */ } refresh(); loadDocuments(); });
+    $('apiKey').addEventListener('change', () => { try { sessionStorage.setItem('maiApiKey', $('apiKey').value.trim()); } catch { /* ignore */ } refresh(); loadDocuments(); loadSources(); });
     $('search').addEventListener('input', () => { state.tableLimit = TABLE_PAGE; if (state.rating) renderTable(); });
     $('fieldFilter').addEventListener('change', () => { state.tableLimit = TABLE_PAGE; if (state.rating) renderTable(); });
     try { state.showUnscored = localStorage.getItem('maiShowUnscored') === '1'; } catch { /* storage may be unavailable */ }
     $('showUnscored').checked = state.showUnscored;
     $('showUnscored').addEventListener('change', () => setShowUnscored($('showUnscored').checked));
-    $('refresh').addEventListener('click', () => { refresh(); loadDocuments(); });
+    try { $('tableView').value = localStorage.getItem('maiTableView') === 'full' ? 'full' : 'compact'; } catch { /* ignore */ }
+    const tableView = () => { $('ratingTable').classList.toggle('compact', $('tableView').value !== 'full'); };
+    tableView();
+    $('tableView').addEventListener('change', () => { tableView(); try { localStorage.setItem('maiTableView', $('tableView').value); } catch { /* ignore */ } });
+    $('refresh').addEventListener('click', () => { refresh(); loadDocuments(); loadSources(); });
     $('run').addEventListener('click', runNow);
+    $('checkJob').addEventListener('click', runNow);
+    try { state.monitorJob = sessionStorage.getItem('maiMonitorJob'); $('checkJob').hidden = !state.monitorJob; } catch { /* ignore */ }
+    window.addEventListener('beforeunload', event => {
+      if (state.cardDirty || state.operatorSaving) { event.preventDefault(); event.returnValue = ''; }
+    });
     $('cardClose').addEventListener('click', closeWell);
     $('cardPrev').addEventListener('click', () => stepWell(-1));
     $('cardNext').addEventListener('click', () => stepWell(1));
@@ -1530,7 +1714,7 @@
     // A click outside the card closes it, except on another well (that switches the card).
     document.addEventListener('pointerdown', (event) => {
       if (!state.drawerOpen || $('wellDrawer').contains(event.target) || (event.target instanceof Element && event.target.closest('[data-well], .notice'))) return;
-      closeWell();
+      if (!closeWell()) event.preventDefault();
     });
     window.addEventListener('hashchange', () => { const id = hashWell(); if (id && id !== state.selected) openFromLink(id); else if (!id && state.drawerOpen && location.hash === '') closeWell(); });
     // Sticky offsets follow the real app bar height (it wraps on narrow screens).
@@ -1552,6 +1736,15 @@
     $('docPick').addEventListener('click', () => $('docFiles').click());
     $('docClear').addEventListener('click', () => ($('docClearMenu').hidden ? openClearMenu() : closeClearMenu()));
     $('docHistToggle').addEventListener('click', () => setDocHistory(!state.docHistory));
+    let docSearchTimer;
+    $('docSearch').addEventListener('input', () => { state.docTarget = null; clearTimeout(docSearchTimer); docSearchTimer = setTimeout(() => loadDocuments({ reset: true }), 300); });
+    $('docStatus').addEventListener('change', () => loadDocuments({ reset: true }));
+    $('docReset').addEventListener('click', () => { $('docSearch').value = ''; $('docStatus').value = ''; state.docTarget = null; loadDocuments({ reset: true }); });
+    $('docNext').addEventListener('click', () => {
+      if (!state.docs?.next_cursor) return;
+      state.docCursors[++state.docPage] = state.docs.next_cursor; loadDocuments();
+    });
+    $('docPrev').addEventListener('click', () => { if (state.docPage) { state.docPage--; loadDocuments(); } });
     try { if (localStorage.getItem('maiDocHistory') === '1') setDocHistory(true, { render: false }); } catch { /* storage may be unavailable */ }
     document.addEventListener('pointerdown', (event) => { if (!$('docClearMenu').hidden && !event.target.closest('.clearwrap')) closeClearMenu(); });
     $('docClearMenu').addEventListener('keydown', (event) => { if (event.key === 'Escape') { event.stopPropagation(); closeClearMenu(); $('docClear').focus(); } });
@@ -1567,6 +1760,8 @@
     watchSections();
     refresh();
     loadDocuments();
+    loadSources();
+    setInterval(() => { if (!document.hidden) loadSources(); }, AUTO_REFRESH_SECONDS * 1000);
     initCo2();
 
   </script>

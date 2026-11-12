@@ -94,7 +94,7 @@ def test_pull_sources_of_a_well(client, server, monkeypatch):
     assert statuses["DARS"]["status"] == "ok" and statuses["DARS"]["record_count"] == 3
     assert statuses["DARS"]["origin"] == "api_refresh"
     assert statuses["KHIMIK"]["status"] == "unavailable" and "404" in statuses["KHIMIK"]["message"]
-    assert statuses["ERA"]["status"] == "error" and statuses["ERA"]["message"] == "Configured source URL is invalid."
+    assert statuses["ERA"]["status"] == "error" and "Некорректный URL" in statuses["ERA"]["message"]
     assert statuses["CREW_SCHEDULE"]["status"] == "ok" and statuses["CREW_SCHEDULE"]["record_count"] == 1
     dars = next(item for item in seen if item["path"] == "/dars")
     assert dars["query"] == "well_id=PULL-1" and dars["authorization"] == "Bearer secret"
@@ -108,9 +108,9 @@ def test_pull_sources_of_a_well(client, server, monkeypatch):
     monkeypatch.setenv("MAI_SOURCE_CREW_SCHEDULE_URL", f"{base}/bad")
     statuses = _by_source(refresh_sources_for_well("PULL-1"))
     assert statuses["DARS"]["status"] == "not_configured" and "MAI_SOURCE_DARS_URL" in statuses["DARS"]["message"]
-    assert statuses["KHIMIK"]["status"] == "unavailable" and "empty" in statuses["KHIMIK"]["message"]
+    assert statuses["KHIMIK"]["status"] == "unavailable" and "пустой ответ" in statuses["KHIMIK"]["message"]
     assert statuses["CREW_SCHEDULE"]["status"] == "error"
-    assert statuses["CREW_SCHEDULE"]["message"] == "Source response did not match its profile (JSONDecodeError)."
+    assert "формат JSON" in statuses["CREW_SCHEDULE"]["message"]
 
 
 def test_source_adapters(client, monkeypatch):

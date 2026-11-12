@@ -236,6 +236,7 @@ def copy_project(root: Path) -> None:
             shutil.copy2(source, target)
     shutil.copy2(SRC / "standalone" / "mai.cmd", root / "mai.cmd")
     shutil.copy2(SRC / "standalone" / "README.md", root / "README-DEMO.md")
+    shutil.copy2(SRC / "scripts" / "build_sample_data.py", root / "examples" / "generate_sample_data.py")
     for folder in ("data/documents", "inbox", "logs", "run"):
         (root / folder).mkdir(parents=True, exist_ok=True)
     for path in [root / "mai.cmd", root / "README-DEMO.md", root / "standalone" / "env.template"]:
@@ -284,7 +285,8 @@ def validate_archive(archive: Path, info: dict) -> None:
         raise SystemExit("Invalid archive checksum or unresolved DLL dependencies")
     with zipfile.ZipFile(archive) as package:
         required = ("app/main.py", "app/core/co2_corrosion.py", "app/core/source_catalog.py",
-                    "app/core/recompute.py", "app/db/recompute.py", "dashboard/co2.js",
+                    "app/core/recompute.py", "app/db/recompute.py", "dashboard/co2.js", "dashboard/sources.js",
+                    "app/api/routes/sources.py", "standalone/cli/sources.py", "examples/generate_sample_data.py",
                     "runtime/python.exe", "BUILD_INFO.json")
         if package.testzip() or any(f"{APP_NAME}/{name}" not in package.namelist() for name in required):
             raise SystemExit("Archive is incomplete or corrupted")

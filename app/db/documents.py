@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import base64
+import json
 import uuid
 
-from sqlalchemy import bindparam, case, delete, func, literal_column, select, text, update
+from sqlalchemy import UnicodeText, bindparam, case, cast, delete, func, literal_column, or_, select, text, update
 
 from app.config import settings
 from app.db.base import _iso, _merge, _retry_deadlocks, engine, qualified
@@ -14,13 +16,22 @@ from app.db.schema import (BINARY_COLLATION, documents, history_batches, ingesti
 
 
 # --------------------------------------------------------------------------- documents
-DOCUMENT_LIST_COLUMNS = [column for column in documents.c if column.name != "text"]
+def _accepted_data():
+    loaded = case((func.isjson(documents.c.loaded) == 1, documents.c.loaded), else_=literal_column("N'{}'"))
+    return or_(func.json_value(loaded, "$.wells[0]").is_not(None),
+               select(document_contributions.c.document_id).where(
+                   document_contributions.c.document_id == documents.c.document_id).exists())
+
+
+ACCEPTED_COLUMN = case((_accepted_data(), True), else_=False).label("has_accepted_data")
+DOCUMENT_LIST_COLUMNS = [column for column in documents.c if column.name != "text"] + [ACCEPTED_COLUMN]
 # The list leaves out the extracted records too: a registry of many wells makes them large.
 DOCUMENT_SUMMARY_COLUMNS = [column for column in DOCUMENT_LIST_COLUMNS if column.name != "extraction"]
 
 
 def _document_row(row, with_text: bool = False) -> dict:
     data = dict(row)
+    data.setdefault("has_accepted_data", bool((data.get("loaded") or {}).get("wells")))
     for key in ("created_at", "started_at", "processed_at", "doc_date"):
         data[key] = _iso(data.get(key))
     if not with_text:
@@ -41,22 +52,61 @@ def create_document(values: dict) -> tuple[dict, bool]:
 
 
 def get_document(document_id: str, with_text: bool = False) -> dict | None:
-    columns = list(documents.c) if with_text else DOCUMENT_LIST_COLUMNS
+    columns = [*documents.c, ACCEPTED_COLUMN] if with_text else DOCUMENT_LIST_COLUMNS
     with engine().connect() as conn:
         row = conn.execute(select(*columns).where(documents.c.document_id == document_id)).mappings().first()
     return _document_row(row, with_text) if row else None
 
 
-def list_documents(*, well_id: str | None = None, status: str | None = None, limit: int = 200) -> list[dict]:
-    query = select(*DOCUMENT_SUMMARY_COLUMNS).order_by(documents.c.created_at.desc()).limit(limit)
+def _document_filters(well_id=None, status=None, q=None):
+    conditions = []
     if status:
-        query = query.where(documents.c.status == status)
+        conditions.append(documents.c.status == status)
     if well_id:
-        query = query.where(text(
-            f"EXISTS (SELECT 1 FROM OPENJSON(documents.well_ids) "
+        conditions.append(text(
+            f"EXISTS (SELECT 1 FROM OPENJSON(CASE WHEN ISJSON(documents.well_ids)=1 "
+            f"THEN documents.well_ids ELSE N'[]' END) "
             f"WHERE [value] COLLATE {BINARY_COLLATION} = :mai_well_id)").bindparams(mai_well_id=well_id))
+    if q:
+        conditions.append(or_(documents.c.document_id == q,
+                              documents.c.filename.collate("Latin1_General_100_CI_AS").contains(q, autoescape=True),
+                              cast(documents.c.well_ids, UnicodeText).collate("Latin1_General_100_CI_AS")
+                              .contains(q, autoescape=True)))
+    return conditions
+
+
+def list_documents(*, well_id: str | None = None, status: str | None = None, limit: int = 200) -> list[dict]:
+    query = select(*DOCUMENT_SUMMARY_COLUMNS).where(*_document_filters(well_id, status)).order_by(
+        documents.c.created_at.desc(), documents.c.document_id.desc()).limit(limit)
     with engine().connect() as conn:
         return [_document_row(row) for row in conn.execute(query).mappings().all()]
+
+
+def document_page(*, well_id=None, status=None, q=None, limit=200, cursor=None) -> dict:
+    conditions = _document_filters(well_id, status, q)
+    query = select(*DOCUMENT_SUMMARY_COLUMNS).where(*conditions)
+    if cursor:
+        try:
+            when, identity = json.loads(base64.b64decode(cursor, altchars=b"-_", validate=True))
+            when = datetime.fromisoformat(when)
+            if not isinstance(identity, str) or len(identity) > 36:
+                raise ValueError
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            raise ValueError("Неверная страница истории. Обновите список.") from exc
+        query = query.where(or_(documents.c.created_at < when,
+                                (documents.c.created_at == when) & (documents.c.document_id < identity)))
+    with engine().connect() as conn:
+        rows = conn.execute(query.order_by(documents.c.created_at.desc(), documents.c.document_id.desc())
+                            .limit(limit + 1)).mappings().all()
+        total = conn.scalar(select(func.count()).select_from(documents).where(*conditions))
+        accepted = conn.scalar(select(func.count()).select_from(documents).where(
+            documents.c.status.not_in(("queued", "processing")), _accepted_data()))
+        cleanup = conn.scalar(select(func.count()).select_from(documents).where(
+            documents.c.status.in_(("failed", "not_recognized")), ~_accepted_data()))
+    next_cursor = base64.urlsafe_b64encode(json.dumps(
+        [_iso(rows[limit-1]["created_at"]), rows[limit-1]["document_id"]]).encode()).decode() if len(rows) > limit else None
+    return {"documents": [_document_row(row) for row in rows[:limit]], "matching_count": total,
+            "next_cursor": next_cursor, "accepted_count": accepted, "safe_cleanup_count": cleanup}
 
 
 def document_status_counts() -> dict[str, int]:
@@ -151,14 +201,16 @@ def contribution_rows(well_id: str) -> list[dict]:
 
 
 @_retry_deadlocks
-def delete_document_row(document_id: str) -> dict | None:
+def delete_document_row(document_id: str, *, only_without_data: bool = False) -> dict | None:
     with engine().begin() as conn:
-        row = conn.execute(select(documents).where(documents.c.document_id == document_id)
+        row = conn.execute(select(documents, ACCEPTED_COLUMN).where(documents.c.document_id == document_id)
                            .with_hint(documents, "WITH (UPDLOCK, ROWLOCK)", "mssql")).mappings().first()
         if row is None:
             return None
         if row["status"] == "processing":
             raise ValueError("Документ уже обрабатывается.")
+        if only_without_data and row["has_accepted_data"]:
+            return None
         enqueue(conn, (row["loaded"] or {}).get("wells") or [])
         conn.execute(delete(documents).where(documents.c.document_id == document_id))
     return _document_row(row)

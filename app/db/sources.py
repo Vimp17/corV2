@@ -255,6 +255,15 @@ def list_source_statuses(well_id: str | None = None) -> list[dict]:
         return [dict(row) for row in conn.execute(query).mappings().all()]
 
 
+def latest_source_statuses() -> dict[str, dict]:
+    """Last attempt per source, including its origin; bounded by the number of sources."""
+    ranked = select(*source_health.c, func.row_number().over(
+        partition_by=source_health.c.source_id,
+        order_by=(source_health.c.retrieved_at.desc(), source_health.c.well_id)).label("position")).subquery()
+    with engine().connect() as conn:
+        return {r["source_id"]: dict(r) for r in conn.execute(select(ranked).where(ranked.c.position == 1)).mappings()}
+
+
 def effective_source_statuses(well_id: str | None = None) -> list[dict]:
     """One status per (source, well): the latest from an API (push, pull, adapter, system) other than
     not_configured, else the latest manual upload, else the latest row."""

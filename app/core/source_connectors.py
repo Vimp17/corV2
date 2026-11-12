@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 SOURCE_ENTRY_POINT_GROUP = "mai_corrosion.sources"
 MAX_CREWS = 5000
 _RETRYABLE_STATUS = {429, 502, 503, 504}
-_TOO_LARGE = "Source response exceeds the configured size limit"
+_TOO_LARGE = "Ответ источника превышает допустимый размер файла. Уменьшите период выгрузки."
 
 
 class SourceAdapter(Protocol):
@@ -49,10 +49,10 @@ def _status_message(parsed: dict) -> str:
 
 
 def ingest_excel_bytes(content: bytes, filename: str, profile_id: str, well_id: str | None = None,
-                       origin: str = "manual_upload", auto_header: bool = False) -> dict:
+                       origin: str = "manual_upload", auto_header: bool = False, require_well_match: bool = False) -> dict:
     """Import a workbook by its source profile; one source status per well that received data. The same
     file imported again replaces what it loaded before (its reading may have changed since)."""
-    parsed = parse_excel(content, filename, profile_id, well_id, auto_header=auto_header)
+    parsed = parse_excel(content, filename, profile_id, well_id, auto_header=auto_header, require_well_match=require_well_match)
     source_id = parsed["source_id"]
     imported: list[dict] = []
     statuses: list[dict] = []
@@ -94,17 +94,17 @@ def crew_rows(data: Any, source_id: str) -> tuple[list[dict], list[dict]]:
         (data[key] for key in ("crew_availability", "records") if isinstance(data, dict) and isinstance(data.get(key), list)),
         None)
     if rows is None:
-        raise ExcelImportError("JSON must contain a 'crew_availability' array.")
+        raise ExcelImportError("В JSON требуется массив crew_availability (или records) расписания бригад.")
     if len(rows) > MAX_CREWS:
-        raise ExcelImportError(f"Maximum {MAX_CREWS} crew records per request")
+        raise ExcelImportError(f"В расписании допускается не более {MAX_CREWS} записей.")
     crews, errors = [], []
     for index, row in enumerate(rows, start=1):
         try:
             if not isinstance(row, dict):
-                raise ValueError("Each item must be a JSON object")
+                raise ValueError("Каждая запись расписания должна быть объектом JSON.")
             crews.append(CrewAvailability.model_validate({**row, "source_id": source_id}).model_dump(mode="json"))
         except ValueError as exc:  # a pydantic ValidationError is a ValueError
-            errors.append({"row": index, "message": str(exc)[:500]})
+            errors.append({"row": index, "message": source_error(exc) if isinstance(exc, ValidationError) else str(exc)})
     return crews, errors
 
 
@@ -122,7 +122,7 @@ def _strict_crews(data: Any, source_id: str) -> list[dict]:
     """A pulled or fetched schedule is taken whole or not at all."""
     crews, errors = crew_rows(data, source_id)
     if errors:
-        raise ExcelImportError(f"Crew schedule row {errors[0]['row']} is invalid: {errors[0]['message']}"[:2000])
+        raise ExcelImportError(f"Расписание, строка {errors[0]['row']}: {errors[0]['message']}"[:2000])
     return crews
 
 
@@ -148,29 +148,24 @@ def _load_adapters() -> dict[str, SourceAdapter]:
     return adapters
 
 
-def _store_json(answer: Any, profile_id: str, profile: dict, source_id: str, well_id: str) -> list[dict]:
-    """An adapter's answer: workbook bytes, or canonical JSON — telemetry {"records": […]}, history
-    {"work_history": […], "failure_history": […]} or a crew schedule. Returns the source statuses."""
-    if isinstance(answer, bytes):
-        return ingest_excel_bytes(answer, f"{profile_id}.xlsx", profile_id, well_id, origin="adapter")["source_statuses"]
+def _prepare_json(answer: Any, profile: dict, source_id: str) -> dict:
+    """Validate an adapter payload once; both importing and dry-run checks use it."""
     kind = profile.get("kind")
     if kind == "json_schedule":
-        return save_crews(_strict_crews(answer, source_id), source_id, [well_id], origin="adapter")
+        return {"crews": _strict_crews(answer, source_id)}
     if not isinstance(answer, dict):
-        raise ExcelImportError("Source adapter must return workbook bytes or a canonical JSON object")
-    batch = _batch_id(source_id, well_id, hashlib.sha256(json.dumps(answer, sort_keys=True, default=str).encode()).hexdigest())
+        raise ExcelImportError("Адаптер должен вернуть XLSX или объект JSON согласованного формата.")
     if kind == "telemetry":
         records = answer.get("records")
         if not isinstance(records, list) or not records or not all(isinstance(record, dict) for record in records):
-            raise ExcelImportError("Telemetry adapter JSON must contain a non-empty records list of objects")
+            raise ExcelImportError("В JSON адаптера требуется непустой список records.")
         allowed = set(TelemetryPoint.model_fields)
         points = [TelemetryPoint.model_validate({**{key: value for key, value in record.items() if key in allowed},
                                                  "source_id": source_id}) for record in records]
         for point in points:
             point.timestamp = in_source_zone(point.timestamp)
-        db.save_batch(well_id, batch, points)
-        count = len(points)
-    elif kind == "history":
+        return {"records": points}
+    if kind == "history":
         work = [WorkHistoryItem.model_validate(item) for item in answer.get("work_history", [])]
         failures = [FailureHistoryItem.model_validate(item) for item in answer.get("failure_history", [])]
         for item in work:
@@ -178,12 +173,23 @@ def _store_json(answer: Any, profile_id: str, profile: dict, source_id: str, wel
         for item in failures:
             item.failure_date = in_source_zone(item.failure_date)
         if not work and not failures:
-            raise ExcelImportError("History adapter returned no work_history or failure_history records")
-        db.save_history(well_id, batch, work, failures, source_id=source_id)
-        count = len(work) + len(failures)
+            raise ExcelImportError("В JSON адаптера отсутствуют события ремонта/отказа.")
+        return {"work_history": work, "failure_history": failures}
+    raise ExcelImportError("Неизвестный тип данных адаптера.")
+
+
+def _store_json(answer: Any, profile_id: str, profile: dict, source_id: str, well_id: str) -> list[dict]:
+    if isinstance(answer, bytes):
+        return ingest_excel_bytes(answer, f"{profile_id}.xlsx", profile_id, well_id, origin="adapter", require_well_match=True)["source_statuses"]
+    prepared = _prepare_json(answer, profile, source_id)
+    if "crews" in prepared:
+        return save_crews(prepared["crews"], source_id, [well_id], origin="adapter")
+    batch = _batch_id(source_id, well_id, hashlib.sha256(json.dumps(answer, sort_keys=True, default=str).encode()).hexdigest())
+    if "records" in prepared:
+        db.save_batch(well_id, batch, prepared["records"])
     else:
-        raise ExcelImportError(f"No JSON adapter contract is defined for source kind '{kind}'")
-    return [db.record_source_status(source_id, well_id, "ok", None, count, origin="adapter")]
+        db.save_history(well_id, batch, prepared["work_history"], prepared["failure_history"], source_id=source_id)
+    return [db.record_source_status(source_id, well_id, "ok", None, sum(map(len, prepared.values())), origin="adapter")]
 
 
 def _from_adapter(well_id: str, profile_id: str, profile: dict, source_id: str) -> list[dict]:
@@ -201,10 +207,14 @@ def _from_adapter(well_id: str, profile_id: str, profile: dict, source_id: str) 
 
 
 # --------------------------------------------------------------------------- pull by URL
-def source_env(source_id: str, suffix: str) -> str:
+def source_setting(source_id: str, suffix: str) -> str:
     """MAI_SOURCE_<ID>_<SUFFIX>: the id upper-cased, other characters as single underscores."""
     safe_id = "_".join(part for part in "".join(c if c.isalnum() else "_" for c in source_id.upper()).split("_") if part)
-    return os.getenv(f"MAI_SOURCE_{safe_id}_{suffix}", "").strip()
+    return f"MAI_SOURCE_{safe_id}_{suffix}"
+
+
+def source_env(source_id: str, suffix: str) -> str:
+    return os.getenv(source_setting(source_id, suffix), "").strip()
 
 
 def _get_with_retries(endpoint: str, **kwargs) -> requests.Response:
@@ -232,6 +242,8 @@ def _download(endpoint: str, well_id: str, headers: dict) -> bytes | None:
                            allow_redirects=False, stream=True) as response:
         if response.status_code == 404:
             return None
+        if 300 <= response.status_code < 400:
+            raise ExcelImportError(f"HTTP {response.status_code}: адрес перенаправляет на другую страницу. Укажите прямой URL выгрузки; редиректы не выполняются.")
         response.raise_for_status()
         if int(response.headers.get("Content-Length") or 0) > settings.max_excel_bytes:
             raise ExcelImportError(_TOO_LARGE)
@@ -241,7 +253,10 @@ def _download(endpoint: str, well_id: str, headers: dict) -> bytes | None:
             if total > settings.max_excel_bytes:
                 raise ExcelImportError(_TOO_LARGE)
             chunks.append(chunk)
-        return b"".join(chunks)
+        content = b"".join(chunks)
+        if content.lstrip().lower().startswith((b"<!doctype html", b"<html")) or "text/html" in response.headers.get("Content-Type", ""):
+            raise ExcelImportError("Источник вернул HTML-страницу, возможно вход в систему. Ожидается XLSX или согласованный JSON расписания; проверьте прямой URL и авторизацию.")
+        return content
 
 
 def _from_url(well_id: str, profile_id: str, profile: dict, source_id: str) -> list[dict]:
@@ -250,31 +265,120 @@ def _from_url(well_id: str, profile_id: str, profile: dict, source_id: str) -> l
 
     endpoint = source_env(source_id, "URL")
     if not endpoint:
-        return status("not_configured", f"Set MAI_SOURCE_{source_id}_URL to connect this Excel source.", 0)
-    address = urlparse(endpoint)
-    if address.scheme not in {"http", "https"} or not address.netloc or address.username or address.password:
-        return status("error", "Configured source URL is invalid.")
+        return status("not_configured", f"Автоматический источник не настроен. Доступна загрузка файлов; подключение — mai.cmd sources configure ({source_setting(source_id, 'URL')}).", 0)
+    if problem := source_url_problem(endpoint):
+        return status("error", problem)
     schedule = profile.get("kind") == "json_schedule"
-    headers = {"Accept": "application/json" if schedule
+    try:
+        content = _download(endpoint, well_id, _source_headers(profile, source_id))
+        if content is None:
+            return status("unavailable", "HTTP 404: выгрузка для этой скважины не найдена. Проверьте ID и URL источника.", 0)
+        if not content:
+            return status("unavailable", "Источник вернул пустой ответ. Проверьте ID скважины и период выгрузки.", 0)
+        if schedule:
+            return save_crews(_strict_crews(json.loads(content), source_id), source_id, [well_id], origin="api_refresh")
+        _expect_workbook(content)
+        return ingest_excel_bytes(content, f"{source_id.lower()}.xlsx", profile_id, well_id,
+                                  origin="api_refresh", require_well_match=True)["source_statuses"]
+    except ExcelImportError as exc:
+        return status("error", str(exc)[:2000])
+    except (ValueError, ValidationError, requests.RequestException) as exc:
+        return status("error", source_error(exc))
+
+
+def source_url_problem(endpoint: str) -> str | None:
+    try:
+        address = urlparse(endpoint)
+        valid = (address.scheme in {"http", "https"} and address.hostname and not address.username
+                 and not address.password and (address.port is None or 1 <= address.port <= 65535)
+                 and not any(c.isspace() or c in "{}" for c in endpoint) and not address.fragment)
+    except ValueError:
+        valid = False
+    if not valid:
+        return "Некорректный URL: нужен прямой HTTP(S)-адрес без логина/пароля, пробелов и шаблонов. ID добавляется как параметр well_id."
+    return None
+
+
+def source_error(exc: Exception) -> str:
+    if isinstance(exc, ValidationError):
+        fields = ", ".join(".".join(map(str, error["loc"])) or "период доступности"
+                           for error in exc.errors(include_input=False, include_url=False)[:5])
+        return f"Проверьте поля JSON: {fields}. Неизвестные поля не принимаются; даты — в формате ISO 8601."
+    if isinstance(exc, requests.exceptions.SSLError):
+        return "Не удалось проверить TLS-сертификат источника. Проверьте сертификат и доверенный корпоративный центр сертификации."
+    if isinstance(exc, requests.Timeout):
+        return "Источник не ответил вовремя. Проверьте доступность сервера и повторите проверку."
+    if isinstance(exc, requests.HTTPError):
+        code = exc.response.status_code if exc.response is not None else "?"
+        hint = "Проверьте токен и права доступа." if code in {401, 403} else "Проверьте URL и доступность источника."
+        return f"HTTP {code}. {hint}"
+    if isinstance(exc, requests.ConnectionError):
+        return "Нет соединения с источником. Проверьте адрес, сеть и настройки прокси."
+    return "Ответ не соответствует профилю источника. Проверьте формат JSON, обязательные поля и имена колонок."
+
+
+def _expect_workbook(content: bytes) -> None:
+    if content.lstrip().startswith((b"{", b"[")):
+        raise ExcelImportError("Источник вернул JSON, а этот профиль ожидает XLSX. Нужна XLSX-выгрузка либо адаптер согласованного JSON-формата.")
+
+
+def _source_headers(profile: dict, source_id: str) -> dict:
+    headers = {"Accept": "application/json" if profile.get("kind") == "json_schedule"
                else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/octet-stream"}
     if token := source_env(source_id, "TOKEN"):
         headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def check_source(profile_id: str, well_id: str) -> dict:
+    """Fetch and validate one well without storing payloads, statuses or ratings."""
+    profiles = load_profiles()
+    if profile_id not in profiles:
+        raise LookupError("Источник не найден.")
+    profile = profiles[profile_id]
+    source_id = str(profile.get("source_id", profile_id)).upper()
+    report = {"profile_id": profile_id, "source_id": source_id, "record_count": 0, "source_columns": {}}
     try:
-        content = _download(endpoint, well_id, headers)
-        if content is None:
-            return status("unavailable", "Source API has no workbook for this well (HTTP 404).", 0)
-        if not content:
-            return status("unavailable", "Source API returned an empty file/JSON response.", 0)
-        if schedule:
-            return save_crews(_strict_crews(json.loads(content), source_id), source_id, [well_id], origin="api_refresh")
-        return ingest_excel_bytes(content, f"{source_id.lower()}.xlsx", profile_id, well_id,
-                                  origin="api_refresh")["source_statuses"]
-    except ExcelImportError as exc:
-        return status("error", str(exc)[:2000])
-    except (ValueError, ValidationError) as exc:
-        return status("error", f"Source response did not match its profile ({type(exc).__name__}).")
-    except requests.RequestException as exc:
-        return status("error", f"Source request failed ({type(exc).__name__}).")
+        if profile.get("adapter"):
+            adapter = _load_adapters().get(profile["adapter"])
+            if adapter is None:
+                raise ExcelImportError("Адаптер источника не установлен. Установите согласованный адаптер в сборку.")
+            answer = adapter.fetch_for_well(well_id, profile)
+        else:
+            endpoint = source_env(source_id, "URL")
+            if not endpoint:
+                raise ExcelImportError("Автоматический источник не настроен: используется загрузка файлов. Адрес задаётся через mai.cmd sources configure.")
+            if problem := source_url_problem(endpoint):
+                raise ExcelImportError(problem)
+            answer = _download(endpoint, well_id, _source_headers(profile, source_id))
+            if answer is None:
+                raise ExcelImportError("HTTP 404: выгрузка для этой скважины не найдена. Проверьте ID и адрес источника.")
+            if not answer:
+                raise ExcelImportError("Источник вернул пустой ответ: проверьте ID скважины и период выгрузки.")
+            if profile.get("kind") == "json_schedule":
+                answer = json.loads(answer)
+        if isinstance(answer, bytes):
+            _expect_workbook(answer)
+            parsed = parse_excel(answer, f"{profile_id}.xlsx", profile_id, well_id, require_well_match=True)
+            report.update(record_count=sum(len(g.get(k) or []) for g in parsed["groups"].values()
+                                           for k in ("records", "work_history", "failure_history")),
+                          source_columns=parsed["source_columns"], sheet_name=parsed["sheet_name"],
+                          rows_rejected=parsed["rows_rejected"], skipped_cells=parsed.get("skipped_cell_count", 0))
+            if not report["record_count"]:
+                raise ExcelImportError("Файл прочитан, но подходящих записей нет. Проверьте лист, колонки и ID скважины.")
+        else:
+            prepared = _prepare_json(answer, profile, source_id)
+            report["record_count"] = sum(map(len, prepared.values()))
+        warnings = report.get("rows_rejected", 0) or report.get("skipped_cells", 0)
+        report.update(status="warning" if warnings else "ok",
+                      message="Ответ прочитан и проверен. Данные не импортированы." + (" Есть отклонённые строки/ячейки; исправьте файл перед загрузкой." if warnings else ""))
+    except Exception as exc:
+        logger.warning("Source check failed source=%s type=%s", source_id, type(exc).__name__)
+        message = str(exc) if isinstance(exc, ExcelImportError) else source_error(exc)
+        if token := source_env(source_id, "TOKEN"):
+            message = message.replace(token, "[скрыто]")
+        report.update(status="error", message=message[:2000])
+    return report
 
 
 # --------------------------------------------------------------------------- per well
@@ -282,8 +386,6 @@ def source_modes() -> list[dict]:
     """How each per-well source gets its data: pulled from an API/adapter, or uploads only."""
     modes = []
     for profile_id, profile in load_profiles().items():
-        if profile.get("kind") not in {"telemetry", "history"}:
-            continue
         source_id = str(profile.get("source_id", profile_id)).upper()
         if profile.get("pull") is False:
             mode = "upload"
@@ -292,7 +394,7 @@ def source_modes() -> list[dict]:
         else:
             mode = "api" if source_env(source_id, "URL") else "upload"
         modes.append({"profile_id": profile_id, "source_id": source_id,
-                      "title": profile.get("short_title") or profile.get("title") or source_id, "mode": mode})
+                      "title": profile.get("short_title") or profile.get("title") or source_id, "kind": profile["kind"], "mode": mode})
     return modes
 
 
