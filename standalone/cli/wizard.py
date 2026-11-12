@@ -83,7 +83,7 @@ def cmd_setup(args) -> int:
     old = env_values() if ENV_FILE.is_file() else {}
     say("Настройка демо-сборки MAI Corrosion Control. Enter — оставить значение в [скобках].")
 
-    say("\n1/4  База данных Microsoft SQL Server")
+    say("\n1/4  Хранилище приложения — Microsoft SQL Server (не подключение внешнего источника)")
     db_url, mssql_schema = _setup_mssql(args, old, old.get("MAI_DATABASE_URL", "").startswith("mssql"), interactive)
 
     say("\n2/4  Языковая модель через LiteLLM (предложения ИИ-агента, документы)")
@@ -168,6 +168,13 @@ def cmd_setup(args) -> int:
             say(f"  {dashboard_link(values)}")
     say("\nДальше:  mai.cmd check   — проверить базу (и создать таблицы), модель и порт")
     say("         mai.cmd start   — запустить")
+    if interactive and _yes(_ask("Настроить источники сейчас? да/нет", "нет")):
+        from argparse import Namespace
+        from standalone.cli.sources import cmd_sources
+        cmd_sources(Namespace(action="configure", source=None, url=None, token=None, well_ids=None,
+                              non_interactive=False))
+    else:
+        say("Источники можно настроить позже: mai.cmd sources configure")
     return 0
 
 

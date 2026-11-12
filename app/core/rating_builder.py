@@ -279,7 +279,7 @@ def _ntc_score(checks: list[Check] | None, when: datetime, sources: SourceCatalo
     points = sum(check.points for check in checks)
     env_points = sum(check.points for check in checks if check.rule_id.startswith(ENVIRONMENT_PREFIX))
     values["model_ntc"] = values["model_ntc_raw"] = score(points)
-    note = f"Правила НТЦ: {points} баллов из {CRITICAL_POINTS}."
+    note = f"Правила НТЦ: {points} баллов; порог критичности {CRITICAL_POINTS}."
     if protection == "effective" and env_points:
         factor = settings.rating_protection_factor
         adjusted_points = points - env_points * (1 - factor)

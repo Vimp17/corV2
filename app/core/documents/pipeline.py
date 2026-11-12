@@ -76,23 +76,22 @@ def _commit(document: dict, contributions: list[dict], loaded: dict, message: st
     loaded = {**loaded, "storage_version": 2}
     wells = db.replace_document_data(document, contributions, status="loaded", loaded=loaded,
         status_message=message[:2000], processed_at=datetime.now(timezone.utc), **values)
-    for row in contributions:
-        db.record_source_status(row["source_id"], row["well_id"], "ok", message[:2000], origin="document")
-    # Recoverable derived state: a failure here keeps the accepted version and the next cycle retries.
     try:
-        _recompute(wells)
+        for row in contributions:
+            db.record_source_status(row["source_id"], row["well_id"], "ok", message[:2000], origin="document")
+        failed = _recompute(wells)["failed"]
     except Exception:
         logger.exception("Accepted document needs rating recompute document_id=%s", document["document_id"])
+        failed = True
+    if failed:
         db.update_document(document["document_id"], claim_id=document.get("claim_id"),
-            status_message=(message + " Рейтинг обновится в следующем дневном цикле.")[:2000])
+            status_message=(message + " При принятии данных пересчёт не завершился; создана заявка на повтор.")[:2000])
     return db.get_document(document["document_id"]) or {}
 
 
-def _recompute(wells: list[str]) -> None:
-    if wells:
-        from app.core import rating_builder
-
-        rating_builder.recompute_wells(wells)
+def _recompute(wells: list[str]) -> dict:
+    from app.core.recompute import process_pending
+    return process_pending(wells, limit=max(1, len(wells)))
 
 
 def _import_by_profile(document: dict, content: bytes, profile_id: str) -> dict:
@@ -367,6 +366,8 @@ def load_date_field(spec: dict) -> str:
 
 def process_queue(limit: int = 20) -> list[dict]:
     """Process up to `limit` queued documents; returns their final rows."""
+    from app.core.recompute import process_pending
+    process_pending()
     done = []
     for _ in range(limit):
         document = db.claim_next_document()
@@ -394,9 +395,13 @@ def delete_documents(statuses: set[str] | None) -> dict:
     processed) and the data they loaded; the rating of the affected wells is recomputed once."""
     selected = [row["document_id"] for row in db.list_documents(limit=100000)
                 if row["status"] not in {"queued", "processing"} and (statuses is None or row["status"] in statuses)]
-    removed, remaining = _delete(selected)
+    safe_only = statuses is not None and statuses <= {"failed", "not_recognized"}
+    removed, remaining = _delete(selected, only_without_data=safe_only)
     _recompute(remaining)
-    return {"deleted": len(removed), "wells": sorted({well for document in removed for well in _loaded_wells(document)})}
+    result = {"deleted": len(removed), "wells": sorted({well for document in removed for well in _loaded_wells(document)})}
+    if safe_only and len(removed) < len(selected):
+        result["skipped_with_data"] = len(selected) - len(removed)
+    return result
 
 
 def delete_document(document_id: str) -> dict | None:
@@ -412,10 +417,10 @@ def _loaded_wells(document: dict) -> list[str]:
     return (document.get("loaded") or {}).get("wells") or []
 
 
-def _delete(document_ids: list[str]) -> tuple[list[dict], list[str]]:
+def _delete(document_ids: list[str], *, only_without_data=False) -> tuple[list[dict], list[str]]:
     removed = []
     for document_id in document_ids:
-        document = db.delete_document_row(document_id)
+        document = db.delete_document_row(document_id, only_without_data=only_without_data)
         if document is None:
             continue
         try:

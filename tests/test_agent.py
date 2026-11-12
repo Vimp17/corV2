@@ -100,7 +100,7 @@ def test_card_lists_every_ntc_rule(client):
     rules = well["provenance"]["model_ntc"]["rules"]
     assert len(rules) == 17 and {rule["group"] for rule in rules} == {"Среда", "Защита", "Технология", "Коррозия"}
     points = sum(rule["points"] for rule in rules)
-    assert f"{points} баллов из 14" in well["provenance"]["model_ntc"]["note"]
+    assert f"{points} баллов; порог критичности 14" in well["provenance"]["model_ntc"]["note"]
     assert any(rule["points"] == 0 and rule["value"] is not None for rule in rules)   # rules that did not fire too
     # The rating list stays light: the rules come with the well card only.
     listed = next(item for item in client.get("/api/v1/rating").json()["wells"] if item["well_id"] == "DEMO-001")

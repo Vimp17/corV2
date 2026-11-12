@@ -131,8 +131,7 @@ source_documents = Table(
     Column("payload_json", JSON, nullable=False), Column("updated_at", UTCDateTime, nullable=False),
 )
 # Documents received as files (manual upload or the inbox folder): the original is stored on
-# disk, the extracted text and fields here. Data taken from a document is written to the usual
-# telemetry / history tables under batch ids "doc-<document_id>-<well_id>".
+# disk, the extracted text and fields here; accepted data belongs to document_contributions.
 documents = Table(
     "documents", metadata,
     Column("document_id", NVarchar(36), primary_key=True),
@@ -181,3 +180,10 @@ document_contributions = Table(
     Column("data", JSON, nullable=False), Column("updated_at", UTCDateTime, nullable=False),
 )
 Index("idx_document_contributions_well", document_contributions.c.well_id)
+
+rating_recompute_queue = Table(
+    "rating_recompute_queue", metadata,
+    Column("well_id", NVarchar(128), primary_key=True),
+    Column("revision", NVarchar(36), nullable=False),
+    Column("queued_at", UTCDateTime, nullable=False), Column("last_error", NVarchar(2000)),
+)

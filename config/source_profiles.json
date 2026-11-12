@@ -5,7 +5,7 @@
       "source_id": "DARS",
       "kind": "telemetry",
       "sheet_name": null,
-      "header_row": 1,
+      "header_row": "auto",
       "required_columns": [
         "timestamp"
       ],
@@ -118,7 +118,7 @@
       "source_id": "KHIMIK",
       "kind": "telemetry",
       "sheet_name": null,
-      "header_row": 1,
+      "header_row": "auto",
       "required_columns": [
         "timestamp"
       ],
@@ -205,7 +205,7 @@
       "source_id": "ERA",
       "kind": "history",
       "sheet_name": null,
-      "header_row": 1,
+      "header_row": "auto",
       "required_columns": [
         "event_date"
       ],

@@ -4,6 +4,7 @@ Windows: mai.cmd <команда>        Linux: python standalone/manage.py <к�
 
   setup     мастер настройки: база данных SQL Server, LiteLLM, данные, доступ → .env
   check     проверка перед запуском: пакеты, база данных (и создание таблиц), модель, порт
+  sources   настройка источников (configure) и проверка без импорта (check --well ID)
   start     запустить в фоне (журналы в logs/)
   stop      остановить                       restart   перезапустить
   status    состояние и ссылки               run       запустить в этом окне (Ctrl+C — остановить)
@@ -33,6 +34,7 @@ from standalone.cli.service import (cmd_link, cmd_logs, cmd_restart, cmd_run, cm
                                      cmd_status, cmd_stop)
 from standalone.cli.check import cmd_check  # noqa: E402
 from standalone.cli.tools import cmd_cleanup, cmd_diag, cmd_n8n, cmd_version  # noqa: E402
+from standalone.cli.sources import cmd_sources  # noqa: E402
 
 
 # --------------------------------------------------------------------------- main
@@ -50,6 +52,16 @@ def parser() -> argparse.ArgumentParser:
     setup.add_argument("--local", dest="network", action="store_false", help="только с этого сервера")
     setup.add_argument("--api-key", help="new — создать, none — без ключа, иначе — сам ключ")
     commands.add_parser("check", help="проверка: пакеты, база, модель, порт")
+    sources = commands.add_parser("sources", help="настройка и проверка источников")
+    source_commands = sources.add_subparsers(dest="action", required=True)
+    configure = source_commands.add_parser("configure", help="URL, скрытый токен, список скважин → .env")
+    configure.add_argument("--source", help="dars, khimik, era или crew_schedule; без параметра — все")
+    configure.add_argument("--non-interactive", action="store_true")
+    for option in ("url", "token", "well-ids"):
+        configure.add_argument(f"--{option}", help="- — удалить прежнее значение")
+    check_source = source_commands.add_parser("check", help="прочитать и проверить ответ без записи в БД")
+    check_source.add_argument("--source", help="без параметра — все источники")
+    check_source.add_argument("--well", help="ID скважины (по умолчанию первый из настроенного списка)")
     commands.add_parser("start", help="запустить в фоне")
     commands.add_parser("stop", help="остановить")
     commands.add_parser("restart", help="перезапустить")
@@ -78,7 +90,7 @@ def main(argv: list[str] | None = None) -> int:
     if argv and argv[0].lower() in {"help", "/?", "-?"}:
         argv = ["--help"]
     args = parser().parse_args(argv)
-    handlers = {"setup": cmd_setup, "check": cmd_check, "start": cmd_start, "stop": cmd_stop,
+    handlers = {"setup": cmd_setup, "check": cmd_check, "sources": cmd_sources, "start": cmd_start, "stop": cmd_stop,
                 "restart": cmd_restart, "status": cmd_status, "run": cmd_run, "logs": cmd_logs, "link": cmd_link,
                 "n8n": cmd_n8n, "cleanup": cmd_cleanup, "diag": cmd_diag, "version": cmd_version}
     if not args.command:

@@ -71,7 +71,7 @@ def _data_state(wells: list[dict]) -> dict:
         "pending_wells": sorted(set(known) - rated)[:500],
         "last_computed_at": max(computed) if computed else None,
         "sources": sources,
-        "api_configured": any(item["mode"] in {"api", "adapter"} for item in sources),
+        "api_configured": any(item["mode"] in {"api", "adapter"} and item["kind"] != "json_schedule" for item in sources),
     }
 
 

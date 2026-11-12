@@ -40,7 +40,7 @@ def _monitor() -> MonitoringResult:
         return MonitoringResult(
             status="needs_configuration", started_at=started, completed_at=datetime.now(timezone.utc),
             wells_checked=0, wells_scored=0, wells_unscored=0, dashboard_url=settings.dashboard_url,
-            message="Список скважин пуст. Укажите MAI_WELL_IDS или загрузите первые данные через API.")
+            message="Список скважин пуст. Загрузите первые файлы в разделе «Документы» или настройте источники и начальный список скважин.")
 
     # Source refresh is network-bound, so wells are refreshed concurrently.
     with ThreadPoolExecutor(max_workers=settings.source_refresh_workers, thread_name_prefix="source-refresh") as pool:

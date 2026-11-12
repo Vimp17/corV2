@@ -227,13 +227,13 @@ def _detect_header_row(sheet, profile: dict, scan_rows: int = 15,
 
 
 def parse_excel(content: bytes, filename: str, profile_id: str, supplied_well_id: str | None = None,
-                auto_header: bool = False) -> dict:
+                auto_header: bool = False, require_well_match: bool = False) -> dict:
     """Parse a workbook with a source profile. auto_header: look for the header row (with the
     well and date columns) in the first 30 rows instead of the configured row — for tables
     under a title, e.g. a laboratory protocol saved as Excel."""
     suffix = Path(filename).suffix.casefold()
     if suffix not in {".xlsx", ".xls"}:
-        raise ExcelImportError("Only Excel workbooks (.xlsx, .xls) are supported.")
+        raise ExcelImportError("Поддерживаются книги Excel .xlsx и .xls.")
     if len(content) > settings.max_excel_bytes:
         raise ExcelImportError(f"Workbook exceeds the {settings.max_excel_bytes // (1024 * 1024)} MB upload limit")
     if suffix == ".xls" or is_legacy_workbook(content):
@@ -253,7 +253,7 @@ def parse_excel(content: bytes, filename: str, profile_id: str, supplied_well_id
     try:
         workbook = load_workbook(BytesIO(content), read_only=True, data_only=True)
     except Exception as exc:
-        raise ExcelImportError("Could not read this workbook; confirm it is a valid .xlsx file") from exc
+        raise ExcelImportError("Не удалось прочитать книгу. Проверьте, что это файл Excel .xlsx, а не HTML/JSON или повреждённый архив.") from exc
     try:
         explicit_names = profile.get("sheet_names")
         single_name = profile.get("sheet_name")
@@ -262,14 +262,14 @@ def parse_excel(content: bytes, filename: str, profile_id: str, supplied_well_id
             missing_sheets = [name for name in explicit_names if name not in workbook.sheetnames]
             if missing_sheets:
                 raise ExcelImportError(
-                    f"Configured worksheet(s) not found: {', '.join(missing_sheets)}. "
-                    f"Available sheets: {', '.join(workbook.sheetnames)}"
+                    f"Не найдены настроенные листы: {', '.join(missing_sheets)}. "
+                    f"Доступные листы: {', '.join(workbook.sheetnames)}"
                 )
             candidate_sheets = [workbook[name] for name in explicit_names]
         elif single_name:
             if single_name not in workbook.sheetnames:
                 raise ExcelImportError(
-                    f"Sheet '{single_name}' was not found; available sheets: {', '.join(workbook.sheetnames)}"
+                    f"Лист '{single_name}' не найден; доступные листы: {', '.join(workbook.sheetnames)}"
                 )
             candidate_sheets = [workbook[single_name]]
         else:
@@ -308,8 +308,8 @@ def parse_excel(content: bytes, filename: str, profile_id: str, supplied_well_id
                 if explicit_selection:
                     recognized = ", ".join(f"{field}←{column}" for field, column in source_fields.items()) or "none"
                     raise ExcelImportError(
-                        f"Sheet '{sheet.title}' is missing required columns: {', '.join(missing_headers)}. "
-                        f"Recognized columns: {recognized}. Update config/source_profiles.json to map actual headers."
+                        f"На листе '{sheet.title}' не найдены обязательные колонки: {', '.join(missing_headers)}. "
+                        f"Распознаны колонки: {recognized}. Уточните синонимы заголовков в field_map файла config/source_profiles.json."
                     )
                 skipped_sheets.append(sheet.title)
                 continue
@@ -322,8 +322,8 @@ def parse_excel(content: bytes, filename: str, profile_id: str, supplied_well_id
         if not selected_sheets:
             required = ", ".join(profile.get("required_columns", [])) or "profile fields"
             raise ExcelImportError(
-                f"No worksheet matched profile '{profile_id}'. Required headers: {required}. "
-                "Check header_row and field aliases in config/source_profiles.json."
+                f"Ни один лист не соответствует профилю '{profile_id}'. Обязательные поля: {required}. "
+                "Проверьте header_row (или auto) и синонимы field_map в config/source_profiles.json."
             )
 
         telemetry_rows: dict[str, list[TelemetryPoint]] = defaultdict(list)
@@ -367,6 +367,9 @@ def parse_excel(content: bytes, filename: str, profile_id: str, supplied_well_id
                     raise ExcelImportError(f"Workbook exceeds the {settings.max_excel_rows} row processing limit")
                 rows_read += 1
                 well_id = _text(supplied_well_id) or _text(row.get("well_id"))
+                if require_well_match and supplied_well_id and _text(row.get("well_id")) not in (None, "", well_id):
+                    raise ExcelImportError(f"XLSX содержит данные другой скважины (лист «{sheet.title}», строка {excel_row}). "
+                                           "Выгрузка по well_id должна относиться только к запрошенной скважине; данные не загружены.")
                 if not well_id:
                     if len(errors) < 50:
                         errors.append({"sheet_name": sheet.title, "row": excel_row, "message": "well_id is blank"})
