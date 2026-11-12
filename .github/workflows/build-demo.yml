@@ -79,6 +79,6 @@ jobs:
           Copy-Item scripts/smoke_demo.py $root
           Push-Location $root
           try {
-            & ./runtime/python.exe ./smoke_demo.py
+            & ./runtime/python.exe -X utf8 ./smoke_demo.py
             if ($LASTEXITCODE -ne 0) { throw 'Runtime smoke failed' }
           } finally { Pop-Location }
