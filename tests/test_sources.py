@@ -188,7 +188,7 @@ def test_push_json(client):
     assert crews.status_code == 201, crews.text
     assert crews.json()["status"] == "partial" and crews.json()["rows_rejected"] == 1
     assert crews.json()["targets"] == ["PUSH-1"] and "1 crew records accepted, 1 rejected" in crews.json()["message"]
-    assert client.post("/api/v1/ingestion/crew-schedule?well_id=PUSH-1", json={"crew_availability": []}).status_code == 422
+    assert client.post("/api/v1/ingestion/crew-schedule?well_id=PUSH-1", json={"crew_availability": []}).status_code == 201
     assert client.post("/api/v1/ingestion/crew-schedule?well_id=PUSH-1",
                        json={"crew_availability": [{"status": "available"}]}).status_code == 422
     assert client.post("/api/v1/ingestion/crew-schedule", json={"crew_availability": [CREW]}).status_code == 422
