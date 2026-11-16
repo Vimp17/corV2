@@ -200,7 +200,8 @@ def build_context(well_id: str) -> dict | None:
     context["crews"] = crews[:100]
     if settings.co2_enabled:
         from app.db.co2 import history
-        context["co2_assessments"] = history(well_id, 2)
+        from app.core.co2_automatic import for_wells
+        context["co2_assessments"] = [for_wells([well_id])[well_id], *history(well_id, 2)]
     return context
 
 

@@ -14,7 +14,7 @@ from app.db.base import _merge, _queue_writes, _retry_deadlocks, engine
 from app.db.schema import (_UNSPECIFIED_SOURCE, history_batches, history_events, ingestion_batches,
                            source_documents, source_health, telemetry, well_rating, co2_assessments, document_contributions)
 from app.db.documents import contribution_rows
-from app.schemas import FailureHistoryItem, TelemetryPoint, WorkHistoryItem
+from app.schemas import CO2_SOURCE_FIELDS, FailureHistoryItem, TelemetryPoint, WorkHistoryItem
 
 
 # --------------------------------------------------------------------------- source data
@@ -42,7 +42,7 @@ def save_batch(well_id: str, requested_batch_id: str | None, records: Iterable[T
     rows = list(records)
     persisted_fields = set(TelemetryPoint.model_fields) | {"source_id"}
     payloads = [{key: value for key, value in point.model_dump(mode="json", exclude_none=False).items()
-                 if key in persisted_fields} for point in rows]
+                 if key in persisted_fields and not (key in CO2_SOURCE_FIELDS and value is None)} for point in rows]
     occurrences: dict[tuple[str, str], int] = {}
     telemetry_rows = []
     for index, (point, payload) in enumerate(zip(rows, payloads)):
@@ -87,6 +87,11 @@ def load_telemetry(well_id: str) -> list[TelemetryPoint]:
     versions = [(payload, when) for payload, when in rows]
     for row in contribution_rows(well_id):
         versions.extend((payload, row["updated_at"]) for payload in row["data"].get("records", []))
+    return _combine_telemetry(versions)
+
+
+def _combine_telemetry(versions) -> list[TelemetryPoint]:
+    """Shared merge for a card and the batched automatic calculator."""
     # Identical observations from independent owners remain stored separately, exposed once.
     selected = {}
     occurrences = {}
@@ -105,7 +110,8 @@ def load_telemetry(well_id: str) -> list[TelemetryPoint]:
             group = []
         previous = next((p for p in reversed(group) if source not in str(getattr(p, "source_id", "")).split("+")), None)
         if previous is None:
-            merged = point.model_copy(update={"field_sources": fields})
+            merged = point.model_copy(update={"field_sources": fields,
+                "extra_sources": {name: source for name in point.extra_measurements or {}}})
             combined.append(merged)
             group.append(merged)
             continue
@@ -113,6 +119,12 @@ def load_telemetry(well_id: str) -> list[TelemetryPoint]:
             if getattr(previous, key) is None:
                 setattr(previous, key, getattr(point, key))
                 previous.field_sources[key] = source
+                if key == 'extra_measurements':
+                    previous.extra_sources.update({name: source for name in point.extra_measurements})
+        for name, value in (point.extra_measurements or {}).items():
+            if name not in (previous.extra_measurements or {}):
+                previous.extra_measurements = {**(previous.extra_measurements or {}), name: value}
+                previous.extra_sources[name] = source
         previous.source_id = "+".join(sorted(set(previous.source_id.split("+")) | {source}))
     return combined
 

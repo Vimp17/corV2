@@ -33,6 +33,12 @@ result = calculate(CO2Calculation(well_id='NORSOK-SMOKE', temperature_c=60, pres
     material='carbon_steel', water_wetting='water_wet'))
 assert result['model_snapshot']['model_id'] == 'norsok-m506-2005'
 assert result['configuration_hash']
+from app.core.co2_automatic import assess
+automatic = assess('AUTO-SMOKE', [], {})
+assert automatic['automatic_status'] == 'calculated'
+assert automatic['inputs']['ph_in_situ'] == 5
+assert automatic['input_provenance']['ph_in_situ']['kind'] == 'default'
+assert automatic['defaults_hash']
 assert parse_inputs(Path('examples/co2/norsok-inputs.json').read_bytes(), 'norsok-inputs.json', True)['valid_rows'] == 1
 assert '/api/v1/co2/calculate-file' in app.openapi()['paths']
 assert '/api/v1/sources/{profile_id}/check' in app.openapi()['paths']

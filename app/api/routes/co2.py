@@ -44,8 +44,14 @@ def current_model():
 @router.get('/model')
 def model_info():
     model = current_model()
-    return {key: model[key] for key in ('model_id', 'revision', 'title', 'algorithm', 'source',
-                                       'configuration_hash', 'domain', 'rate_multiplier')}
+    from app.core.co2_automatic import load_defaults
+    try:
+        defaults = load_defaults(model=model)
+    except ModelConfigurationError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    return {**{key: model[key] for key in ('model_id', 'revision', 'title', 'algorithm', 'source',
+                                          'configuration_hash', 'domain', 'rate_multiplier')},
+            'automatic_defaults': defaults}
 
 
 @router.get('/input-template')

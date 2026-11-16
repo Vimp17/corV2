@@ -286,7 +286,8 @@ def validate_archive(archive: Path, info: dict) -> None:
         raise SystemExit("Invalid archive checksum or unresolved DLL dependencies")
     with zipfile.ZipFile(archive) as package:
         required = ("app/main.py", "app/core/co2_corrosion.py", "app/core/norsok.py", "app/core/co2_inputs.py",
-                    "config/co2_model.json", "examples/co2/norsok-inputs.json", "app/core/source_catalog.py",
+                    "config/co2_model.json", "config/co2_defaults.json", "app/core/co2_automatic.py",
+                    "examples/co2/norsok-inputs.json", "app/core/source_catalog.py",
                     "app/core/recompute.py", "app/db/recompute.py", "dashboard/co2.js", "dashboard/sources.js",
                     "app/api/routes/sources.py", "standalone/cli/sources.py", "examples/generate_sample_data.py",
                     "README-MODEL.md", "runtime/python.exe", "BUILD_INFO.json")

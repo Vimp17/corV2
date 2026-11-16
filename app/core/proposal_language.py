@@ -148,15 +148,19 @@ def for_model(context: dict, known_gaps: list[str], examples: list[dict], act_da
             {"дата реестра": context["nkt_registry"].get("date"), "строки": context["nkt_registry"].get("rows")}
             if context.get("nkt_registry") else None),
         "CO₂-коррозия (дополнительный контекст, не вероятность отказа)": [{
-            "режим": "пересчёт" if a["calculation_mode"] == "calculated" else "внешний расчёт v4",
-            "версия": a["model_version"], "методика": a.get("model_title"),
+            "режим": {'automatic': 'автоматический расчёт из карточки', 'calculated': 'ручной пересчёт',
+                       'imported': 'внешний расчёт v4'}.get(a['calculation_mode'], a['calculation_mode']),
+            "статус автоматического расчёта": a.get('automatic_status'),
+            "подстановки администратора": a.get('defaults_used'),
+            "происхождение исходных параметров": a.get('input_provenance'),
+            "версия": a.get("model_version"), "методика": a.get("model_title"),
             "конфигурация": a.get("configuration_hash"), "дата состояния": a.get("state_at"),
             "исходные параметры расчёта": a.get("inputs"),
-            "синтетические данные": a["synthetic"], "ограничения": a["quality_flags"],
+            "синтетические данные": a.get("synthetic", False), "ограничения": a["quality_flags"],
             "сценарии": [{"доля CO₂": r["co2_mole_fraction"], "парциальное давление, бар": r["pco2_bar"],
                           "фугитивность CO₂, бар": r.get("fugacity_bar"),
                           "скорость, мм/год": r["rate_mm_year"]} for r in a["scenarios"]],
-            "внешние результаты v4 (V — мм/год; S — баллы, не состав газа)": a["imported_results"],
+            "внешние результаты v4 (V — мм/год; S — баллы, не состав газа)": a.get("imported_results", {}),
         } for a in context.get("co2_assessments") or []],
         "документы скважины": [{"вид": item.get("type"), "файл": item.get("file"), "дата": item.get("date"),
                                 "статус": item.get("status"), "примечание": item.get("note")}

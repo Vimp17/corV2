@@ -69,8 +69,27 @@ def exercise(page, base: str, data: Path, db):
         expect(page.locator("#cardTitle")).to_have_text(f"Скважина {well}")
 
     open_well()
+    expect(page.locator("#wellCo2 .co2-current")).to_contain_text("Автоматический расчёт")
+    expect(page.locator("#wellCo2 .co2-current table.rules").first).to_contain_text("Скорость, мм/год")
+    expect(page.locator("#wellCo2 form")).to_have_count(0)
+    page.locator("#wellCo2").get_by_text("Использованные параметры и подстановки", exact=True).click()
+    expect(page.locator("#wellCo2 .co2-current")).to_contain_text("Подстановка администратора")
+    expect(page.locator("#wellCo2 .co2-current input")).to_have_count(0)
     comment = page.get_by_label("Комментарий", exact=True)
     comment.fill("QA: сохранённое решение")
+    def changed_automatic(route):
+        payload = route.fetch().json()
+        for well in payload['wells']:
+            if well['well_id'] == 'DEMO-001':
+                well['co2_assessment']['scenarios'][0]['rate_mm_year'] = 88
+                well['co2_assessment']['input_hash'] = 'qa-auto-refresh'
+        route.fulfill(json=payload)
+    page.route('**/api/v1/rating', changed_automatic)
+    page.evaluate('refresh({keepNotice:true, auto:true})')
+    expect(page.locator('#wellCo2 .co2-current table.rules').first).to_contain_text('88')
+    expect(comment).to_have_value('QA: сохранённое решение')
+    page.unroute('**/api/v1/rating')
+
     dialogs = []
 
     def decline(dialog):
@@ -113,7 +132,7 @@ def exercise(page, base: str, data: Path, db):
     page.unroute("**/api/v1/rating/wells/DEMO-001")
     page.get_by_role("button", name="Закрыть карточку", exact=True).click()
 
-    page.get_by_text("Новый расчёт для скважины", exact=True).click()
+    page.get_by_text("Ручной сценарий для сравнения", exact=True).click()
     form = page.locator("#co2Feature form")
     form.get_by_label("Скважина", exact=True).fill("QA-CO2")
     form.get_by_label("Температура, °C", exact=True).fill("60")
@@ -135,6 +154,7 @@ def exercise(page, base: str, data: Path, db):
     form.get_by_role("button", name="Рассчитать CO₂", exact=True).click()
     form.get_by_role("button", name="Открыть скважину QA-CO2", exact=True).click()
     expect(page.locator("#cardTitle")).to_have_text("Скважина QA-CO2")
+    page.locator("#wellCo2").get_by_text("Сохранённые ручные и внешние расчёты", exact=True).click()
     expect(page.locator("#wellCo2 .co2-history")).to_contain_text("0,75")
     expect(page.locator("#wellCo2 .co2-history")).to_contain_text("NORSOK M-506:2005")
     expect(page.locator("#wellCo2 .co2-history")).to_contain_text("Фугитивность")

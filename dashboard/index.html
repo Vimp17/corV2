@@ -692,6 +692,7 @@
       renderFieldFilter(wells);
       renderTable();
       renderGantt();
+      if (state.drawerOpen) updateCo2Automatic(state.selected, wells.find(w => w.well_id === state.selected)?.co2_assessment);
       if (!state.cardDirty && !state.operatorSaving) renderCard();
     }
 

@@ -14,7 +14,7 @@ from fastapi.responses import Response
 
 from app import db
 from app.config import settings
-from app.core import proposal_agent, rating, rating_builder, rating_export
+from app.core import co2_automatic, proposal_agent, rating, rating_builder, rating_export
 from app.core.documents import nkt_registry, pipeline as document_pipeline
 from app.core.excel_ingestion import ExcelImportError
 from app.core.source_connectors import source_modes
@@ -27,8 +27,7 @@ router = APIRouter(tags=["rating"])
 
 def _rated_wells() -> list[dict]:
     wells = rating.build_rating(db.list_rating_rows())
-    from app.db.co2 import latest_by_well
-    co2_results = latest_by_well() if settings.co2_enabled else {}
+    co2_results = co2_automatic.for_wells(well['well_id'] for well in wells) if settings.co2_enabled else {}
     for well in wells:
         well["co2_assessment"] = co2_results.get(well["well_id"])
     for well in wells:
@@ -123,6 +122,7 @@ def get_rating_well(well_id: str) -> dict:
     titles = document_pipeline.type_titles()
     from app.db.co2 import history
     return {**well, "co2_enabled": settings.co2_enabled,
+            "co2_automatic": co2_automatic.for_wells([well_id]).get(well_id) if settings.co2_enabled else None,
             "co2_assessments": history(well_id) if settings.co2_enabled else [],
             "documents": [document_pipeline.decorate(row, titles) for row in db.list_documents(well_id=well_id, limit=50)],
             "extra_measurements": rating_builder.extra_measurements(well_id),

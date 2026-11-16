@@ -2,6 +2,7 @@
 const co2Forms = new Map();
 const co2Cards = new Map();
 const CO2_INPUTS = {
+  co2_pct: 'CO₂, % мол.',
   temperature_c: 'Температура, °C',
   pressure_abs_bar: 'Абсолютное давление, бар',
   co2_mole_fractions: 'Доли CO₂ (молярные)',
@@ -49,10 +50,10 @@ function co2Result(a) {
   const box = el(
     'div',
     { class: 'box' },
-    el('h3', { text: `${a.calculation_mode === 'imported' ? 'Импорт v4' : 'Расчёт'} · ${a.model_title || a.model_version}` }),
+    el('h3', { text: `${a.automatic ? 'Автоматический расчёт' : a.calculation_mode === 'imported' ? 'Импорт v4' : 'Расчёт'} · ${a.model_title || a.model_version || 'NORSOK'}` }),
     el('div', {
       class: 'hint',
-      text: `${a.synthetic ? 'Синтетические данные · ' : ''}Дата состояния: ${a.state_at || 'неизвестна'} · Сохранено: ${a.created_at || a.calculated_at || '—'}`,
+      text: `${a.synthetic ? 'Синтетические данные · ' : ''}Дата состояния: ${a.state_at || 'смотрите даты исходных параметров'} · ${a.automatic ? 'Рассчитано' : 'Сохранено'}: ${a.created_at || a.calculated_at || '—'}`,
     }),
   );
   if (a.scenarios?.length)
@@ -94,13 +95,24 @@ function co2Result(a) {
         ]),
       ),
     );
-  box.append(
-    el(
-      'ul',
-      { class: 'hint' },
-      (a.quality_flags || []).map((t) => el('li', { text: t })),
-    ),
-  );
+  if (a.automatic) {
+    const status = a.automatic_status === 'calculated' ? 'Результат обновляется автоматически из данных карточки.'
+      : a.automatic_status === 'not_applicable' ? 'Данные вне области NORSOK. Численная скорость не определена.'
+      : 'Проверьте администраторскую конфигурацию расчёта.';
+    box.append(el('p', { class: 'hint', text: status }));
+    const provenance = Object.entries(a.input_provenance || {});
+    box.append(el('p', { class: 'hint', text: `Из источников: ${provenance.filter(([,v]) => v.kind === 'source').length}; подстановок администратора: ${(a.defaults_used || []).length}. Подстановки являются допущениями проекта.` }));
+    const values = el('table', { class: 'rules' },
+      el('thead', {}, el('tr', {}, ['Параметр', 'Использовано', 'Происхождение'].map(text => el('th', { text })))),
+      el('tbody', {}, provenance.map(([key, item]) => el('tr', {},
+        el('td', { text: CO2_INPUTS[key] || key }),
+        el('td', { text: typeof item.value === 'number' ? ruNum(item.value) : ({carbon_steel:'углеродистая сталь',water_wet:'контакт с водой'}[item.value] || item.value) }),
+        el('td', { text: item.kind === 'default' ? `Подстановка администратора. ${item.reason || ''}` : `${item.source_id || 'Источник карточки'} · ${item.date || 'дата неизвестна'} · ${item.label || ''}` })))));
+    box.append(el('details', {}, el('summary', { text: 'Использованные параметры и подстановки' }), values));
+  }
+  const warnings = el('ul', { class: 'hint' }, (a.quality_flags || []).map(text => el('li', { text })));
+  box.append(a.automatic ? el('details', { open: a.automatic_status !== 'calculated' },
+    el('summary', { text: 'Ограничения и допущения' }), warnings) : warnings);
   const inputs = el(
     'details',
     {},
@@ -344,6 +356,15 @@ function renderCo2History(assessments, wellId = state.selected) {
       : [el('div', { class: 'hint', text: 'Расчётов CO₂ пока нет.' })]),
   );
 }
+function updateCo2Automatic(wellId, assessment) {
+  const card = co2Cards.get(wellId);
+  if (!card || !assessment) return;
+  const identity = JSON.stringify([assessment.automatic_status, assessment.input_hash,
+    assessment.defaults_hash, assessment.configuration_hash, assessment.scenarios, assessment.quality_flags]);
+  if (identity === card.automaticIdentity) return;
+  card.current.replaceChildren(co2Result(assessment));
+  card.automaticIdentity = identity;
+}
 function renderCo2(detail) {
   const box = $('wellCo2');
   if (!box) return;
@@ -352,31 +373,38 @@ function renderCo2(detail) {
   let card = co2Cards.get(detail.well_id);
   if (!card) {
     const history = el('div', { class: 'co2-history' });
+    const current = el('div', { class: 'co2-current', 'aria-live': 'polite' });
     const root = el(
       'div',
       {},
       el('h3', { text: 'CO₂-коррозия · мм/год' }),
-      el('div', { class: 'hint', text: 'Дополнительный сценарный расчёт. Индекс и мероприятие рейтинга сохраняются.' }),
-      el('details', { class: 'box' }, el('summary', { text: 'Новый расчёт' }), co2Form(detail.well_id)),
-      history,
+      el('div', { class: 'hint', text: 'Автоматически по данным карточки. Недостающие параметры берутся из администраторских настроек. Индекс рейтинга рассчитывается отдельно.' }),
+      current,
+      el('details', {}, el('summary', { text: 'Сохранённые ручные и внешние расчёты' }), history),
     );
-    card = { root, history };
+    card = { root, history, current };
     co2Cards.set(detail.well_id, card);
   }
   box.replaceChildren(card.root);
+  updateCo2Automatic(detail.well_id, detail.co2_automatic);
   renderCo2History(detail.co2_assessments || [], detail.well_id);
 }
 function initCo2() {
   const box = $('co2Feature');
   box.append(
     el('h2', { class: 'section', id: 'co2Title', text: 'CO₂-коррозия' }),
-    el('p', { class: 'sub', text: 'Расчёт по исходным данным NORSOK: вручную или из XLSX, CSV, JSON. История — в карточке скважины.' }),
-    el('details', { class: 'box' }, el('summary', { text: 'Новый расчёт для скважины' }), co2Form()),
+    el('p', { class: 'sub', text: 'В карточке каждой скважины уже доступен автоматический расчёт NORSOK. Исходные данные обновляются из источников, отсутствующие параметры — из настроек администратора. Ниже доступны отдельные сравнительные расчёты и импорт.' }),
+    el('details', { class: 'box' }, el('summary', { text: 'Ручной сценарий для сравнения' }), co2Form()),
   );
   const modelInfo = el('p', { class: 'hint', role: 'status', text: 'Проверяем активную методику…' });
   box.append(modelInfo);
   api('/api/v1/co2/model').then(model => {
-    modelInfo.textContent = `Активная методика: ${model.title} · редакция конфигурации ${model.revision} · калибровка ×${model.rate_multiplier}. Версия и коэффициенты сохраняются с каждым расчётом.`;
+    modelInfo.textContent = `Активная методика: ${model.title} · редакция конфигурации ${model.revision} · калибровка ×${model.rate_multiplier}.`;
+    const defaults = model.automatic_defaults;
+    if (defaults) modelInfo.append(el('details', {}, el('summary', { text: 'Подстановки администратора — только просмотр' }),
+      el('p', { text: defaults.description }), el('dl', { class: 'dl' }, Object.entries(defaults.values).flatMap(([key,value]) => [
+        el('dt', { text: CO2_INPUTS[key] || key }), el('dd', { text: typeof value === 'number' ? ruNum(value) : ({carbon_steel:'углеродистая сталь',water_wet:'допущен контакт с водой'}[value] || value) })
+      ]))));
   }).catch(error => { modelInfo.textContent = error.message; });
   box.append(co2Upload(true), el('details', { class: 'box' }, el('summary', { text: 'Архивные внешние расчёты v4' }), co2Upload(false)));
 }
