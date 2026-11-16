@@ -46,7 +46,7 @@ test('pending CO2 request survives redraw and cannot replace another well histor
   finish({assessment:{calculation_mode:'calculated',model_version:'test',scenarios:[],quality_flags:[],inputs:{}},duplicates:0});
   await request;
   assert.deepEqual(calls,['/api/v1/co2/calculate']);
-  assert.equal(control(root,'Скважина').value,'B');
+  assert.ok(descendants(root).some(n=>n.textContent?.startsWith('Скважина: B')));
 });
 test('measured composition asks for one value and validates it before sending',async()=>{
   const {context:c,root}=create();c.renderCo2(detail('A'));
@@ -68,4 +68,20 @@ test('global result opens the submitted well after refresh even if the form chan
   await pending;
   const link=descendants(form).find(n=>n.tag==='button' && n.textContent?.startsWith('Открыть скважину'));
   await link.dispatch('click'); assert.equal(opened,'QA-A');
+});
+test('card calculation uses its fixed well without asking for an ID',async()=>{
+  const {context:c}=create();const form=c.co2Form('A');
+  assert.equal(descendants(form).find(n=>n.tag==='input' && n['aria-label']==='Скважина'),undefined);
+  control(form,'Температура').value='60';control(form,'Абсолютное').value='50';
+  let sent;c.api=async(path,options)=>{if(options){sent=JSON.parse(options.body);return {assessment:{},duplicates:0};}return {assessments:[]};};
+  await form.dispatch('submit');assert.equal(sent.well_id,'A');
+});
+test('source metadata is optional and blank values use the manual-entry default',async()=>{
+  const {context:c}=create();const form=c.co2Form('A');
+  control(form,'Температура').value='60';control(form,'Абсолютное').value='50';
+  control(form,'Источник входных').value='';
+  let sent;c.api=async(path,options)=>{if(options){sent=JSON.parse(options.body);return {assessment:{},duplicates:0};}return {assessments:[]};};
+  await form.dispatch('submit');assert.equal(sent.source,'Ручной ввод');assert.equal(sent.state_at,null);
+  control(form,'Источник входных').value='Протокол лаборатории';
+  await form.dispatch('submit');assert.equal(sent.source,'Протокол лаборатории');
 });

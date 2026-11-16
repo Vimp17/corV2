@@ -141,30 +141,38 @@ function co2Result(a) {
 }
 function co2Form(wellId = '') {
   if (co2Forms.has(wellId)) return co2Forms.get(wellId);
-  const form = el('form', { class: 'box co2-form', novalidate: true });
+  const form = el('form', { class: 'co2-form', novalidate: true });
+  form.append(el('p', { class: 'hint', text: 'Обязательные поля отмечены *. Дополнительные сведения можно не заполнять.' }));
+  if (wellId) form.append(el('p', { class: 'hint', text: `Скважина: ${wellId} · выбрана в карточке` }));
+  const fields = el('div', { class: 'form-grid' });
+  form.append(fields);
   const errors = [];
-  const input = (label, props) => {
+  const input = (label, props, hint, parent = fields) => {
     const errorId = `co2-error-${co2Forms.size}-${errors.length}`;
-    const node = el('input', { required: true, 'aria-label': label, 'aria-describedby': errorId, ...props });
+    const node = el('input', { required: true, 'aria-label': label, 'aria-describedby': `${errorId} ${errorId}-hint`, ...props });
     const error = el('span', { id: errorId, class: 'field-error', role: 'alert' });
+    const help = el('span', { id: `${errorId}-hint`, class: 'hint', text: hint });
     errors.push(error);
-    form.append(el('label', { style: 'display:block;margin:10px 0' }, label + ' ', node, error));
-    return { node, error };
+    parent.append(el('label', { class: 'field' }, label + (props.required === false ? ' (необязательно)' : ' *'), node,
+      help, error));
+    return { node, error, hint: help };
   };
-  const well = input('Скважина', { value: wellId, maxlength: 128, readonly: !!wellId });
-  const temp = input('Температура, °C', { type: 'number', step: 'any' });
-  const pressure = input('Абсолютное давление, бар', { type: 'number', step: 'any' });
+  const well = wellId ? null : input('Скважина', { maxlength: 128 }, 'ID скважины из рейтинга. Для нового ID подтвердите создание ниже.');
+  const temp = input('Температура, °C', { type: 'number', step: 'any', placeholder: 'Например, 60' }, 'Температура в точке расчёта, в градусах Цельсия.');
+  const pressure = input('Абсолютное давление, бар', { type: 'number', step: 'any', placeholder: 'Например, 50' }, 'Введите абсолютное давление, а не избыточное; единица — бар.');
   const scenarios = el('input', { type: 'radio', name: `composition-${wellId}`, checked: true });
   const measured = el('input', { type: 'radio', name: `composition-${wellId}` });
-  form.append(
-    el(
-      'div',
-      {},
-      el('label', {}, scenarios, ' Сценарии CO₂'),
-      el('label', { style: 'margin-left:16px' }, measured, ' Измеренная доля CO₂'),
-    ),
-  );
-  const fractions = input('Доля CO₂, % (сценарии через ;)', { value: '0.5;1.5;3', inputmode: 'decimal' });
+  const composition = el('fieldset', { class: 'co2-composition' },
+    el('legend', { text: 'Какую долю CO₂ использовать' }),
+    el('div', { class: 'co2-choices' },
+      el('label', { class: 'check' }, scenarios, ' Сценарии CO₂'),
+      el('label', { class: 'check' }, measured, ' Измеренная доля CO₂')));
+  form.append(composition);
+  const fractions = input('Доля CO₂, %', { value: '0.5;1.5;3', inputmode: 'decimal' }, '', composition);
+  const modeHint = () => { fractions.hint.textContent = measured.checked
+    ? 'Одно измеренное значение от 0 до 100 %, например 1,5.'
+    : 'От 1 до 10 долей от 0 до 100 % через точку с запятой. Например: 0,5; 1,5; 3. Начальные значения — учебные сценарии.'; };
+  modeHint();
   let scenarioDraft = fractions.node.value,
     measuredDraft = '';
   const changeMode = () => {
@@ -178,15 +186,22 @@ function co2Form(wellId = '') {
       fractions.node.placeholder = 'Например 0.5;1.5;3';
     }
     fractions.error.textContent = '';
+    modeHint();
   };
   measured.addEventListener('change', changeMode);
   scenarios.addEventListener('change', changeMode);
-  const source = input('Источник входных значений', { value: 'Ручной ввод', maxlength: 256 });
-  const date = input('Дата состояния (если известна)', { type: 'datetime-local', required: false });
+  const options = el('details', { class: 'co2-options' }, el('summary', { text: 'Дополнительно — необязательно' }));
+  const metadata = el('div', { class: 'form-grid' });
+  options.append(metadata);
+  const source = input('Источник входных значений', { required: false, placeholder: 'Ручной ввод', maxlength: 256 }, 'Можно указать пробу или документ. Если оставить пустым, сохранится «Ручной ввод».', metadata);
+  const date = input('Дата состояния', { type: 'datetime-local', required: false }, 'Если дата измерений неизвестна, оставьте пустым.', metadata);
   const synthetic = el('input', { type: 'checkbox' });
-  form.append(el('label', {}, synthetic, ' Синтетические данные'));
+  options.append(el('label', { class: 'check' }, synthetic, ' Синтетические данные'),
+    el('p', { class: 'hint', text: 'Отметьте для учебных значений. Для реальных измерений оставьте выключенным.' }));
+  form.append(options);
   const create = el('input', { type: 'checkbox' });
-  if (!wellId) form.append(el('label', { style: 'display:block' }, create, ' Создать скважину, если её ещё нет'));
+  if (!wellId) form.append(el('label', { class: 'check' }, create, ' Создать скважину, если её ещё нет'),
+    el('p', { class: 'hint', text: 'Отметьте только при расчёте для нового ID. Для скважины из рейтинга это не требуется.' }));
   const button = el('button', { class: 'btn', type: 'submit', text: 'Рассчитать CO₂' });
   const output = el('div', { 'aria-live': 'polite' });
   form.append(button, output);
@@ -202,7 +217,7 @@ function co2Form(wellId = '') {
       return false;
     };
     let valid = true;
-    if (!well.node.value.trim() || well.node.value.trim().length > 128)
+    if (!wellId && (!well.node.value.trim() || well.node.value.trim().length > 128))
       valid = fail(well, 'Укажите ID скважины: 1–128 символов.');
     if (!temp.node.value.trim() || !Number.isFinite(Number(temp.node.value)) || Number(temp.node.value) <= -273.15)
       valid = fail(temp, 'Температура должна быть выше −273,15 °C.');
@@ -226,11 +241,10 @@ function co2Form(wellId = '') {
       );
     if (measured.checked && values.length !== 1)
       valid = fail(fractions, 'Для измеренной доли требуется одно значение, например 1.5.');
-    if (!source.node.value.trim()) valid = fail(source, 'Укажите источник входных значений.');
     if (date.node.value && !Number.isFinite(new Date(date.node.value).valueOf()))
       valid = fail(date, 'Проверьте дату и время состояния.');
     if (!valid) return;
-    const submittedWell = well.node.value.trim();
+    const submittedWell = wellId || well.node.value.trim();
     button.disabled = true;
     try {
       const result = await api('/api/v1/co2/calculate', {
@@ -242,7 +256,7 @@ function co2Form(wellId = '') {
           pressure_abs_bar: Number(pressure.node.value),
           co2_mole_fractions: values,
           composition_source: measured.checked ? 'measured' : 'scenario',
-          source: source.node.value.trim(),
+          source: source.node.value.trim() || 'Ручной ввод',
           state_at: date.node.value ? new Date(date.node.value).toISOString() : null,
           synthetic: synthetic.checked,
           create_well: create.checked,
@@ -293,7 +307,7 @@ function renderCo2(detail) {
       {},
       el('h3', { text: 'CO₂-коррозия · мм/год' }),
       el('div', { class: 'hint', text: 'Дополнительный сценарный расчёт. Индекс и мероприятие рейтинга сохраняются.' }),
-      el('details', {}, el('summary', { text: 'Новый расчёт' }), co2Form(detail.well_id)),
+      el('details', { class: 'box' }, el('summary', { text: 'Новый расчёт' }), co2Form(detail.well_id)),
       history,
     );
     card = { root, history };
@@ -305,11 +319,13 @@ function renderCo2(detail) {
 function initCo2() {
   const box = $('co2Feature');
   box.append(
-    el('h2', { text: 'CO₂-коррозия' }),
+    el('h2', { class: 'section', id: 'co2Title', text: 'CO₂-коррозия' }),
     el('p', { class: 'sub', text: 'Расчёт скорости в мм/год и импорт результатов v4. История — в карточке скважины.' }),
-    el('details', {}, el('summary', { text: 'Новый расчёт для скважины' }), co2Form()),
+    el('details', { class: 'box' }, el('summary', { text: 'Новый расчёт для скважины' }), co2Form()),
   );
-  const picker = el('input', { type: 'file', accept: '.json,.xlsx', 'aria-label': 'Файл CO₂ v4' });
+  const picker = el('input', { type: 'file', accept: '.json,.xlsx', 'aria-label': 'Файл CO₂ v4', hidden: true });
+  const filename = el('span', { id: 'co2Filename', class: 'hint', role: 'status', 'aria-live': 'polite', text: 'Файл не выбран' });
+  const pick = el('button', { class: 'btn secondary', type: 'button', text: 'Выбрать файл', onClick: () => picker.click() });
   const synthetic = el('input', { type: 'checkbox', checked: true }),
     create = el('input', { type: 'checkbox' });
   const preview = el('button', { class: 'btn secondary', type: 'button', text: 'Проверить файл v4' });
@@ -320,7 +336,11 @@ function initCo2() {
     checkedFile = null;
     confirm.hidden = true;
   };
-  picker.addEventListener('change', invalidate);
+  picker.addEventListener('change', () => {
+    filename.textContent = picker.files[0]?.name || 'Файл не выбран';
+    invalidate();
+    output.replaceChildren();
+  });
   synthetic.addEventListener('change', invalidate);
   async function upload(commit) {
     const file = picker.files[0];
@@ -394,9 +414,12 @@ function initCo2() {
       'div',
       { class: 'box' },
       el('h3', { text: 'Импорт CO₂ v4' }),
-      picker,
-      el('label', { style: 'display:block' }, synthetic, ' Синтетические данные'),
-      el('label', { style: 'display:block' }, create, ' Создать отсутствующие скважины'),
+      el('p', { class: 'hint', text: 'Для импорта нужен один JSON- или XLSX-файл v4. Сначала проверьте его, затем подтвердите запись. Для ручного расчёта выше файл не нужен.' }),
+      el('div', { class: 'co2-file-picker' }, picker, pick, filename),
+      el('label', { class: 'check' }, synthetic, ' Синтетические данные'),
+      el('p', { class: 'hint', text: 'Отмечено для учебных файлов. Снимите отметку, если файл содержит реальные данные.' }),
+      el('label', { class: 'check' }, create, ' Создать отсутствующие скважины'),
+      el('p', { class: 'hint', text: 'Нужно только для новых ID. Их список появится после проверки файла.' }),
       preview,
       confirm,
       output,
