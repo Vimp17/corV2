@@ -327,17 +327,8 @@
     .prov { display:block; font-size:11px; font-weight:400; color:var(--muted); margin-top:2px }
     .toolbar .spacer-x { flex:1 }
     .check { display:flex; gap:8px; align-items:center; font-size:13px; color:var(--ink) }
-    .co2-form { display:flex; flex-direction:column; gap:12px; margin-top:12px }
-    .co2-form .field { color:var(--ink); font-size:13px }
-    .co2-form .hint, #co2Feature .box > p { margin:0 }
-    .co2-composition { border:0; margin:0; padding:0; min-width:0; display:flex; flex-direction:column; gap:10px }
-    .co2-composition legend { color:var(--navy); font-size:13px; font-weight:600; margin-bottom:8px }
-    .co2-choices, .co2-file-picker { display:flex; flex-wrap:wrap; align-items:center; gap:10px 16px; min-width:0 }
-    .co2-file-picker .hint { overflow-wrap:anywhere; min-width:0 }
-    .co2-options > .form-grid { margin:10px 0 }
-    #co2Feature summary, #wellCo2 summary { cursor:pointer; color:var(--navy); padding:6px 0; }
-    .co2-history { display:flex; flex-direction:column; gap:10px; }
-    #co2Feature .hint, #wellCo2 .hint { overflow-wrap:anywhere; }
+    #wellCo2 .rules { table-layout:fixed; margin-top:10px }
+    #wellCo2 .rules td, #wellCo2 .rules th { overflow-wrap:anywhere }
     footer { color:var(--muted); font-size:12px }
     /* A readable overview; the complete 13-column table remains available. */
     [hidden] { display:none !important }
@@ -346,12 +337,7 @@
     .tile .tn { font-size:24px }
     .source-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr)); gap:12px; margin:16px 0 }
     .source-grid .box { margin:0 }
-    .source-grid input, #accessSettings input, .co2-form .field input { max-width:100%; padding:6px 8px; border:1px solid #C9D2DC; border-radius:4px }
-    .co2-form input[type=checkbox], .co2-form input[type=radio] { width:auto }
-    .co2-form .co2-confirm { display:grid; grid-template-columns:18px 1fr; align-items:start; column-gap:8px }
-    .co2-form .co2-confirm .hint, .co2-form .co2-confirm .field-error { grid-column:2 }
-    .co2-form .co2-confirm input { width:18px; height:18px; min-height:0; margin:1px 0 0; padding:0 }
-    .co2-form .field-error { color:var(--repair); font-size:13px; display:block }
+    .source-grid input, #accessSettings input { max-width:100%; padding:6px 8px; border:1px solid #C9D2DC; border-radius:4px }
     .source-grid .btn { margin-top:8px }
     .source-grid code, .box code { overflow-wrap:anywhere }
     .table-box:not(.compact) .grid-row > .deadline-cell { display:none }
@@ -418,7 +404,6 @@
         <a href="#sec-ppr">График ППР (ДДО)</a>
         <div class="nav-sep" aria-hidden="true"></div>
         <a href="#sec-docs">Документы</a>
-        <a href="#co2Feature" id="co2Nav">CO₂-коррозия</a>
         <a href="#sec-sources">Источники и настройки</a>
         <div class="nav-summary" id="navSummary" role="group" aria-label="Сводка по мероприятиям"></div>
       </div>
@@ -542,7 +527,6 @@
         </div>
       </section>
 
-      <section class="panel docs anchor" id="co2Feature" aria-labelledby="co2Title"></section>
       <section class="panel docs anchor" id="sec-sources" aria-labelledby="sourcesTitle">
         <h2 class="section" id="sourcesTitle">Источники и настройки</h2>
         <p class="sub">ДАРС, ХИМИК и ЭРА поставляют данные для рейтинга; расписание бригад — для предложений инженеру. Загрузка файлами доступна без автоматического подключения.</p>
@@ -669,8 +653,6 @@
       $('refresh').disabled = true;
       try {
         state.rating = await api('/api/v1/rating');
-        $('co2Feature').hidden = state.rating.settings?.models?.co2_enabled === false;
-        $('co2Nav').hidden = $('co2Feature').hidden;
         render();
         if (!options.keepNotice) notice('');
         if (!state.hashChecked) { state.hashChecked = true; const fromLink = hashWell(); if (fromLink) openFromLink(fromLink); }
@@ -1684,7 +1666,7 @@
     // ---------------------------------------------------------------- navigation highlight
     function watchSections() {
       const links = [...document.querySelectorAll('.sidenav a')];
-      const sections = ['sec-rating', 'sec-ppr', 'sec-docs', 'co2Feature', 'sec-sources'].map($);
+      const sections = ['sec-rating', 'sec-ppr', 'sec-docs', 'sec-sources'].map($);
       const update = () => {
         const current = sections.filter(node => !node.hidden && node.getBoundingClientRect().top <= parseFloat(getComputedStyle(node).scrollMarginTop) + 1).at(-1) || sections[0];
         links.forEach(link => link.setAttribute('aria-current', String(link.getAttribute('href') === '#' + current.id)));
@@ -1773,7 +1755,6 @@
     loadDocuments();
     loadSources();
     setInterval(() => { if (!document.hidden) loadSources(); }, AUTO_REFRESH_SECONDS * 1000);
-    initCo2();
 
   </script>
 </body>
