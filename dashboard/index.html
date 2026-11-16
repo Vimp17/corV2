@@ -1582,12 +1582,14 @@
       const p = detail.ai_proposal;
       const button = el('button', { class: p ? 'btn secondary small' : 'btn small', type: 'button', disabled: !detail.ai_agent_configured,
         text: p ? 'Сформировать заново' : 'Сформировать предложение', onClick: (event) => generateProposal(detail.well_id, event.currentTarget) });
-      const parts = [el('div', { style: 'display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:space-between' }, el('h3', { text: 'Предложение ИИ-агента' }), button)];
+      const preliminary = p?.proposal_source === 'rules_fallback' || (!!p?.rule_evaluation && !p?.proposal_source);
+      const parts = [el('div', { style: 'display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:space-between' }, el('h3', { text: preliminary ? 'Предварительный подбор по реестру' : 'Предложение ИИ-агента' }), button)];
+      if (detail.ai_llm_configured === false) parts.push(el('div', { class: 'hint warn', text: 'LLM не подключена. Доступен предварительный подбор по реестру; для предложения ИИ-агента подключите языковую модель.' }));
       if (p?.rule_evaluation) parts.push(el('div', { class: p.rule_evaluation.mode === 'demo' ? 'hint warn' : 'hint',
         text: `${p.rule_evaluation.mode === 'demo' ? 'Тестовый реестр — пороги требуют проверки инженером' : 'Согласованный реестр мероприятий'} · редакция ${p.rule_evaluation.revision}` }));
       if (!detail.ai_agent_configured) parts.push(el('div', { class: 'hint warn', text: 'Режим реестра мероприятий не настроен. Обратитесь к администратору.' }));
       if (!p) {
-        parts.push(el('div', { class: 'hint', text: 'Агент учтёт рейтинг, прогнозы НТЦ и мат. модели, сработавшие правила, акты, химию, защиту, документы, расписание бригад и примеры мер реагирования. Чего нет в данных — укажет отдельно.' }));
+        parts.push(el('div', { class: 'hint', text: 'LLM использует данные скважины и инструкции реестра, выберет подходящие мероприятия и объяснит предложение. Чего нет в данных — укажет отдельно.' }));
         box.replaceChildren(...parts);
         return;
       }

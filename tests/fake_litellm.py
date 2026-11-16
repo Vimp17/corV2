@@ -158,6 +158,7 @@ class FakeLiteLLM:
                 "measure": code if code and code != "нет оценки" else "—",
                 "summary": f"Скважина {payload['скважина']}: {rating.get('мероприятие')}.",
                 "actions": (example or {}).get("действия") or ["Мониторинг в обычном режиме"],
+                "selected_rule_ids": [item["идентификатор"] for item in payload.get("инструкции реестра для формирования предложения", [])],
                 "deadline": rating.get("крайний срок"),
                 "crew": {"crew_id": crew["бригада"], "date": rating.get("крайний срок")} if crew else None,
                 "reasoning": f"Индекс {rating.get('индекс коррозии на НКТ (0–100)')}; категория {rating.get('категория фонда')}.",

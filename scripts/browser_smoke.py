@@ -144,6 +144,8 @@ def exercise(page, base: str, data: Path, db):
     page.unroute("**/api/v1/rating/wells/DEMO-001")
     page.locator("#aiBox").get_by_role("button", name="Сформировать предложение", exact=True).click()
     expect(page.locator("#aiBox")).to_contain_text("Тестовый реестр", timeout=30000)
+    expect(page.locator("#aiBox")).to_contain_text("Предварительный подбор по реестру")
+    expect(page.locator("#aiBox")).to_contain_text("LLM не подключена")
     expect(page.locator("#aiBox")).to_contain_text("Сформировано")
     page.get_by_role("button", name="Закрыть карточку", exact=True).click()
 

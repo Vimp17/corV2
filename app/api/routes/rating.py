@@ -90,6 +90,7 @@ def _payload() -> dict:
             "measures": rating.measures_catalog(),
             "gap_labels": rating.GAP_LABELS,
             "ai_agent_configured": proposal_agent.configured(),
+            "ai_llm_configured": proposal_agent.llm_configured(),
         },
         "counts": rating.summarize(wells),
         "data": _data_state(wells),
@@ -127,7 +128,8 @@ def get_rating_well(well_id: str) -> dict:
             "documents": [document_pipeline.decorate(row, titles) for row in db.list_documents(well_id=well_id, limit=50)],
             "extra_measurements": rating_builder.extra_measurements(well_id),
             "nkt_registry": nkt_registry.well_registry(well_id),
-            "ai_agent_configured": proposal_agent.configured()}
+            "ai_agent_configured": proposal_agent.configured(),
+            "ai_llm_configured": proposal_agent.llm_configured()}
 
 
 @router.post("/rating/wells/{well_id}/ai-proposal")

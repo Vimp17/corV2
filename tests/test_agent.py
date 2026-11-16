@@ -54,6 +54,10 @@ def test_ai_proposal_uses_rating_crews_and_reports_gaps(client, generated, fake)
     proposal = client.post("/api/v1/rating/wells/DEMO-002/ai-proposal")
     assert proposal.status_code == 200, proposal.text
     body = proposal.json()
+    assert body["proposal_source"] == "llm_with_rules"
+    assert body["selected_rule_ids"]
+    assert body["summary"].startswith("Скважина DEMO-002:")
+    assert body["reasoning"].startswith("Индекс")
     well = _well(client, "DEMO-002")
     assert body["measure"] == well["measure_code"]
     assert body["crew"]["crew_id"] == "КРС-7"

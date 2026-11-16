@@ -72,6 +72,33 @@ def test_server_discards_invented_actions_summary_and_explanations():
     assert checked["rule_evaluation"]["revision"] == 1
 
 
+def test_llm_selects_actions_and_its_explanation_is_preserved():
+    from app.core.proposal_agent import _check
+
+    data = register().model_dump()
+    second = deepcopy(data["rules"][0]); second.update(id="review", action="Проверить эффективность защиты.")
+    data["rules"].append(second)
+    policy = evaluate(RuleBook.model_validate(data), [point()], now=NOW, mode="demo")
+    context = {"today": NOW.date().isoformat(), "rating": {"measure_code": "РИ", "index": 70},
+               "crews": [], "acts": [], "documents": [], "response_policy": policy}
+    answer = {"selected_rule_ids": ["review"], "summary": "Сначала проверить эффективность защиты.",
+              "reasoning": "Совместное превышение CO₂ и обводнённости требует уточнить состояние защиты.",
+              "actions": ["Непроверенная операция"]}
+    checked = _check(answer, context, use_llm=True)
+    assert checked["actions"] == [second["action"]]
+    assert checked["summary"] == answer["summary"]
+    assert checked["reasoning"] == answer["reasoning"]
+    assert checked["proposal_source"] == "llm_with_rules"
+    assert checked["selected_rule_ids"] == ["review"]
+    for bad in (["invented"], ["sample", "sample"], None):
+        with pytest.raises(ValueError):
+            _check({**answer, "selected_rule_ids": bad}, context, use_llm=True)
+    rejected = _check({**answer, "selected_rule_ids": []}, context, use_llm=True)
+    assert rejected["actions"] == []
+    assert rejected["proposal_source"] == "llm_with_rules"
+    assert rejected["reasoning"] == answer["reasoning"]
+
+
 def test_approved_mode_requires_engineering_rules_and_rejects_synthetic_measurements():
     data = register().model_dump()
     data["rules"][0].update(status="approved", reviewer="Тест инженера", reviewed_on="2026-11-16", basis="Тест")
@@ -80,7 +107,7 @@ def test_approved_mode_requires_engineering_rules_and_rejects_synthetic_measurem
     assert not evaluate(book, [point(synthetic=True)], now=NOW, mode="approved")["matched"]
 
 
-@pytest.mark.parametrize("failure", ["not_configured", "unavailable", "invalid_json"])
+@pytest.mark.parametrize("failure", ["not_configured", "unavailable", "invalid_json", "invalid_selection"])
 def test_rule_proposal_works_without_llm_and_is_saved(monkeypatch, failure):
     from dataclasses import replace
     from app.core import proposal_agent as agent
@@ -95,6 +122,8 @@ def test_rule_proposal_works_without_llm_and_is_saved(monkeypatch, failure):
     def chat(*args, **kwargs):
         if failure == "unavailable": raise agent.llm.LLMError("unavailable")
         if failure == "not_configured": raise AssertionError("LLM must not be called")
+        if failure == "invalid_selection":
+            return '{"selected_rule_ids":["unknown"],"summary":"Неверное назначение","reasoning":"Неверное назначение"}'
         return "invalid JSON"
     monkeypatch.setattr(agent.llm, "chat", chat)
     saved = []
@@ -103,3 +132,69 @@ def test_rule_proposal_works_without_llm_and_is_saved(monkeypatch, failure):
     assert result["actions"] == [policy["matched"][0]["action"]]
     assert saved == [("TEST-1", result)]
     assert result["crew"] is None
+    assert result["proposal_source"] == "rules_fallback"
+
+
+def test_generate_sends_rules_evidence_and_well_data_to_the_llm(monkeypatch):
+    import json
+    from dataclasses import replace
+    from app.core import proposal_agent as agent
+
+    policy = evaluate(register(), [point()], now=NOW, mode="demo")
+    context = {"today": NOW.date().isoformat(), "rating": {"measure_code": "РИ", "index": 70},
+               "crews": [], "acts": [], "documents": [], "response_policy": policy}
+    monkeypatch.setattr(agent, "build_context", lambda well: context)
+    monkeypatch.setattr(agent.proposal_language, "for_model", lambda *args: {"скважина": "TEST-1"})
+    monkeypatch.setattr(agent, "settings", replace(agent.settings, llm_api_url="http://fake", llm_model="fake"))
+    def chat(messages, **kwargs):
+        payload = json.loads(messages[1]["content"])
+        rule = payload["инструкции реестра для формирования предложения"][0]
+        assert payload["скважина"] == "TEST-1"
+        assert rule["идентификатор"] == "sample"
+        assert rule["факты срабатывания"]
+        return json.dumps({"selected_rule_ids": ["sample"], "summary": "Предложение модели по скважине.",
+                           "reasoning": "Обоснование модели с учётом сработавших условий."})
+    monkeypatch.setattr(agent.llm, "chat", chat)
+    monkeypatch.setattr(agent.db, "save_ai_proposal", lambda *args: None)
+    result = agent.generate("TEST-1")
+    assert result["proposal_source"] == "llm_with_rules"
+    assert result["summary"] == "Предложение модели по скважине."
+
+
+def test_llm_guidance_over_real_http_with_isolated_simulator(monkeypatch):
+    import json
+    from dataclasses import replace
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from threading import Thread
+    from tests.test_agent import _proposal_context
+    from app.core import proposal_agent as agent
+
+    captured = []
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            captured.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+            answer = {"selected_rule_ids": ["sample"], "summary": "Предложение HTTP-имитатора по скважине.",
+                      "reasoning": "CO₂ и обводнённость превышают пороги; требуется дополнительный контроль среды."}
+            body = json.dumps({"choices": [{"message": {"content": json.dumps(answer, ensure_ascii=False)}}]}).encode()
+            self.send_response(200); self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+        def log_message(self, *args):
+            pass
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True); thread.start()
+    try:
+        settings = replace(agent.settings, llm_api_url=f"http://127.0.0.1:{server.server_port}/v1", llm_model="isolated-simulator")
+        monkeypatch.setattr(agent, "settings", settings); monkeypatch.setattr(agent.llm, "settings", settings)
+        context = _proposal_context()
+        context["response_policy"] = evaluate(register(), [point()], now=NOW, mode="demo")
+        monkeypatch.setattr(agent, "build_context", lambda well: context)
+        monkeypatch.setattr(agent.db, "save_ai_proposal", lambda *args: None)
+        result = agent.generate("DEMO-002")
+        assert result["proposal_source"] == "llm_with_rules"
+        assert result["model"] == "isolated-simulator"
+        assert result["summary"].startswith("Предложение HTTP-имитатора")
+        payload = json.loads(captured[0]["messages"][1]["content"])
+        assert payload["скважина"] == "DEMO-002"
+        assert payload["инструкции реестра для формирования предложения"][0]["факты срабатывания"]
+    finally:
+        server.shutdown(); server.server_close(); thread.join(timeout=2)
