@@ -54,6 +54,7 @@ APP_NAME = "mai-demo"
 # describes the build.
 PROJECT_ITEMS = ["app", "dashboard", "config", "n8n", "examples/documents", "examples/co2",
                  "examples/response_rules", "outputs/response-rules-demo-2026-11-16",
+                 "outputs/response-rules-2026-11-16",
                  "scripts/import_response_rules.py", "scripts/check_response_rules.py", "docs/response-rules.md"]
 STANDALONE_ITEMS = ["__init__.py", "asgi.py", "envfile.py", "manage.py", "cli", "env.template",
                     "README.md"]
@@ -292,7 +293,11 @@ def validate_archive(archive: Path, info: dict) -> None:
                     "examples/co2/norsok-inputs.json", "app/core/source_catalog.py",
                     "app/core/recompute.py", "app/db/recompute.py", "dashboard/co2.js", "dashboard/sources.js",
                     "app/api/routes/sources.py", "standalone/cli/sources.py", "examples/generate_sample_data.py",
-                    "README-MODEL.md", "runtime/python.exe", "BUILD_INFO.json")
+                    "README-MODEL.md", "runtime/python.exe", "BUILD_INFO.json",
+                    "app/core/response_policy.py", "config/response_rules_demo.json", "config/response_rules.json",
+                    "scripts/import_response_rules.py", "docs/response-rules.md",
+                    "outputs/response-rules-demo-2026-11-16/response-rules.xlsx",
+                    "outputs/response-rules-2026-11-16/response-rules.xlsx")
         if package.testzip() or any(f"{APP_NAME}/{name}" not in package.namelist() for name in required):
             raise SystemExit("Archive is incomplete or corrupted")
         manifest = json.loads(package.read(f"{APP_NAME}/BUILD_INFO.json"))
