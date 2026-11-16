@@ -135,13 +135,16 @@ def exercise(page, base: str, data: Path, db):
     open_well()
     expect(page.locator("#aiBox")).to_contain_text("Загружаем")
     open_well("DEMO-002")
-    expect(page.locator("#aiBox")).to_contain_text("ИИ-агент не настроен")
+    expect(page.locator("#aiBox").get_by_role("button", name="Сформировать предложение", exact=True)).to_be_enabled()
     assert delayed
     with page.expect_response("**/api/v1/rating/wells/DEMO-001") as old_response:
         delayed[0].fulfill(status=500, content_type="application/json", body='{"detail":"QA: поздняя ошибка A"}')
     old_response.value.finished()
     expect(page.locator("#aiBox")).not_to_contain_text("QA: поздняя ошибка A")
     page.unroute("**/api/v1/rating/wells/DEMO-001")
+    page.locator("#aiBox").get_by_role("button", name="Сформировать предложение", exact=True).click()
+    expect(page.locator("#aiBox")).to_contain_text("Тестовый реестр", timeout=30000)
+    expect(page.locator("#aiBox")).to_contain_text("Сформировано")
     page.get_by_role("button", name="Закрыть карточку", exact=True).click()
 
     dars = page.locator("#sourceCards > .box").filter(has=page.get_by_role("heading", name="ДАРС", exact=True))

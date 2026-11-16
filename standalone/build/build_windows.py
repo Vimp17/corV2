@@ -52,7 +52,9 @@ APP_NAME = "mai-demo"
 # Project files copied into the build (directories are copied without caches and tests).
 # No scripts/ (sample data for tests and demos) and no README.md of the repository: README-DEMO.md
 # describes the build.
-PROJECT_ITEMS = ["app", "dashboard", "config", "n8n", "examples/documents", "examples/co2"]
+PROJECT_ITEMS = ["app", "dashboard", "config", "n8n", "examples/documents", "examples/co2",
+                 "examples/response_rules", "outputs/response-rules-demo-2026-11-16",
+                 "scripts/import_response_rules.py", "scripts/check_response_rules.py", "docs/response-rules.md"]
 STANDALONE_ITEMS = ["__init__.py", "asgi.py", "envfile.py", "manage.py", "cli", "env.template",
                     "README.md"]
 TEXT_CRLF = {".cmd", ".md", ".txt", ".template"}

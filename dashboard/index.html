@@ -1583,7 +1583,9 @@
       const button = el('button', { class: p ? 'btn secondary small' : 'btn small', type: 'button', disabled: !detail.ai_agent_configured,
         text: p ? 'Сформировать заново' : 'Сформировать предложение', onClick: (event) => generateProposal(detail.well_id, event.currentTarget) });
       const parts = [el('div', { style: 'display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:space-between' }, el('h3', { text: 'Предложение ИИ-агента' }), button)];
-      if (!detail.ai_agent_configured) parts.push(el('div', { class: 'hint warn', text: 'ИИ-агент не настроен: задайте MAI_LLM_API_URL и MAI_LLM_MODEL.' }));
+      if (p?.rule_evaluation) parts.push(el('div', { class: p.rule_evaluation.mode === 'demo' ? 'hint warn' : 'hint',
+        text: `${p.rule_evaluation.mode === 'demo' ? 'Тестовый реестр — пороги требуют проверки инженером' : 'Согласованный реестр мероприятий'} · редакция ${p.rule_evaluation.revision}` }));
+      if (!detail.ai_agent_configured) parts.push(el('div', { class: 'hint warn', text: 'Режим реестра мероприятий не настроен. Обратитесь к администратору.' }));
       if (!p) {
         parts.push(el('div', { class: 'hint', text: 'Агент учтёт рейтинг, прогнозы НТЦ и мат. модели, сработавшие правила, акты, химию, защиту, документы, расписание бригад и примеры мер реагирования. Чего нет в данных — укажет отдельно.' }));
         box.replaceChildren(...parts);
