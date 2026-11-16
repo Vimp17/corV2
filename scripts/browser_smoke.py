@@ -63,12 +63,20 @@ def exercise(page, base: str, data: Path, db):
     expect(page.locator("#dataState")).to_contain_text("14 из 14", timeout=90000)
     expect(page.locator("#rows .wellbtn")).to_have_count(13)
     page.screenshot(path=ARTIFACTS / "rating-1280.png")
+    assert page.locator('#tiles').bounding_box()['y'] < page.locator('.alerts').bounding_box()['y']
+    for selector in ('#fieldFilter','#tableView'):
+        assert page.locator(selector).evaluate("el => getComputedStyle(el).backgroundPositionX") == 'calc(100% - 12px)'
+    expect(page.locator('#pprSub')).to_contain_text('критичность')
+    expect(page.locator('#sec-ppr .legend')).to_contain_text('Высокая — ППР')
+
 
     def open_well(well="DEMO-001"):
         page.locator("#rows").get_by_role("button", name=f"Открыть карточку скважины {well}", exact=True).click()
         expect(page.locator("#cardTitle")).to_have_text(f"Скважина {well}")
 
     open_well()
+    models = page.locator('#cardBody .model-block')
+    assert models.nth(1).bounding_box()['y'] - (models.nth(0).bounding_box()['y'] + models.nth(0).bounding_box()['height']) >= 14
     co2 = page.locator('#wellCo2 details.rules-box')
     expect(co2).not_to_have_attribute('open', '')
     expect(co2.locator('summary')).to_contain_text('мм/год')
