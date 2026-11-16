@@ -12,7 +12,7 @@ class Element {
   dispatch(event) { return Promise.all((this.listeners[event]||[]).map(fn=>fn({preventDefault(){}}))); }
 }
 function descendants(node) { return [node,...node.children.flatMap(n=>typeof n==='object'?descendants(n):[])]; }
-function control(root,label) { const node=descendants(root).find(n=>n.tag==='label' && String(n.children[0]).startsWith(label)); return node.children.find(n=>n.tag==='input'); }
+function control(root,label) { const node=descendants(root).find(n=>n.tag==='label' && n.children.some(x=>typeof x==='string'?x.startsWith(label):x?.textContent?.startsWith(label))); return node.children.find(n=>n.tag==='input'); }
 function create() {
   const roots={wellCo2:new Element(),co2Feature:new Element()};
   const context={Node:Element,document:{createElement:t=>new Element(t),createTextNode:t=>String(t)},
@@ -39,7 +39,7 @@ test('pending CO2 request survives redraw and cannot replace another well histor
   const {context:c,root}=create(); c.renderCo2(detail('A'));
   let finish; const calls=[]; c.api=async(path)=>{calls.push(path); return new Promise(resolve=>{finish=resolve;});};
   const form=descendants(root).find(n=>n.tag==='form');
-  control(root,'Температура').value='60'; control(root,'Абсолютное').value='50';
+  fillNorsok(root);
   const request=form.dispatch('submit');
   c.renderCo2(detail('A')); assert.equal(descendants(root).find(n=>n.tag==='button').disabled,true);
   c.state.selected='B'; c.renderCo2(detail('B'));
@@ -60,7 +60,7 @@ test('measured composition asks for one value and validates it before sending',a
 });
 test('global result opens the submitted well after refresh even if the form changes',async()=>{
   const {context:c}=create(); const form=c.co2Form();
-  control(form,'Скважина').value='QA-A'; control(form,'Температура').value='60'; control(form,'Абсолютное').value='50';
+  control(form,'Скважина').value='QA-A'; fillNorsok(form);
   let finish; c.api=async()=>new Promise(resolve=>{finish=resolve;});
   let refreshed=false,opened; c.refresh=async()=>{refreshed=true;};c.openWell=id=>{assert.equal(refreshed,true);opened=id;};
   const pending=form.dispatch('submit'); control(form,'Скважина').value='QA-B';
@@ -72,16 +72,40 @@ test('global result opens the submitted well after refresh even if the form chan
 test('card calculation uses its fixed well without asking for an ID',async()=>{
   const {context:c}=create();const form=c.co2Form('A');
   assert.equal(descendants(form).find(n=>n.tag==='input' && n['aria-label']==='Скважина'),undefined);
-  control(form,'Температура').value='60';control(form,'Абсолютное').value='50';
+  fillNorsok(form);
   let sent;c.api=async(path,options)=>{if(options){sent=JSON.parse(options.body);return {assessment:{},duplicates:0};}return {assessments:[]};};
   await form.dispatch('submit');assert.equal(sent.well_id,'A');
 });
 test('source metadata is optional and blank values use the manual-entry default',async()=>{
   const {context:c}=create();const form=c.co2Form('A');
-  control(form,'Температура').value='60';control(form,'Абсолютное').value='50';
+  fillNorsok(form);
   control(form,'Источник входных').value='';
   let sent;c.api=async(path,options)=>{if(options){sent=JSON.parse(options.body);return {assessment:{},duplicates:0};}return {assessments:[]};};
   await form.dispatch('submit');assert.equal(sent.source,'Ручной ввод');assert.equal(sent.state_at,null);
   control(form,'Источник входных').value='Протокол лаборатории';
   await form.dispatch('submit');assert.equal(sent.source,'Протокол лаборатории');
 });
+
+test('NORSOK never submits missing pH, shear or applicability confirmations',async()=>{
+  const {context:c}=create();const form=c.co2Form('A');
+  control(form,'Температура').value='60';control(form,'Абсолютное').value='50';
+  control(form,'Доля CO₂').value='1.5';
+  let calls=0;c.api=async()=>{calls++;};await form.dispatch('submit');
+  assert.equal(calls,0);
+  assert.match(descendants(form).map(n=>n.textContent||'').join(' '),/pH/);
+});
+test('NORSOK submits measured pH and shear with explicit material and water contact',async()=>{
+  const {context:c}=create();const form=c.co2Form('A');
+  fillNorsok(form);
+  let sent;c.api=async(path,options)=>{if(options){sent=JSON.parse(options.body);return {assessment:{},duplicates:0};}return {assessments:[]};};
+  await form.dispatch('submit');
+  assert.equal(sent.model_id,'active');assert.equal(sent.ph_in_situ,4);
+  assert.equal(sent.wall_shear_pa,19);assert.equal(sent.material,'carbon_steel');
+  assert.equal(sent.water_wetting,'water_wet');assert.equal(sent.water_cut_pct,null);
+});
+function fillNorsok(form){
+  control(form,'Температура').value='60';control(form,'Абсолютное').value='50';
+  control(form,'Доля CO₂').value='1.5';control(form,'pH при рабочих').value='4';
+  control(form,'Касательное').value='19';control(form,'Подтверждаю углеродистую').checked=true;
+  control(form,'Подтверждаю контакт').checked=true;
+}

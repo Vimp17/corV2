@@ -348,6 +348,9 @@
     .source-grid .box { margin:0 }
     .source-grid input, #accessSettings input, .co2-form .field input { max-width:100%; padding:6px 8px; border:1px solid #C9D2DC; border-radius:4px }
     .co2-form input[type=checkbox], .co2-form input[type=radio] { width:auto }
+    .co2-form .co2-confirm { display:grid; grid-template-columns:18px 1fr; align-items:start; column-gap:8px }
+    .co2-form .co2-confirm .hint, .co2-form .co2-confirm .field-error { grid-column:2 }
+    .co2-form .co2-confirm input { width:18px; height:18px; min-height:0; margin:1px 0 0; padding:0 }
     .co2-form .field-error { color:var(--repair); font-size:13px; display:block }
     .source-grid .btn { margin-top:8px }
     .source-grid code, .box code { overflow-wrap:anywhere }
@@ -634,6 +637,7 @@
     const keyHint = (error, tail = 'введите ключ в разделе «Источники и настройки».') => (error.status === 401 ? ` Если защита API включена, ${tail}` : '');
     function fieldError(item) {
       const names = { well_id: 'Скважина', temperature_c: 'Температура', pressure_abs_bar: 'Абсолютное давление',
+        ph_in_situ: 'pH при рабочих условиях', wall_shear_pa: 'Касательное напряжение', water_cut_pct: 'Обводнённость', h2s_partial_bar: 'Парциальное давление H₂S', organic_acids_ppm: 'Органические кислоты', material: 'Материал', water_wetting: 'Контакт воды со стенкой', model_id: 'Методика',
         co2_mole_fractions: 'Доля CO₂', composition_source: 'Источник состава', source: 'Источник значений', state_at: 'Дата состояния', plan_date: 'Плановая дата', operator_comment: 'Комментарий' };
       const key = (item.loc || []).find(part => names[part]);
       const reasons = { missing: 'обязательное поле', float_parsing: 'введите число', finite_number: 'введите конечное число',

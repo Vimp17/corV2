@@ -149,9 +149,12 @@ def for_model(context: dict, known_gaps: list[str], examples: list[dict], act_da
             if context.get("nkt_registry") else None),
         "CO₂-коррозия (дополнительный контекст, не вероятность отказа)": [{
             "режим": "пересчёт" if a["calculation_mode"] == "calculated" else "внешний расчёт v4",
-            "версия": a["model_version"], "дата состояния": a.get("state_at"),
+            "версия": a["model_version"], "методика": a.get("model_title"),
+            "конфигурация": a.get("configuration_hash"), "дата состояния": a.get("state_at"),
+            "исходные параметры расчёта": a.get("inputs"),
             "синтетические данные": a["synthetic"], "ограничения": a["quality_flags"],
             "сценарии": [{"доля CO₂": r["co2_mole_fraction"], "парциальное давление, бар": r["pco2_bar"],
+                          "фугитивность CO₂, бар": r.get("fugacity_bar"),
                           "скорость, мм/год": r["rate_mm_year"]} for r in a["scenarios"]],
             "внешние результаты v4 (V — мм/год; S — баллы, не состав газа)": a["imported_results"],
         } for a in context.get("co2_assessments") or []],

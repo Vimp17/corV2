@@ -236,6 +236,7 @@ def copy_project(root: Path) -> None:
             shutil.copy2(source, target)
     shutil.copy2(SRC / "standalone" / "mai.cmd", root / "mai.cmd")
     shutil.copy2(SRC / "standalone" / "README.md", root / "README-DEMO.md")
+    shutil.copy2(SRC / "docs" / "norsok-mvp.md", root / "README-MODEL.md")
     shutil.copy2(SRC / "scripts" / "build_sample_data.py", root / "examples" / "generate_sample_data.py")
     for folder in ("data/documents", "inbox", "logs", "run"):
         (root / folder).mkdir(parents=True, exist_ok=True)
@@ -284,10 +285,11 @@ def validate_archive(archive: Path, info: dict) -> None:
     if digest != archive.with_suffix(".zip.sha256").read_text().split()[0] or info.get("dll_problems"):
         raise SystemExit("Invalid archive checksum or unresolved DLL dependencies")
     with zipfile.ZipFile(archive) as package:
-        required = ("app/main.py", "app/core/co2_corrosion.py", "app/core/source_catalog.py",
+        required = ("app/main.py", "app/core/co2_corrosion.py", "app/core/norsok.py", "app/core/co2_inputs.py",
+                    "config/co2_model.json", "examples/co2/norsok-inputs.json", "app/core/source_catalog.py",
                     "app/core/recompute.py", "app/db/recompute.py", "dashboard/co2.js", "dashboard/sources.js",
                     "app/api/routes/sources.py", "standalone/cli/sources.py", "examples/generate_sample_data.py",
-                    "runtime/python.exe", "BUILD_INFO.json")
+                    "README-MODEL.md", "runtime/python.exe", "BUILD_INFO.json")
         if package.testzip() or any(f"{APP_NAME}/{name}" not in package.namelist() for name in required):
             raise SystemExit("Archive is incomplete or corrupted")
         manifest = json.loads(package.read(f"{APP_NAME}/BUILD_INFO.json"))

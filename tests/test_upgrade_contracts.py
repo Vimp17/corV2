@@ -96,8 +96,8 @@ def test_co2_bulk_import_uses_bounded_sql_round_trips(client):
     engine = db.engine()
     event.listen(engine, 'before_cursor_execute', capture)
     try:
-        result = save_assessments([calculate(CO2Calculation(well_id=f'BULK-{i}', temperature_c=60,
-                                  pressure_abs_bar=50)) for i in range(20)], create_wells=True)
+        result = save_assessments([calculate(CO2Calculation(well_id=f'BULK-{i}', model_id='co2-v4-base-1', temperature_c=60,
+                                  pressure_abs_bar=50, co2_mole_fractions=[.005, .015, .03])) for i in range(20)], create_wells=True)
     finally:
         event.remove(engine, 'before_cursor_execute', capture)
     assert result['stored'] == 20

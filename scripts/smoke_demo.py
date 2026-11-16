@@ -17,12 +17,24 @@ from app.core.co2_corrosion import calculate
 from app.core.co2_import import parse
 from app.schemas import CO2Calculation
 
-result = calculate(CO2Calculation(well_id='SMOKE', temperature_c=60, pressure_abs_bar=50))
+result = calculate(CO2Calculation(well_id='SMOKE', model_id='co2-v4-base-1', temperature_c=60,
+                                pressure_abs_bar=50, co2_mole_fractions=[.005, .015, .03]))
 assert len(result['scenarios']) == 3
 assert result['scenarios'][1]['pco2_bar'] == .75
 fixture = Path('examples/co2/v4-example.json')
 assert parse(fixture.read_bytes(), fixture.name, True)['valid_rows'] == 1
 assert '/api/v1/co2/calculate' in app.openapi()['paths']
+from app.core.co2_inputs import parse as parse_inputs
+from app.core.norsok import load_model, point_rate
+import math
+assert math.isclose(point_rate(60, 1, 19, 4, load_model()), 11.858616, rel_tol=1e-10)
+result = calculate(CO2Calculation(well_id='NORSOK-SMOKE', temperature_c=60, pressure_abs_bar=100,
+    co2_mole_fractions=[.01], composition_source='measured', ph_in_situ=4, wall_shear_pa=19,
+    material='carbon_steel', water_wetting='water_wet'))
+assert result['model_snapshot']['model_id'] == 'norsok-m506-2005'
+assert result['configuration_hash']
+assert parse_inputs(Path('examples/co2/norsok-inputs.json').read_bytes(), 'norsok-inputs.json', True)['valid_rows'] == 1
+assert '/api/v1/co2/calculate-file' in app.openapi()['paths']
 assert '/api/v1/sources/{profile_id}/check' in app.openapi()['paths']
 assert (base/'dashboard/sources.js').is_file()
 print(json.dumps({'status':'ok', 'model':result['model_version'], 'scenarios':result['scenarios']}))
