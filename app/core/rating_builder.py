@@ -23,7 +23,7 @@ from zoneinfo import ZoneInfo
 from app import db
 from app.config import settings
 from app.core import math_model, rating, readiness
-from app.core.source_catalog import SourceCatalog, normalize_label as _norm
+from app.core.source_catalog import SourceCatalog
 from app.core.features import Features, build_features
 from app.core.indicators import INDICATORS, MAIN, fmt
 from app.core.normalization import RANGE_LIMITS, normalize_records

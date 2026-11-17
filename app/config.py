@@ -148,8 +148,6 @@ class Settings:
     ocr_model: str = os.getenv("MAI_OCR_MODEL", "").strip()
     ocr_timeout_seconds: float = _positive_float("MAI_OCR_TIMEOUT_SECONDS", "120", 900)
     ocr_max_side_px: int = _int_env("MAI_OCR_MAX_SIDE_PX", "2000", 500, 6000)
-    # Examples of response measures given to the AI agent when it drafts a well proposal.
-    response_examples_path: Path = _project_path("MAI_RESPONSE_EXAMPLES_PATH", "./config/response_examples.json")
     response_rules_mode: str = os.getenv("MAI_RESPONSE_RULES_MODE", "demo").strip().lower()
     response_rules_path: Path = _project_path("MAI_RESPONSE_RULES_PATH", "./config/response_rules_demo.json"
         if os.getenv("MAI_RESPONSE_RULES_MODE", "demo").strip().lower() == "demo" else "./config/response_rules.json")

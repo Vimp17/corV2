@@ -65,7 +65,7 @@ flowchart LR
 | `app/core/` | `rating_builder` (значения рейтинга из данных), `rating` (индекс, мероприятие, срок), `rules` (правила НТЦ), `math_model` (математическая модель), `indicators` (названия, единицы и допустимые диапазоны показателей, формат чисел), `features`, `normalization`, `readiness`, `monitor_runner`, `proposal_agent` и `proposal_language` (ИИ-агент), `excel_ingestion` и `excel_cells` (чтение ячеек Excel для всех читателей таблиц), `source_connectors`, `llm` (клиент LiteLLM) |
 | `app/core/documents/` | Конвейер документов: `intake`, `text`, `extract`, `load`, `pipeline`, `excel_reader`, `nkt_registry` |
 | `app/db/` | SQL Server: `schema` (таблицы), `base` (подключение, проверка таблиц при старте, блокировки, MERGE), `sources` (данные источников), `rating` (рейтинг, задания дневного цикла), `documents` |
-| `config/` | `source_profiles.json` (колонки источников), `document_types.json` (типы документов), `response_examples.json` (примеры решений инженеров для ИИ) |
+| `config/` | `source_profiles.json` (колонки источников), `document_types.json` (типы документов), `response_rules*.json` (реестр мероприятий для ИИ) |
 | `dashboard/index.html` | Дашборд (один файл, без сборки) |
 | `n8n/` | Ежедневный цикл и форма оператора |
 | `standalone/` | Сборка для Windows Server: `mai.cmd` → `manage.py`, команды управления (`cli/`: мастер настройки, процесс API, проверка, n8n, очистка, диагностика), сборка архива |
@@ -252,7 +252,7 @@ MAI_OCR_MODEL=ocr_модель                       # принимает изо
 | Достаточность данных | `MAI_MIN_TELEMETRY_RECORDS` (8), `MAI_MIN_TREND_OBSERVATIONS` (8), `MAI_TREND_WINDOW_DAYS` (28), `MAI_MIN_CURRENT_SIGNALS` (2), `MAI_MAX_FORWARD_FILL_DAYS` (7), `MAI_MAX_TELEMETRY_AGE_HOURS` (48), `MAI_MAX_FUTURE_SKEW_HOURS` (24) |
 | Рейтинг | `MAI_RATING_COMBINE` (max), `MAI_MATH_MODEL_PATH` (config/math_model.json), `MAI_RATING_HORIZON_DAYS` (90), `MAI_RATING_REPAIR_FROM` (80), `MAI_RATING_UD_FROM` (40), `MAI_RATING_UD_TO` (60), `MAI_RATING_DAYS_REPAIR` (14), `MAI_RATING_DAYS_ENGINEER` (30), `MAI_RATING_DAYS_UD` (45), `MAI_RATING_SAMPLING_DAYS` (30), `MAI_RATING_ACT_DAYS` (365), `MAI_RATING_RECOMPUTE_SYNC_LIMIT` (50) |
 | Защита | `MAI_RATING_PROTECTION_MODE` (adjust), `MAI_RATING_PROTECTION_FACTOR` (0,5), `MAI_RATING_PROTECTION_MIN_INHIBITOR` (0,80), `MAI_RATING_PROTECTION_MAX_INJECTION_DEV` (15), `MAI_RATING_PROTECTION_MAX_RATE` (0,1) |
-| LiteLLM | `MAI_LLM_API_URL`, `MAI_LLM_API_KEY`, `MAI_LLM_MODEL`, `MAI_LLM_TIMEOUT_SECONDS` (45), `MAI_LLM_MAX_RETRIES` (1), `MAI_RESPONSE_EXAMPLES_PATH` |
+| LiteLLM | `MAI_LLM_API_URL`, `MAI_LLM_API_KEY`, `MAI_LLM_MODEL`, `MAI_LLM_TIMEOUT_SECONDS` (45), `MAI_LLM_MAX_RETRIES` (1) |
 | OCR | `MAI_OCR_MODEL`, `MAI_OCR_API_URL`, `MAI_OCR_API_KEY`, `MAI_OCR_TIMEOUT_SECONDS` (120), `MAI_OCR_MAX_SIDE_PX` (2000) |
 | Документы | `MAI_DOCS_STORAGE_DIR` (./data/documents), `MAI_DOCS_INBOX_DIR`, `MAI_DOCS_INBOX_SCAN_SECONDS` (300), `MAI_DOCS_WORKER` (true), `MAI_DOCS_MAX_ATTEMPTS` (3), `MAI_DOCS_RETRY_MINUTES` (5), `MAI_DOCS_MAX_BYTES` (25 МБ), `MAI_DOCS_MAX_PAGES` (30), `MAI_DOCS_MIN_PAGE_CHARS` (40), `MAI_DOCS_MAX_TEXT_CHARS` (60 000), `MAI_DOCS_CHUNK_CHARS` (6000), `MAI_DOCS_LLM_MODEL`, `MAI_DOCS_TYPES_PATH` |
 

@@ -1,6 +1,6 @@
 """Append-only CO₂ results with deterministic identities and transactional imports."""
 from datetime import datetime, timezone
-from sqlalchemy import select, func
+from sqlalchemy import select
 from app.core.co2_corrosion import digest
 from app.db.base import engine, _merge, _queue_writes, _retry_deadlocks
 from app.db.schema import (co2_assessments, well_rating, telemetry, ingestion_batches,
@@ -74,14 +74,6 @@ def history(well_id: str, limit: int = 20) -> list[dict]:
     with engine().connect() as conn:
         return list(conn.execute(select(co2_assessments.c.result_json).where(co2_assessments.c.well_id == well_id)
             .order_by(co2_assessments.c.created_at.desc(), co2_assessments.c.assessment_id).limit(limit)).scalars())
-
-
-def latest_by_well() -> dict[str, dict]:
-    ranked = select(co2_assessments.c.result_json, co2_assessments.c.well_id,
-        func.row_number().over(partition_by=co2_assessments.c.well_id,
-            order_by=(co2_assessments.c.created_at.desc(), co2_assessments.c.assessment_id)).label("position")).subquery()
-    with engine().connect() as conn:
-        return {row.well_id: row.result_json for row in conn.execute(select(ranked).where(ranked.c.position == 1))}
 
 
 def by_id(assessment_id: str) -> dict | None:

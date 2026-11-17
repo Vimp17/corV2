@@ -49,7 +49,6 @@ print(json.dumps({'status':'ok', 'model':result['model_version'], 'scenarios':re
 import socket
 import subprocess
 import tempfile
-import hashlib
 from standalone.cli import service
 with tempfile.TemporaryDirectory(prefix='mai-cli-smoke-') as folder:
     root = Path(folder)

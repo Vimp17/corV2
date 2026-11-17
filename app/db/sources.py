@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Iterable
 
-from sqlalchemy import delete, func, literal_column, select, union
+from sqlalchemy import delete, func, select, union
 
 from app.config import settings
 from app.db.base import _merge, _queue_writes, _retry_deadlocks, engine

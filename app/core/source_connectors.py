@@ -178,28 +178,29 @@ def _prepare_json(answer: Any, profile: dict, source_id: str) -> dict:
     raise ExcelImportError("Неизвестный тип данных адаптера.")
 
 
-def _store_json(answer: Any, profile_id: str, profile: dict, source_id: str, well_id: str) -> list[dict]:
+def _store_answer(answer: Any, profile_id: str, profile: dict, source_id: str, well_id: str,
+                  origin: str) -> list[dict]:
     if isinstance(answer, bytes):
-        return ingest_excel_bytes(answer, f"{profile_id}.xlsx", profile_id, well_id, origin="adapter", require_well_match=True)["source_statuses"]
+        return ingest_excel_bytes(answer, f"{profile_id}.xlsx", profile_id, well_id,
+                                  origin=origin, require_well_match=True)["source_statuses"]
     prepared = _prepare_json(answer, profile, source_id)
     if "crews" in prepared:
-        return save_crews(prepared["crews"], source_id, [well_id], origin="adapter")
+        return save_crews(prepared["crews"], source_id, [well_id], origin=origin)
     batch = _batch_id(source_id, well_id, hashlib.sha256(json.dumps(answer, sort_keys=True, default=str).encode()).hexdigest())
     if "records" in prepared:
         db.save_batch(well_id, batch, prepared["records"])
     else:
         db.save_history(well_id, batch, prepared["work_history"], prepared["failure_history"], source_id=source_id)
-    return [db.record_source_status(source_id, well_id, "ok", None, sum(map(len, prepared.values())), origin="adapter")]
+    return [db.record_source_status(source_id, well_id, "ok", None, sum(map(len, prepared.values())), origin=origin)]
 
 
 def _from_adapter(well_id: str, profile_id: str, profile: dict, source_id: str) -> list[dict]:
     name = profile["adapter"]
-    adapter = _load_adapters().get(name)
-    if adapter is None:
+    if name not in _load_adapters():
         return [db.record_source_status(source_id, well_id, "not_configured", f"Source adapter '{name}' is not "
                                         f"installed. Register it in {SOURCE_ENTRY_POINT_GROUP}.", 0, origin="adapter")]
     try:
-        return _store_json(adapter.fetch_for_well(well_id, profile), profile_id, profile, source_id, well_id)
+        return _store_answer(_fetch_source(well_id, profile, source_id), profile_id, profile, source_id, well_id, "adapter")
     except Exception as exc:
         logger.warning("Source adapter failed source=%s well_id=%s type=%s", source_id, well_id, type(exc).__name__)
         return [db.record_source_status(source_id, well_id, "error", f"Source adapter failed ({type(exc).__name__}).",
@@ -263,23 +264,19 @@ def _from_url(well_id: str, profile_id: str, profile: dict, source_id: str) -> l
     def status(value: str, message: str | None = None, count: int | None = None) -> list[dict]:
         return [db.record_source_status(source_id, well_id, value, message, count, origin="api_refresh")]
 
-    endpoint = source_env(source_id, "URL")
-    if not endpoint:
+    if not source_env(source_id, "URL"):
         return status("not_configured", f"Автоматический источник не настроен. Доступна загрузка файлов; подключение — mai.cmd sources configure ({source_setting(source_id, 'URL')}).", 0)
-    if problem := source_url_problem(endpoint):
-        return status("error", problem)
-    schedule = profile.get("kind") == "json_schedule"
     try:
-        content = _download(endpoint, well_id, _source_headers(profile, source_id))
-        if content is None:
+        answer = _fetch_source(well_id, profile, source_id)
+        if answer is None:
             return status("unavailable", "HTTP 404: выгрузка для этой скважины не найдена. Проверьте ID и URL источника.", 0)
-        if not content:
+        if not answer:
             return status("unavailable", "Источник вернул пустой ответ. Проверьте ID скважины и период выгрузки.", 0)
-        if schedule:
-            return save_crews(_strict_crews(json.loads(content), source_id), source_id, [well_id], origin="api_refresh")
-        _expect_workbook(content)
-        return ingest_excel_bytes(content, f"{source_id.lower()}.xlsx", profile_id, well_id,
-                                  origin="api_refresh", require_well_match=True)["source_statuses"]
+        if profile.get("kind") == "json_schedule":
+            answer = json.loads(answer)
+        else:
+            _expect_workbook(answer)
+        return _store_answer(answer, profile_id, profile, source_id, well_id, "api_refresh")
     except ExcelImportError as exc:
         return status("error", str(exc)[:2000])
     except (ValueError, ValidationError, requests.RequestException) as exc:
@@ -330,6 +327,21 @@ def _source_headers(profile: dict, source_id: str) -> dict:
     return headers
 
 
+def _fetch_source(well_id: str, profile: dict, source_id: str):
+    """Read the same response for diagnostics and import; never write data or statuses."""
+    if profile.get("adapter"):
+        adapter = _load_adapters().get(profile["adapter"])
+        if adapter is None:
+            raise ExcelImportError("Адаптер источника не установлен. Установите согласованный адаптер в сборку.")
+        return adapter.fetch_for_well(well_id, profile)
+    endpoint = source_env(source_id, "URL")
+    if not endpoint:
+        raise ExcelImportError("Автоматический источник не настроен: используется загрузка файлов. Адрес задаётся через mai.cmd sources configure.")
+    if problem := source_url_problem(endpoint):
+        raise ExcelImportError(problem)
+    return _download(endpoint, well_id, _source_headers(profile, source_id))
+
+
 def check_source(profile_id: str, well_id: str) -> dict:
     """Fetch and validate one well without storing payloads, statuses or ratings."""
     profiles = load_profiles()
@@ -339,18 +351,8 @@ def check_source(profile_id: str, well_id: str) -> dict:
     source_id = str(profile.get("source_id", profile_id)).upper()
     report = {"profile_id": profile_id, "source_id": source_id, "record_count": 0, "source_columns": {}}
     try:
-        if profile.get("adapter"):
-            adapter = _load_adapters().get(profile["adapter"])
-            if adapter is None:
-                raise ExcelImportError("Адаптер источника не установлен. Установите согласованный адаптер в сборку.")
-            answer = adapter.fetch_for_well(well_id, profile)
-        else:
-            endpoint = source_env(source_id, "URL")
-            if not endpoint:
-                raise ExcelImportError("Автоматический источник не настроен: используется загрузка файлов. Адрес задаётся через mai.cmd sources configure.")
-            if problem := source_url_problem(endpoint):
-                raise ExcelImportError(problem)
-            answer = _download(endpoint, well_id, _source_headers(profile, source_id))
+        answer = _fetch_source(well_id, profile, source_id)
+        if not profile.get("adapter"):
             if answer is None:
                 raise ExcelImportError("HTTP 404: выгрузка для этой скважины не найдена. Проверьте ID и адрес источника.")
             if not answer:

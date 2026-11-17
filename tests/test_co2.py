@@ -101,7 +101,7 @@ def test_api_history_idempotence_and_rating_isolation(client):
     assert after["co2_assessments"][0]["state_at"] is None
     from app.core.proposal_agent import build_context
     from app.core.proposal_language import for_model
-    payload = for_model(build_context(well), [], [], 365)
+    payload = for_model(build_context(well), [], 365)
     assert payload["CO₂-коррозия (дополнительный контекст, не вероятность отказа)"]
     export = client.get('/api/v1/rating/export.xlsx')
     assert export.status_code == 200

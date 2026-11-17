@@ -180,7 +180,7 @@ def test_ai_proposal_payload_is_russian():
     from app.core import proposal_language
 
     context = _proposal_context()
-    payload = proposal_language.for_model(context, proposal_language.field_gaps(context, 365), [], 365)
+    payload = proposal_language.for_model(context, proposal_language.field_gaps(context, 365), 365)
     text = json.dumps(payload, ensure_ascii=False)
     # Keys and service values are Russian: Latin is left only in identifiers and formulas.
     latin = set(re.findall(r"[A-Za-z_]{3,}", text)) - {"DEMO", "null", "true", "false"}   # JSON syntax

@@ -58,7 +58,6 @@ PROJECT_ITEMS = ["app", "dashboard", "config", "n8n", "examples/documents", "exa
                  "scripts/import_response_rules.py", "scripts/check_response_rules.py", "docs/response-rules.md"]
 STANDALONE_ITEMS = ["__init__.py", "asgi.py", "envfile.py", "manage.py", "cli", "env.template",
                     "README.md"]
-TEXT_CRLF = {".cmd", ".md", ".txt", ".template"}
 # DLLs every supported Windows (Server 2016 and later) has: system libraries and the Universal CRT.
 SYSTEM_DLLS = {
     "kernel32", "kernelbase", "user32", "gdi32", "gdiplus", "advapi32", "shell32", "ole32", "oleaut32", "ws2_32",

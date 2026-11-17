@@ -15,8 +15,6 @@ from app.core import llm, proposal_language, rating, response_policy
 from app.core.response_rules import load_rulebook
 from app.core.indicators import INDICATORS, MAIN
 
-MEASURE_CODES = ("ППР", "РИ", "УДР", "—")
-
 SYSTEM_PROMPT = (
     "Ты — инженер-технолог по защите скважинного оборудования от коррозии. По данным одной скважины "
     "подготовь предложение по мерам реагирования. Ответ — только JSON без пояснений.\n"
@@ -25,9 +23,9 @@ SYSTEM_PROMPT = (
     "Не используй английские слова и названия полей или ключей из входных данных. Латиница допустима "
     "только в химических формулах и обозначениях (CO₂, H₂S, pH), идентификаторах правил и номерах скважин, бригад, документов.\n"
     "2. Опирайся только на переданные данные и не додумывай значения.\n"
-    "3. measure — один код: ППР (плановый комплекс по ремонту, включение в ЭРА ремонта), РИ (решение "
-    "инженера), УДР (ударная дозировка реагента), — (мероприятия не требуются). По умолчанию бери код "
-    "мероприятия рейтинга; не меняй его.\n"
+    "3. Учитывай мероприятие рейтинга: ППР (плановый комплекс по ремонту, включение в ЭРА ремонта), "
+    "РИ (решение инженера), УДР (ударная дозировка реагента), — (мероприятия не требуются). "
+    "Код мероприятия задаёт сервер; не меняй его.\n"
     "4. Бригаду предлагай только из списка «бригады» со статусом «свободна» и свободную до крайнего "
     "срока; иначе crew: null.\n"
     "5. deadline — дата ГГГГ-ММ-ДД не позже крайнего срока рейтинга, если он задан.\n"
@@ -37,8 +35,7 @@ SYSTEM_PROMPT = (
     "Не добавляй неизвестные идентификаторы, назначения, дозы или сроки. В summary и reasoning сформулируй "
     "собственное предложение и обоснование для этой скважины; отличай гипотезы от фактов. "
     "Текст действия будет взят из реестра. Код мероприятия сохраняй из рейтинга.\n"
-    "7. based_on — какие данные использованы, с датами (например «акт разбора от 12.03.2026: язвенная "
-    "коррозия»).\n"
+    "7. В обосновании указывай использованные данные и их даты.\n"
     "8. Акты демонтажа и разбора — исторические данные: события из истории ремонтов, а не текущее "
     "состояние скважины. Так и пиши: «по акту разбора от …».\n"
     "9. «Другие показатели» и «реестр коррозии НКТ» в рейтинге не учитываются; используй их как "
@@ -49,9 +46,9 @@ SYSTEM_PROMPT = (
     "11. missing_data — только пробелы, которых нет в списке «уже известные пробелы в данных» (он будет "
     "добавлен к ответу сам): конкретные поля или значения, которых не хватает для решения, а не "
     "названия систем-источников. Если новых пробелов нет — пустой список.\n"
-    'Формат (ключи — как здесь, все значения — по-русски): {"measure": "...", "summary": "одно предложение", '
+    'Формат (ключи — как здесь, все значения — по-русски): {"summary": "одно предложение", '
     '"selected_rule_ids": ["идентификатор из реестра"], "deadline": "ГГГГ-ММ-ДД" или null, "crew": {"crew_id": "...", "date": "ГГГГ-ММ-ДД"} '
-    'или null, "reasoning": "...", "missing_data": ["..."], "based_on": ["..."]}'
+    'или null, "reasoning": "...", "missing_data": ["..."]}'
 )
 
 
@@ -204,28 +201,20 @@ def missing_from_context(context: dict) -> list[str]:
 
 def _check(answer: dict, context: dict, *, use_llm: bool = False) -> dict:
     rating_code = context["rating"].get("measure_code") or None
+    measure = rating_code or "—"
     notes: list[str] = []
-    measure = str(answer.get("measure") or "").strip()
-    policy = context.get("response_policy")
-    selected = []
-    if policy is not None and use_llm:
+    policy = context["response_policy"]
+    matched = policy["matched"]
+    if use_llm:
         ids = answer.get("selected_rule_ids")
-        allowed = {item["id"]: item for item in policy["matched"]}
+        allowed = {item["id"]: item for item in matched}
         if (not isinstance(ids, list) or any(not isinstance(key, str) for key in ids)
                 or len(set(ids)) != len(ids) or any(key not in allowed for key in ids)):
             raise ValueError("Модель должна выбрать уникальные идентификаторы только из сработавших правил")
         if any(not isinstance(answer.get(key), str) or not answer[key].strip() for key in ("summary", "reasoning")):
             raise ValueError("Модель должна сформулировать предложение и обоснование")
-        selected = [allowed[key] for key in ids]
-    if policy is not None:
-        measure = rating_code or "—"
-    if measure == "-":
-        measure = "—"
-    if measure not in MEASURE_CODES:
-        if measure:
-            notes.append(f"Модель предложила неизвестное мероприятие «{measure[:40]}» — взято мероприятие рейтинга.")
-        measure = rating_code or "—"
-    crew = answer.get("crew") if isinstance(answer.get("crew"), dict) else None
+        matched = [allowed[key] for key in ids]
+    crew = answer.get("crew") if use_llm and isinstance(answer.get("crew"), dict) else None
     known_crews = {str(item.get("crew_id")): item for item in context["crews"] if item.get("crew_id")}
     if crew is not None:
         crew_id = str(crew.get("crew_id") or "").strip()
@@ -253,46 +242,40 @@ def _check(answer: dict, context: dict, *, use_llm: bool = False) -> dict:
         deadline = rating_deadline
     deadline = deadline or rating_deadline
 
-    def strings(value, limit: int, size: int = 500) -> list[str]:
-        items = value if isinstance(value, list) else ([value] if value else [])
-        return [str(item).strip()[:size] for item in items if str(item or "").strip()][:limit]
-
     # Known gaps first; the model's items only when they are not a rephrasing of one of them.
-    missing = proposal_language.merge_gaps(missing_from_context(context),
-                                           [proposal_language.clean(item) for item in strings(answer.get("missing_data"), 15)])
     clean = proposal_language.clean
-    proposal = {
+    missing = missing_from_context(context)
+    if use_llm:
+        extra = answer.get("missing_data") or []
+        extra = extra if isinstance(extra, list) else [extra]
+        extra = [clean(str(item).strip()[:500]) for item in extra if str(item or "").strip()][:15]
+        missing = proposal_language.merge_gaps(missing, extra)
+    if not matched:
+        crew, deadline = None, None
+    if policy["mode"] == "demo":
+        notes.append("Тестовые правила и пороги. Мероприятия требуют проверки инженером.")
+    if not use_llm:
+        notes.append("Предварительный подбор по реестру без LLM; это не предложение языковой модели.")
+    return {
         "measure": measure,
         "rating_measure": rating_code,
-        "differs_from_rating": bool(rating_code) and measure != rating_code,
-        "summary": clean(str(answer.get("summary") or "").strip())[:600],
-        "actions": [clean(item) for item in strings(answer.get("actions"), 10)],
+        "differs_from_rating": False,
+        "summary": clean(answer["summary"].strip())[:600] if use_llm else (
+            f"Предварительно подобрано мероприятий: {len(matched)}." if matched else
+            "Подходящие мероприятия реестра не подтверждены; требуется рассмотрение инженером."),
+        "actions": list(dict.fromkeys(item["action"] for item in matched)),
         "deadline": deadline,
         "crew": crew,
-        "reasoning": clean(str(answer.get("reasoning") or "").strip())[:3000],
-        "missing_data": missing,
-        "based_on": [clean(item) for item in strings(answer.get("based_on"), 15, 300)],
+        "reasoning": clean(answer["reasoning"].strip())[:3000] if use_llm else
+                     "\n".join(dict.fromkeys(item["explanation"] for item in matched)),
+        "missing_data": proposal_language.merge_gaps(missing, policy["missing_data"]),
+        "based_on": list(dict.fromkeys(e["text"] for item in matched for e in item["evidence"] if e["result"] is True)),
         "checks": notes,
         "index": context["rating"].get("index"),
+        "rule_evaluation": policy,
+        "selected_rule_ids": [item["id"] for item in matched],
+        "proposal_source": "llm_with_rules" if use_llm else "rules_fallback",
     }
-    if policy is not None:
-        matched = selected if use_llm else policy["matched"]
-        proposal.update(
-            actions=list(dict.fromkeys(item["action"] for item in matched)),
-            summary=proposal["summary"] if use_llm else (f"Предварительно подобрано мероприятий: {len(matched)}." if matched else
-                     "Подходящие мероприятия реестра не подтверждены; требуется рассмотрение инженером."),
-            reasoning=proposal["reasoning"] if use_llm else "\n".join(dict.fromkeys(item["explanation"] for item in matched)),
-            based_on=list(dict.fromkeys(e["text"] for item in matched for e in item["evidence"] if e["result"] is True)),
-            missing_data=proposal_language.merge_gaps(proposal["missing_data"] if use_llm else missing_from_context(context), policy["missing_data"]),
-            rule_evaluation=policy, selected_rule_ids=[item["id"] for item in matched],
-            proposal_source="llm_with_rules" if use_llm else "rules_fallback")
-        if not matched:
-            proposal.update(crew=None, deadline=None)
-        if policy["mode"] == "demo":
-            notes.append("Тестовые правила и пороги. Мероприятия требуют проверки инженером.")
-        if not use_llm:
-            notes.append("Предварительный подбор по реестру без LLM; это не предложение языковой модели.")
-    return proposal
 
 
 def _date_or_none(value: Any) -> str | None:
@@ -308,8 +291,7 @@ def generate(well_id: str) -> dict:
     if context is None:
         raise LookupError(well_id)
     # The model reads the well in Russian (names and values) and answers in the same language.
-    payload = proposal_language.for_model(context, missing_from_context(context), [],
-                                          settings.rating_act_days)
+    payload = proposal_language.for_model(context, missing_from_context(context), settings.rating_act_days)
     payload["инструкции реестра для формирования предложения"] = [
         {"идентификатор": r["id"], "действие": r["action"], "пояснение": r["explanation"],
          "факты срабатывания": [e["text"] for e in r["evidence"] if e["result"] is True]}

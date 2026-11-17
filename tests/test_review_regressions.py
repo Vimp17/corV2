@@ -6,24 +6,29 @@ from app.core.proposal_language import merge_gaps
 
 
 def _context(crew):
+    from tests.test_response_policy import NOW, evaluate, point, register
+
     today = date(2026, 11, 11)
     return {"well_id": "REVIEW-1", "today": today.isoformat(),
             "rating": {"measure_code": "РИ", "index": 70,
                        "deadline": (today + timedelta(days=7)).isoformat(), "data_gaps": []},
-            "crews": [crew], "acts": [], "documents": []}
+            "crews": [crew], "acts": [], "documents": [],
+            "response_policy": evaluate(register(), [point()], now=NOW, mode="demo")}
 
 
 def test_review_reject_busy_crew_even_when_id_is_known():
     context = _context({"crew_id": "CREW-1", "status": "busy",
                         "available_from": "2026-11-01", "available_to": "2026-11-30"})
-    result = _check({"measure": "РИ", "crew": {"crew_id": "CREW-1", "date": "2026-11-12"}}, context)
+    result = _check({"selected_rule_ids": ["sample"], "summary": "Отбор проб", "reasoning": "Высокий CO₂",
+                     "crew": {"crew_id": "CREW-1", "date": "2026-11-12"}}, context, use_llm=True)
     assert result["crew"] is None, "Known ID does not make a busy crew available"
 
 
 def test_review_reject_crew_date_outside_window_and_rating_deadline():
     context = _context({"crew_id": "CREW-1", "status": "available",
                         "available_from": "2026-11-12", "available_to": "2026-11-15"})
-    result = _check({"measure": "РИ", "crew": {"crew_id": "CREW-1", "date": "2027-01-01"}}, context)
+    result = _check({"selected_rule_ids": ["sample"], "summary": "Отбор проб", "reasoning": "Высокий CO₂",
+                     "crew": {"crew_id": "CREW-1", "date": "2027-01-01"}}, context, use_llm=True)
     assert result["crew"] is None, "Crew date must fit both availability and the rating deadline"
 
 

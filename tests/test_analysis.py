@@ -127,10 +127,8 @@ def test_index_combines_the_two_forecasts(monkeypatch):
 
 
 def test_numbers_are_shown_the_russian_way():
-    from app.core.indicators import INDICATORS, fmt, plural
+    from app.core.indicators import INDICATORS, fmt
 
     assert [fmt(value) for value in (5.627, 23990, 0.012, -4.74e-05, 12.0, 0.35)] == [
         "5,63", "23 990", "0,012", "−0,0000474", "12", "0,35"]
     assert INDICATORS["chlorides_mg_l"].show(30000) == "30 000 мг/л"
-    assert [plural(count, "замер", "замера", "замеров") for count in (1, 3, 8, 11, 22)] == [
-        "замер", "замера", "замеров", "замеров", "замера"]

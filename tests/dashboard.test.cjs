@@ -12,16 +12,14 @@ class Element {
   dispatch(event) { return Promise.all((this.listeners[event]||[]).map(fn=>fn({preventDefault(){}}))); }
 }
 function descendants(node) { return [node,...node.children.flatMap(n=>typeof n==='object'?descendants(n):[])]; }
-function control(root,label) { const node=descendants(root).find(n=>n.tag==='label' && n.children.some(x=>typeof x==='string'?x.startsWith(label):x?.textContent?.startsWith(label))); return node.children.find(n=>n.tag==='input'); }
 function create() {
-  const roots={wellCo2:new Element(),co2Feature:new Element()};
+  const roots={wellCo2:new Element()};
   const context={Node:Element,document:{createElement:t=>new Element(t),createTextNode:t=>String(t)},
     $:id=>roots[id]||descendants(roots.wellCo2).find(n=>n.id===id), state:{selected:'A'},
-    ruNum:String, console, FormData:class{}, refresh:async()=>{}, api:async()=>({})};
+    ruNum:String, console};
   const html=fs.readFileSync('dashboard/index.html','utf8');
   const helper=html.slice(html.indexOf('    function el('),html.indexOf('    const headers ='));
-  const controller=fs.existsSync('dashboard/co2.js')?fs.readFileSync('dashboard/co2.js','utf8'):
-    html.slice(html.indexOf('    // CO₂ scenario'),html.indexOf('  </script>')).replace('    initCo2();','');
+  const controller=fs.readFileSync('dashboard/co2.js','utf8');
   vm.createContext(context); vm.runInContext(helper+controller,context);
   return {context,root:roots.wellCo2};
 }

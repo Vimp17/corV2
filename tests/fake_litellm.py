@@ -150,20 +150,14 @@ class FakeLiteLLM:
         if "инженер-технолог" in system:
             self.calls.append({"kind": "proposal", "well_id": payload["скважина"]})
             rating = payload["рейтинг"]
-            code = rating.get("код мероприятия")
             crew = next((item for item in payload["бригады"] if item.get("статус") == "свободна"), None)
-            example = next((item for item in payload["примеры решений инженеров"]
-                            if item.get("мероприятие") == code), None)
             return json.dumps({
-                "measure": code if code and code != "нет оценки" else "—",
                 "summary": f"Скважина {payload['скважина']}: {rating.get('мероприятие')}.",
-                "actions": (example or {}).get("действия") or ["Мониторинг в обычном режиме"],
                 "selected_rule_ids": [item["идентификатор"] for item in payload.get("инструкции реестра для формирования предложения", [])],
                 "deadline": rating.get("крайний срок"),
                 "crew": {"crew_id": crew["бригада"], "date": rating.get("крайний срок")} if crew else None,
                 "reasoning": f"Индекс {rating.get('индекс коррозии на НКТ (0–100)')}; категория {rating.get('категория фонда')}.",
                 "missing_data": [],
-                "based_on": [f"{act['вид']} {act['дата']}" for act in payload["акты из истории ремонтов"]][:5],
             }, ensure_ascii=False)
         return "{}"
 

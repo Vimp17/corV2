@@ -80,6 +80,75 @@ def _by_source(statuses: list[dict]) -> dict[str, dict]:
     return {row["source_id"]: row for row in statuses}
 
 
+@pytest.mark.parametrize("body,expected", [(b"null", "error"), (b"[]", "ok")])
+def test_http_schedule_null_is_invalid_but_empty_list_clears_crews(client, monkeypatch, body, expected):
+    from app import db
+    from app.core import source_connectors as sc
+
+    profile = sc.load_profiles()["crew_schedule"]
+    sc.save_crews([CREW], "CREW_SCHEDULE", ["SCHEDULE-1"], "api_refresh")
+    monkeypatch.setattr(sc, "load_profiles", lambda: {"crew_schedule": profile})
+    monkeypatch.setenv("MAI_SOURCE_CREW_SCHEDULE_URL", "https://example.test/schedule")
+    monkeypatch.setattr(sc, "_download", lambda *args: body)
+    assert sc.check_source("crew_schedule", "SCHEDULE-1")["status"] == expected
+    assert db.load_source_payloads("SCHEDULE-1")["CREW_SCHEDULE"]["crew_availability"] == [CREW]
+    assert sc.refresh_sources_for_well("SCHEDULE-1")[0]["status"] == expected
+    assert db.load_source_payloads("SCHEDULE-1")["CREW_SCHEDULE"]["crew_availability"] == ([CREW] if body == b"null" else [])
+
+
+@pytest.mark.parametrize("transport,profile_id,format", [
+    ("http", "dars", "xlsx"), ("http", "crew_schedule", "json"),
+    ("adapter", "dars", "xlsx"), ("adapter", "dars", "json"),
+    ("adapter", "era", "json"), ("adapter", "crew_schedule", "json"),
+])
+def test_source_check_and_import_agree_without_check_writes(client, monkeypatch, transport, profile_id, format):
+    from types import SimpleNamespace
+    from sqlalchemy import select
+    from app import db
+    from app.core import source_connectors as sc
+
+    profile = {**sc.load_profiles()[profile_id]}
+    source_id = profile["source_id"]
+    answer = (_dars_book(1) if format == "xlsx" else {
+        "dars": {"records": [{"timestamp": f"{TODAY}T08:00:00+03:00", "water_cut_pct": 40, "co2_pct": 1.5}]},
+        "era": {"work_history": [{"date": f"{TODAY}T08:00:00+03:00", "work_type": "Акт демонтажа"}]},
+        "crew_schedule": {"crew_availability": [CREW]},
+    }[profile_id])
+    if transport == "adapter":
+        profile["adapter"] = "test"
+        monkeypatch.setattr(sc, "_load_adapters", lambda: {
+            "test": SimpleNamespace(fetch_for_well=lambda well, profile: answer)})
+    else:
+        monkeypatch.setenv(sc.source_setting(source_id, "URL"), "https://example.test/data")
+        monkeypatch.setattr(sc, "_download", lambda *args: answer if isinstance(answer, bytes) else json.dumps(answer).encode())
+    monkeypatch.setattr(sc, "load_profiles", lambda: {profile_id: profile})
+
+    def snapshot():
+        with db.engine().connect() as conn:
+            return {table.name: sorted(json.dumps(dict(row), sort_keys=True, default=str)
+                    for row in conn.execute(select(table)).mappings()) for table in db.metadata.sorted_tables}
+
+    before = snapshot()
+    checked = sc.check_source(profile_id, "PARITY-1")
+    assert checked["status"] == "ok" and checked["record_count"] == 1
+    assert snapshot() == before
+    imported = sc.refresh_sources_for_well("PARITY-1")
+    assert len(imported) == 1 and imported[0]["status"] == "ok"
+    assert imported[0]["record_count"] == checked["record_count"]
+    assert imported[0]["origin"] == ("adapter" if transport == "adapter" else "api_refresh")
+    stored = snapshot()
+    assert sc.check_source(profile_id, "PARITY-1")["status"] == "ok"
+    assert snapshot() == stored
+    sc.refresh_sources_for_well("PARITY-1")
+    assert {key: len(rows) for key, rows in snapshot().items()} == {key: len(rows) for key, rows in stored.items()}
+    if profile_id == "dars":
+        assert db.load_telemetry("PARITY-1")[0].water_cut_pct == 40
+    elif profile_id == "era":
+        assert db.load_history_events("PARITY-1")[0]["payload"]["work_type"] == "Акт демонтажа"
+    else:
+        assert db.load_source_payloads("PARITY-1")[source_id]["crew_availability"][0]["crew_id"] == CREW["crew_id"]
+
+
 def test_pull_sources_of_a_well(client, server, monkeypatch):
     from app import db
     from app.core.source_connectors import refresh_sources_for_well

@@ -99,6 +99,26 @@ def test_llm_selects_actions_and_its_explanation_is_preserved():
     assert rejected["reasoning"] == answer["reasoning"]
 
 
+@pytest.mark.parametrize("selection", [["sample"], []])
+def test_rules_own_actions_evidence_and_deadline_even_when_llm_invents_them(selection):
+    from app.core.proposal_agent import _check
+
+    policy = evaluate(register(), [point()], now=NOW, mode="demo")
+    context = {"today": NOW.date().isoformat(), "rating": {"measure_code": "РИ", "deadline": "2026-11-20"},
+               "crews": [{"crew_id": "C", "status": "available"}], "response_policy": policy}
+    result = _check({"selected_rule_ids": selection, "summary": "Предложение модели",
+                     "reasoning": "Обоснование модели", "measure": "ППР", "actions": ["Выдумано"],
+                     "based_on": ["Выдумано"], "deadline": "2027-01-01",
+                     "crew": {"crew_id": "C", "date": "2026-11-17"}}, context, use_llm=True)
+    assert result["measure"] == result["rating_measure"] == "РИ"
+    assert result["differs_from_rating"] is False
+    assert result["deadline"] == ("2026-11-20" if selection else None)
+    assert result["crew"] == ({"crew_id": "C", "date": "2026-11-17", "specialties": []} if selection else None)
+    assert result["actions"] == ([policy["matched"][0]["action"]] if selection else [])
+    assert result["based_on"] == ([e["text"] for e in policy["matched"][0]["evidence"] if e["result"] is True]
+                                   if selection else [])
+
+
 def test_approved_mode_requires_engineering_rules_and_rejects_synthetic_measurements():
     data = register().model_dump()
     data["rules"][0].update(status="approved", reviewer="Тест инженера", reviewed_on="2026-11-16", basis="Тест")

@@ -28,7 +28,7 @@ GLOSSARY = {
     "base_corrosion": "коррозия по акту разбора", "data_gaps": "пробелы в данных", "missing_data": "нет данных",
     "lab_samples": "лабораторные пробы", "latest_measurements": "последние значения показателей",
     "other_measurements": "другие показатели", "nkt_registry": "реестр коррозии НКТ",
-    "response_examples": "примеры решений", "crew_id": "бригада", "crews": "бригады", "crew": "бригада",
+    "crew_id": "бригада", "crews": "бригады", "crew": "бригада",
     "deadline": "крайний срок", "measure": "мероприятие", "rating": "рейтинг", "available": "свободна",
     "busy": "занята", "workover": "ремонт скважины", "inhibitor": "ингибитор", "water cut": "обводнённость",
     "corrosion rate": "скорость коррозии", "tubing": "НКТ", "ERA": "ЭРА",
@@ -96,7 +96,7 @@ def field_gaps(context: dict, act_days: int) -> list[str]:
     return merge_gaps(gaps, [])
 
 
-def for_model(context: dict, known_gaps: list[str], examples: list[dict], act_days: int) -> dict:
+def for_model(context: dict, known_gaps: list[str], act_days: int) -> dict:
     """The context with Russian names and values: the language the answer should be written in."""
     rating = context["rating"]
     return {
@@ -171,7 +171,4 @@ def for_model(context: dict, known_gaps: list[str], examples: list[dict], act_da
                      "свободна с": crew.get("available_from"), "свободна до": crew.get("available_to")}
                     for crew in context.get("crews") or []],
         "уже известные пробелы в данных": known_gaps,
-        "примеры решений инженеров": [{"ситуация": item.get("situation"), "мероприятие": item.get("measure"),
-                                       "действия": item.get("actions"), "почему": item.get("why")}
-                                      for item in examples],
     }

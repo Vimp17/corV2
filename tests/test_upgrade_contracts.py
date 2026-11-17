@@ -23,8 +23,9 @@ def test_rank_ties_keep_excel_competition_places():
 def test_valid_crew_is_kept_with_open_availability_bounds():
     from app.core.proposal_agent import _check
     from tests.test_review_regressions import _context
-    result = _check({'measure': 'РИ', 'crew': {'crew_id': 'C', 'date': '2026-11-12'}},
-                    _context({'crew_id': 'C', 'status': 'available'}))
+    result = _check({'selected_rule_ids': ['sample'], 'summary': 'Отбор проб', 'reasoning': 'Высокий CO₂',
+                     'crew': {'crew_id': 'C', 'date': '2026-11-12'}},
+                    _context({'crew_id': 'C', 'status': 'available'}), use_llm=True)
     assert result['crew']['crew_id'] == 'C'
 
 
