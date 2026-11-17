@@ -7,14 +7,11 @@ or multipart form. The model returns the page text (tables as Markdown).
 from __future__ import annotations
 
 import base64
-import logging
 from dataclasses import dataclass, field
 from io import BytesIO
 
 from app.config import settings
 from app.core import llm
-
-logger = logging.getLogger(__name__)
 
 OCR_SYSTEM_PROMPT = (
     "Ты — модуль OCR. Перепиши весь текст со страницы документа дословно и в исходном порядке: "

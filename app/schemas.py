@@ -32,6 +32,10 @@ class WellRequest(APIModel):
         return value
 
 
+CO2_SOURCE_FIELDS = {'temperature_c', 'pressure_abs_bar', 'ph_in_situ', 'wall_shear_pa',
+                     'material', 'water_wetting', 'h2s_partial_bar', 'organic_acids_ppm'}
+
+
 class TelemetryPoint(BaseModel):
     """Canonical telemetry units follow the V3.0 notebook column names."""
 
@@ -56,6 +60,15 @@ class TelemetryPoint(BaseModel):
     tonnage_t: float | None = Field(default=None, ge=0, le=10000)
     liquid_rate_m3_day: float | None = Field(default=None, ge=0, le=100000)
     noo_days: float | None = Field(default=None, ge=0, le=100000)
+    # Environmental inputs for the automatic CO2 point model; not failure-probability features.
+    temperature_c: float | None = Field(default=None, gt=-273.15, allow_inf_nan=False, strict=True)
+    pressure_abs_bar: float | None = Field(default=None, gt=0, allow_inf_nan=False, strict=True)
+    ph_in_situ: float | None = Field(default=None, ge=0, le=14, allow_inf_nan=False, strict=True)
+    wall_shear_pa: float | None = Field(default=None, gt=0, allow_inf_nan=False, strict=True)
+    material: Literal['carbon_steel', 'other', 'unknown'] | None = None
+    water_wetting: Literal['water_wet', 'not_water_wet', 'unknown'] | None = None
+    h2s_partial_bar: float | None = Field(default=None, ge=0, allow_inf_nan=False, strict=True)
+    organic_acids_ppm: float | None = Field(default=None, ge=0, allow_inf_nan=False, strict=True)
     # Indicators the system has no field for (pH, hardness, iron…), keyed by the column or
     # indicator name with its unit. Stored and shown in the well card and given to the AI agent;
     # they do not enter the risk models or the rating.
@@ -230,7 +243,15 @@ class CO2Calculation(WellRequest):
     """A single state; pressure explicitly absolute, gas composition in mole fractions."""
     temperature_c: float = Field(gt=-273.15, allow_inf_nan=False, strict=True)
     pressure_abs_bar: float = Field(gt=0, allow_inf_nan=False, strict=True)
-    co2_mole_fractions: list[float] = Field(default_factory=lambda: [.005, .015, .03], min_length=1, max_length=10)
+    model_id: str = Field(default="active", min_length=1, max_length=64)
+    ph_in_situ: float | None = Field(default=None, ge=0, le=14, allow_inf_nan=False, strict=True)
+    wall_shear_pa: float | None = Field(default=None, gt=0, allow_inf_nan=False, strict=True)
+    water_cut_pct: float | None = Field(default=None, ge=0, le=100, allow_inf_nan=False, strict=True)
+    material: Literal["carbon_steel", "other", "unknown"] = "unknown"
+    water_wetting: Literal["water_wet", "not_water_wet", "unknown"] = "unknown"
+    h2s_partial_bar: float | None = Field(default=None, ge=0, allow_inf_nan=False, strict=True)
+    organic_acids_ppm: float | None = Field(default=None, ge=0, allow_inf_nan=False, strict=True)
+    co2_mole_fractions: list[float] = Field(min_length=1, max_length=10)
     composition_source: Literal["measured", "scenario"] = "scenario"
     state_at: datetime | None = None
     source: str = Field(default="Ручной ввод", min_length=1, max_length=256)
@@ -253,4 +274,6 @@ class CO2Calculation(WellRequest):
             raise ValueError("Для измеренного состава требуется одна доля CO₂.")
         if self.state_at is not None:
             self.state_at = in_source_zone(self.state_at)
+        if self.h2s_partial_bar is not None and self.h2s_partial_bar > self.pressure_abs_bar:
+            raise ValueError("Парциальное давление H₂S не может превышать полное давление.")
         return self

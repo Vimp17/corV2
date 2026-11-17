@@ -1,0 +1,14 @@
+[
+  {
+    "well_id": "NORSOK-EXAMPLE",
+    "temperature_c": 60,
+    "pressure_abs_bar": 100,
+    "co2_pct": 1,
+    "ph_in_situ": 4,
+    "wall_shear_pa": 19,
+    "material": "carbon_steel",
+    "water_wetting": "water_wet",
+    "water_cut_pct": 80,
+    "source": "СИНТЕТИЧЕСКИЙ ПРИМЕР: при загрузке включите «Синтетические данные»"
+  }
+]

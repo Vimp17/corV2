@@ -102,7 +102,8 @@
     .toolbar label.check { gap:6px; cursor:pointer }
     .toolbar label.check input { min-height:0; width:16px; height:16px; margin:0 }
     .table-more { display:flex; flex-wrap:wrap; align-items:center; justify-content:center; gap:8px 12px; padding:14px 16px; font-size:13px; color:var(--muted); border-top:1px solid var(--line-2) }
-    .toolbar input, .toolbar select { padding:7px 9px; border:1px solid #C9D2DC; border-radius:4px; min-height:36px; background:#fff; color:var(--ink) }
+    .toolbar select { appearance:none; padding-right:34px !important; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='m1 1 5 5 5-5' fill='none' stroke='%235A6B7C' stroke-width='2'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right 12px center }
+    .toolbar input, .toolbar select { padding:7px 9px; border:1px solid #C9D2DC; border-radius:4px; min-height:36px; background-color:#fff; color:var(--ink) }
     /* The table fits the window: no inner scroll, compact type, columns share the width.
        All 13 columns from 960 px of table width (a 1024 px window); narrower (tablet, phone) — a card per well. */
     .table-box { container-type:inline-size }
@@ -210,9 +211,9 @@
     .wk.cur { color:var(--blue); font-weight:700 }
     .track { position:relative; height:32px; background-image:linear-gradient(to right, #EDF0F4 1px, transparent 1px); background-size:calc(100% / 12) 100%; border-right:1px solid var(--line-2) }
     .win { position:absolute; top:8px; height:16px; border-radius:3px }
-    .win.repair { background:var(--repair-win) } .win.engineer { background:var(--engineer-win) } .win.ud { background:var(--ud-win) }
+    .win.repair { background:#FAD2D2 } .win.engineer { background:#F6D997 } .win.ud { background:#CDE5FA }
     .mk { position:absolute; top:5px; height:22px; width:50px; margin-left:-25px; border-radius:11px; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; color:#fff }
-    .mk.repair { background:var(--repair-mk) } .mk.engineer { background:var(--engineer) } .mk.ud { background:var(--ud) } .mk.late { background:var(--ink) }
+    .mk.repair { background:#B71C1C } .mk.engineer { background:#855300 } .mk.ud { background:#1464AC } .mk.late { outline:2px solid var(--ink); outline-offset:1px }
     .mk.edge { background-image:linear-gradient(90deg, rgba(255,255,255,.35), transparent) }
     .today { position:absolute; top:0; bottom:0; width:2px; background:var(--blue) }
     .np-label { position:absolute; top:7px; font-size:11px; font-weight:600; color:var(--ud); background:#fff; padding:1px 6px; border:1px dashed #C99A3A; border-radius:3px; white-space:nowrap }
@@ -238,6 +239,7 @@
     .field input, .field select, .field textarea { padding:7px 9px; border:1px solid #C9D2DC; border-radius:4px; background:#fff; color:var(--ink); font:inherit; font-size:13px; min-height:36px; width:100% }
     .field textarea { min-height:60px; resize:vertical }
     .field.wide { grid-column:1 / -1 }
+    .model-block + .model-block { margin-top:14px }
     .rules-box summary { cursor:pointer; color:var(--blue); font-size:13px; font-weight:600; margin-top:4px }
     .rules { width:100%; border-collapse:collapse; font-size:12px; margin-top:6px }
     .rules th { text-align:left; font-size:11px; color:var(--muted); font-weight:600; padding:4px 6px; border-bottom:1px solid var(--line) }
@@ -327,11 +329,8 @@
     .prov { display:block; font-size:11px; font-weight:400; color:var(--muted); margin-top:2px }
     .toolbar .spacer-x { flex:1 }
     .check { display:flex; gap:8px; align-items:center; font-size:13px; color:var(--ink) }
-    .co2-form input:not([type=checkbox]) { max-width:100%; min-width:0; padding:7px 9px; border:1px solid #C9D2DC; border-radius:4px; }
-    #co2Feature > details { margin:12px 0; }
-    #co2Feature summary, #wellCo2 summary { cursor:pointer; color:var(--navy); padding:6px 0; }
-    .co2-history { display:flex; flex-direction:column; gap:10px; }
-    #co2Feature .hint, #wellCo2 .hint { overflow-wrap:anywhere; }
+    #wellCo2 .rules { table-layout:fixed; margin-top:10px }
+    #wellCo2 .rules td, #wellCo2 .rules th { overflow-wrap:anywhere }
     footer { color:var(--muted); font-size:12px }
     /* A readable overview; the complete 13-column table remains available. */
     [hidden] { display:none !important }
@@ -340,9 +339,7 @@
     .tile .tn { font-size:24px }
     .source-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr)); gap:12px; margin:16px 0 }
     .source-grid .box { margin:0 }
-    .source-grid input, #accessSettings input, .co2-form input { max-width:100%; padding:6px 8px; border:1px solid #C9D2DC; border-radius:4px }
-    .co2-form input[type=checkbox], .co2-form input[type=radio] { width:auto }
-    .co2-form .field-error { color:var(--repair); font-size:13px; display:block }
+    .source-grid input, #accessSettings input { max-width:100%; padding:6px 8px; border:1px solid #C9D2DC; border-radius:4px }
     .source-grid .btn { margin-top:8px }
     .source-grid code, .box code { overflow-wrap:anywhere }
     .table-box:not(.compact) .grid-row > .deadline-cell { display:none }
@@ -409,7 +406,6 @@
         <a href="#sec-ppr">График ППР (ДДО)</a>
         <div class="nav-sep" aria-hidden="true"></div>
         <a href="#sec-docs">Документы</a>
-        <a href="#co2Feature" id="co2Nav">CO₂-коррозия</a>
         <a href="#sec-sources">Источники и настройки</a>
         <div class="nav-summary" id="navSummary" role="group" aria-label="Сводка по мероприятиям"></div>
       </div>
@@ -426,6 +422,8 @@
         </div>
       </div>
 
+      <div class="tiles" id="tiles" role="group" aria-label="Фильтр по мероприятию"></div>
+
       <div class="alerts" role="group" aria-label="Требуют внимания">
         <button class="actbtn" id="waitBtn" type="button" aria-pressed="false"><b id="waitCount" style="color:var(--repair)">0</b> скважин с риском коррозии ожидают решения</button>
         <div class="gapwrap">
@@ -434,8 +432,6 @@
         </div>
         <button class="btn secondary small" id="resetFilter" type="button" hidden>Сбросить фильтр</button>
       </div>
-
-      <div class="tiles" id="tiles" role="group" aria-label="Фильтр по мероприятию"></div>
 
       <section class="panel anchor" id="sec-rating" aria-labelledby="ratingTitle" style="overflow:clip">
         <h2 id="ratingTitle" class="visually-hidden">Таблица рейтинга</h2>
@@ -466,14 +462,14 @@
           <div style="display:flex; flex-wrap:wrap; align-items:baseline; justify-content:space-between; gap:8px 20px; margin-bottom:12px">
             <div>
               <h2 class="section" id="pprTitle">График ППР (ДДО)</h2>
-              <div class="sub" id="pprSub">Скважины с назначенными мероприятиями, 12 недель. Полоса — окно до крайнего срока, метка — плановая дата.</div>
+              <div class="sub" id="pprSub">Скважины с назначенными мероприятиями, 12 недель. Полоса — окно до крайнего срока, метка — плановая дата. Цвет показывает критичность по индексу.</div>
             </div>
             <div class="legend">
-              <span class="lg"><i style="width:22px; height:10px; border-radius:2px; background:var(--repair-win)"></i>Окно до срока</span>
-              <span class="lg"><i style="width:18px; height:12px; border-radius:6px; background:var(--repair-mk)"></i>ППР — плановый комплекс по ремонту</span>
-              <span class="lg"><i style="width:18px; height:12px; border-radius:6px; background:var(--engineer)"></i>РИ — решение инженера</span>
-              <span class="lg"><i style="width:18px; height:12px; border-radius:6px; background:var(--ud)"></i>УДР</span>
-              <span class="lg"><i style="width:18px; height:12px; border-radius:6px; background:var(--ink)"></i>Позже срока</span>
+              <span class="lg"><i style="width:22px; height:10px; border-radius:2px; background:#E3E8EE"></i>Окно до срока</span>
+              <span class="lg"><i style="width:18px; height:12px; border-radius:6px; background:#B71C1C"></i>Высокая — ППР</span>
+              <span class="lg"><i style="width:18px; height:12px; border-radius:6px; background:#855300"></i>Повышенная — РИ</span>
+              <span class="lg"><i style="width:18px; height:12px; border-radius:6px; background:#1464AC"></i>Умеренная — УДР</span>
+              <span class="lg"><i style="width:18px; height:12px; border-radius:6px; background:#fff; outline:2px solid var(--ink)"></i>! — позже срока</span>
               <span class="lg"><i style="width:2px; height:14px; background:var(--blue)"></i>Сегодня</span>
             </div>
           </div>
@@ -533,7 +529,6 @@
         </div>
       </section>
 
-      <section class="panel docs anchor" id="co2Feature"></section>
       <section class="panel docs anchor" id="sec-sources" aria-labelledby="sourcesTitle">
         <h2 class="section" id="sourcesTitle">Источники и настройки</h2>
         <p class="sub">ДАРС, ХИМИК и ЭРА поставляют данные для рейтинга; расписание бригад — для предложений инженеру. Загрузка файлами доступна без автоматического подключения.</p>
@@ -628,6 +623,7 @@
     const keyHint = (error, tail = 'введите ключ в разделе «Источники и настройки».') => (error.status === 401 ? ` Если защита API включена, ${tail}` : '');
     function fieldError(item) {
       const names = { well_id: 'Скважина', temperature_c: 'Температура', pressure_abs_bar: 'Абсолютное давление',
+        ph_in_situ: 'pH при рабочих условиях', wall_shear_pa: 'Касательное напряжение', water_cut_pct: 'Обводнённость', h2s_partial_bar: 'Парциальное давление H₂S', organic_acids_ppm: 'Органические кислоты', material: 'Материал', water_wetting: 'Контакт воды со стенкой', model_id: 'Методика',
         co2_mole_fractions: 'Доля CO₂', composition_source: 'Источник состава', source: 'Источник значений', state_at: 'Дата состояния', plan_date: 'Плановая дата', operator_comment: 'Комментарий' };
       const key = (item.loc || []).find(part => names[part]);
       const reasons = { missing: 'обязательное поле', float_parsing: 'введите число', finite_number: 'введите конечное число',
@@ -659,8 +655,6 @@
       $('refresh').disabled = true;
       try {
         state.rating = await api('/api/v1/rating');
-        $('co2Feature').hidden = state.rating.settings?.models?.co2_enabled === false;
-        $('co2Nav').hidden = $('co2Feature').hidden;
         render();
         if (!options.keepNotice) notice('');
         if (!state.hashChecked) { state.hashChecked = true; const fromLink = hashWell(); if (fromLink) openFromLink(fromLink); }
@@ -682,6 +676,7 @@
       renderFieldFilter(wells);
       renderTable();
       renderGantt();
+      if (state.drawerOpen) updateCo2Automatic(state.selected, wells.find(w => w.well_id === state.selected)?.co2_assessment);
       if (!state.cardDirty && !state.operatorSaving) renderCard();
     }
 
@@ -913,7 +908,7 @@
       }
       $('weeks').replaceChildren(...weeks);
       const planned = state.rating.wells.filter(w => w.measure && w.measure !== 'none');
-      $('pprSub').textContent = `Скважины с назначенными мероприятиями (${planned.length}), 12 недель с ${fmtDay(start)}. Полоса — окно до крайнего срока, метка — плановая дата.`;
+      $('pprSub').textContent = `Скважины с назначенными мероприятиями (${planned.length}), 12 недель с ${fmtDay(start)}. Полоса — окно до крайнего срока, метка — плановая дата. Цвет показывает критичность по индексу.`;
       if (!planned.length) { $('ganttRows').replaceChildren(el('div', { class: 'empty', text: 'Нет скважин с назначенными мероприятиями.' })); return; }
       $('ganttRows').replaceChildren(...planned.map(w => {
         const assessed = isoDay(w.measure_since || w.assessed_at) ?? today;
@@ -930,7 +925,7 @@
         if (plan !== null) {
           const outside = plan < start || plan >= start + span;
           track.append(el('div', {
-            class: `mk ${late ? 'late' : w.measure}${outside ? ' edge' : ''}`,
+            class: `mk ${w.measure}${late ? ' late' : ''}${outside ? ' edge' : ''}`,
             style: `left:${pct(plan + DAY / 2)}%`,
             title: `План ${fmtDay(plan)}${deadline !== null ? ', срок ' + fmtDay(deadline) : ''}${outside ? ' (за пределами графика)' : ''}`,
             text: code + (late ? ' !' : ''),
@@ -1047,8 +1042,9 @@
     function overviewTab(w, key) {
       const body = [];
       const blocks = cardBlocks(w);
-      body.push(el('div', { class: 'bars' }, barLine('Прогноз НТЦ', w.model_ntc, '', true), provLine(w, 'model_ntc'), blocks.rules,
-        barLine('Мат. модель', w.model_math, 'm', true), provLine(w, 'model_math'), blocks.math));
+      body.push(el('div', { class: 'bars' },
+        el('div', { class: 'model-block' }, barLine('Прогноз НТЦ', w.model_ntc, '', true), provLine(w, 'model_ntc'), blocks.rules),
+        el('div', { class: 'model-block' }, barLine('Мат. модель', w.model_math, 'm', true), provLine(w, 'model_math'), blocks.math)));
       const prop = el('div', { class: `prop ${key}` }, el('h3', { text: `Предложение рейтинга: ${w.measure_label}` }), el('div', { style: 'font-size:13px', text: w.action }));
       if (w.protection_adjusted) prop.append(el('div', { style: 'font-size:13px', text: `С учётом подтверждённой защиты индекс снижен с ${w.index_raw} до ${w.index}.` }));
       // No index: what the forecast lacks — counts of measurements and the fields by name.
@@ -1586,10 +1582,14 @@
       const p = detail.ai_proposal;
       const button = el('button', { class: p ? 'btn secondary small' : 'btn small', type: 'button', disabled: !detail.ai_agent_configured,
         text: p ? 'Сформировать заново' : 'Сформировать предложение', onClick: (event) => generateProposal(detail.well_id, event.currentTarget) });
-      const parts = [el('div', { style: 'display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:space-between' }, el('h3', { text: 'Предложение ИИ-агента' }), button)];
-      if (!detail.ai_agent_configured) parts.push(el('div', { class: 'hint warn', text: 'ИИ-агент не настроен: задайте MAI_LLM_API_URL и MAI_LLM_MODEL.' }));
+      const preliminary = p?.proposal_source === 'rules_fallback' || (!!p?.rule_evaluation && !p?.proposal_source);
+      const parts = [el('div', { style: 'display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:space-between' }, el('h3', { text: preliminary ? 'Предварительный подбор по реестру' : 'Предложение ИИ-агента' }), button)];
+      if (detail.ai_llm_configured === false) parts.push(el('div', { class: 'hint warn', text: 'LLM не подключена. Доступен предварительный подбор по реестру; для предложения ИИ-агента подключите языковую модель.' }));
+      if (p?.rule_evaluation) parts.push(el('div', { class: p.rule_evaluation.mode === 'demo' ? 'hint warn' : 'hint',
+        text: `${p.rule_evaluation.mode === 'demo' ? 'Тестовый реестр — пороги требуют проверки инженером' : 'Согласованный реестр мероприятий'} · редакция ${p.rule_evaluation.revision}` }));
+      if (!detail.ai_agent_configured) parts.push(el('div', { class: 'hint warn', text: 'Режим реестра мероприятий не настроен. Обратитесь к администратору.' }));
       if (!p) {
-        parts.push(el('div', { class: 'hint', text: 'Агент учтёт рейтинг, прогнозы НТЦ и мат. модели, сработавшие правила, акты, химию, защиту, документы, расписание бригад и примеры мер реагирования. Чего нет в данных — укажет отдельно.' }));
+        parts.push(el('div', { class: 'hint', text: 'LLM использует данные скважины и инструкции реестра, выберет подходящие мероприятия и объяснит предложение. Чего нет в данных — укажет отдельно.' }));
         box.replaceChildren(...parts);
         return;
       }
@@ -1673,7 +1673,7 @@
     // ---------------------------------------------------------------- navigation highlight
     function watchSections() {
       const links = [...document.querySelectorAll('.sidenav a')];
-      const sections = ['sec-rating', 'sec-ppr', 'sec-docs', 'co2Feature', 'sec-sources'].map($);
+      const sections = ['sec-rating', 'sec-ppr', 'sec-docs', 'sec-sources'].map($);
       const update = () => {
         const current = sections.filter(node => !node.hidden && node.getBoundingClientRect().top <= parseFloat(getComputedStyle(node).scrollMarginTop) + 1).at(-1) || sections[0];
         links.forEach(link => link.setAttribute('aria-current', String(link.getAttribute('href') === '#' + current.id)));
@@ -1762,7 +1762,6 @@
     loadDocuments();
     loadSources();
     setInterval(() => { if (!document.hidden) loadSources(); }, AUTO_REFRESH_SECONDS * 1000);
-    initCo2();
 
   </script>
 </body>

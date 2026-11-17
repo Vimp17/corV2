@@ -14,7 +14,9 @@ from tests.conftest import needs_db
 
 
 def request(**values):
-    return CO2Calculation(well_id="CO2-TEST", temperature_c=60, pressure_abs_bar=50, **values)
+    defaults = dict(well_id="CO2-TEST", model_id="co2-v4-base-1", temperature_c=60,
+                    pressure_abs_bar=50, co2_mole_fractions=[.005, .015, .03])
+    return CO2Calculation(**(defaults | values))
 
 
 def row():
@@ -33,6 +35,11 @@ def test_base_scenarios_units_and_zero():
     assert rate(60, 0) == 0
     assert rate(60, 3) / rate(60, .5) == pytest.approx(6 ** .67)
     assert calculate(request())["input_hash"] == result["input_hash"]
+    from app.core.co2_corrosion import digest
+    original = {k: v for k, v in request().model_dump(mode='json').items()
+                if k in {'well_id', 'temperature_c', 'pressure_abs_bar', 'co2_mole_fractions',
+                         'composition_source', 'source', 'state_at', 'synthetic'}}
+    assert result['input_hash'] == digest({'version': 'co2-v4-base-1', 'inputs': original})
 
 
 @pytest.mark.parametrize("values", [{"co2_mole_fractions": [1.5]}, {"co2_mole_fractions": [True]},
@@ -94,7 +101,7 @@ def test_api_history_idempotence_and_rating_isolation(client):
     assert after["co2_assessments"][0]["state_at"] is None
     from app.core.proposal_agent import build_context
     from app.core.proposal_language import for_model
-    payload = for_model(build_context(well), [], [], 365)
+    payload = for_model(build_context(well), [], 365)
     assert payload["CO₂-коррозия (дополнительный контекст, не вероятность отказа)"]
     export = client.get('/api/v1/rating/export.xlsx')
     assert export.status_code == 200

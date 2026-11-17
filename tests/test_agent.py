@@ -8,7 +8,43 @@ from tests.conftest import TODAY, _upload, _well, needs_db
 
 
 @needs_db
+def test_rule_register_is_reloaded_and_bad_register_never_falls_back_to_llm(client, tmp_path, monkeypatch):
+    import json
+    from dataclasses import replace
+    from datetime import datetime, timezone
+    from app.core import proposal_agent as agent
+
+    source = agent.settings.response_rules_path
+    data = json.loads(source.read_text())
+    path = tmp_path / "rules.json"
+    path.write_text(json.dumps(data))
+    monkeypatch.setattr(agent, "settings", replace(agent.settings, response_rules_path=path, llm_api_url=""))
+    response = client.post("/api/v1/ingestion/telemetry", json={"well_id": "RULE-TEST", "source_id": "DARS",
+        "records": [{"timestamp": (datetime.now(timezone.utc)-timedelta(seconds=1)).isoformat(),
+                     "co2_pct": 2., "water_cut_pct": 90., "corrosion_rate_mm_year": .2}]})
+    assert response.status_code == 201, response.text
+    url = "/api/v1/rating/wells/RULE-TEST/ai-proposal"
+    first = client.post(url)
+    assert first.status_code == 200, first.text
+    assert len(first.json()["actions"]) == 2
+    data["rules"].pop()
+    path.write_text(json.dumps(data))
+    assert len(client.post(url).json()["actions"]) == 1
+    data["rules"] = []
+    path.write_text(json.dumps(data))
+    assert client.post(url).json()["actions"] == []
+    path.write_text("invalid JSON")
+    assert client.post(url).status_code == 503
+
+
+@needs_db
 def test_ai_proposal_uses_rating_crews_and_reports_gaps(client, generated, fake):
+    from datetime import datetime, timezone
+
+    response = client.post("/api/v1/ingestion/telemetry", json={"well_id": "DEMO-002", "source_id": "DARS",
+        "records": [{"timestamp": (datetime.now(timezone.utc)-timedelta(seconds=1)).isoformat(),
+                     "co2_pct": 2.0, "water_cut_pct": 90.0}]})
+    assert response.status_code == 201, response.text
     response = client.post("/api/v1/ingestion/crew-schedule?all_wells=true", json={"crew_availability": [
         {"crew_id": "КРС-7", "status": "available", "specialties": ["КРС"],
          "available_from": f"{TODAY.isoformat()}T08:00:00", "available_to": f"{(TODAY + timedelta(days=30)).isoformat()}T20:00:00"},
@@ -18,6 +54,10 @@ def test_ai_proposal_uses_rating_crews_and_reports_gaps(client, generated, fake)
     proposal = client.post("/api/v1/rating/wells/DEMO-002/ai-proposal")
     assert proposal.status_code == 200, proposal.text
     body = proposal.json()
+    assert body["proposal_source"] == "llm_with_rules"
+    assert body["selected_rule_ids"]
+    assert body["summary"].startswith("Скважина DEMO-002:")
+    assert body["reasoning"].startswith("Индекс")
     well = _well(client, "DEMO-002")
     assert body["measure"] == well["measure_code"]
     assert body["crew"]["crew_id"] == "КРС-7"
@@ -140,7 +180,7 @@ def test_ai_proposal_payload_is_russian():
     from app.core import proposal_language
 
     context = _proposal_context()
-    payload = proposal_language.for_model(context, proposal_language.field_gaps(context, 365), [], 365)
+    payload = proposal_language.for_model(context, proposal_language.field_gaps(context, 365), 365)
     text = json.dumps(payload, ensure_ascii=False)
     # Keys and service values are Russian: Latin is left only in identifiers and formulas.
     latin = set(re.findall(r"[A-Za-z_]{3,}", text)) - {"DEMO", "null", "true", "false"}   # JSON syntax

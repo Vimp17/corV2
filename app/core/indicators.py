@@ -55,10 +55,3 @@ def fmt(value: float, digits: int = 3) -> str:
     if "." in text:
         text = text.rstrip("0").rstrip(".")
     return ("−" if value < 0 else "") + text.replace(",", " ").replace(".", ",")
-
-
-def plural(count: int, one: str, few: str, many: str) -> str:
-    """«1 замер», «3 замера», «8 замеров»."""
-    if 11 <= count % 100 <= 14:
-        return many
-    return one if count % 10 == 1 else few if 2 <= count % 10 <= 4 else many

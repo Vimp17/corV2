@@ -1,0 +1,13 @@
+{
+  "well_id": "TEST-RULE-002",
+  "source_id": "DARS",
+  "records": [
+    {
+      "timestamp": "2026-11-16T00:00:00Z",
+      "co2_pct": 2,
+      "water_cut_pct": 90,
+      "corrosion_rate_mm_year": 0.2,
+      "synthetic": true
+    }
+  ]
+}

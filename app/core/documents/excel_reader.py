@@ -159,7 +159,7 @@ def _record(well_raw: str, well_quote: str, moment: datetime | None, date_quote:
             "moment": moment.isoformat() if moment else None}
 
 
-def _read_table(sheet: _Sheet, header: tuple, aliases: dict[str, str], known: list[str]) -> list[dict]:
+def _read_table(sheet: _Sheet, header: tuple, known: list[str]) -> list[dict]:
     header_row, well_column, date_column, fields, others = header
     titles = {c: str(v).strip() for c, v in enumerate(sheet.rows[header_row - 1]) if v is not None}
     sheet_date = _sheet_date(sheet, header_row - 1) if date_column is None else None
@@ -266,7 +266,7 @@ def read_workbook(content: bytes, known_wells: list[str]) -> dict:
         sheet = _Sheet(title, rows)
         header = _header_row(sheet, aliases)
         if header is not None:
-            found = _read_table(sheet, header, aliases, known_wells)
+            found = _read_table(sheet, header, known_wells)
             if found:
                 layouts.append("table")
                 records.extend(found)

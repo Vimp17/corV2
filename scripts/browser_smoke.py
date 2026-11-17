@@ -63,14 +63,45 @@ def exercise(page, base: str, data: Path, db):
     expect(page.locator("#dataState")).to_contain_text("14 из 14", timeout=90000)
     expect(page.locator("#rows .wellbtn")).to_have_count(13)
     page.screenshot(path=ARTIFACTS / "rating-1280.png")
+    assert page.locator('#tiles').bounding_box()['y'] < page.locator('.alerts').bounding_box()['y']
+    for selector in ('#fieldFilter','#tableView'):
+        assert page.locator(selector).evaluate("el => getComputedStyle(el).backgroundPositionX") == 'calc(100% - 12px)'
+    expect(page.locator('#pprSub')).to_contain_text('критичность')
+    expect(page.locator('#sec-ppr .legend')).to_contain_text('Высокая — ППР')
+
 
     def open_well(well="DEMO-001"):
         page.locator("#rows").get_by_role("button", name=f"Открыть карточку скважины {well}", exact=True).click()
         expect(page.locator("#cardTitle")).to_have_text(f"Скважина {well}")
 
     open_well()
+    page.wait_for_function("""() => { const nodes = document.querySelectorAll('#cardBody .model-block');
+        if (nodes.length !== 2) return false;
+        const first = nodes[0].getBoundingClientRect(), second = nodes[1].getBoundingClientRect();
+        return second.top - first.bottom >= 14; }""")
+    co2 = page.locator('#wellCo2 details.rules-box')
+    expect(co2).not_to_have_attribute('open', '')
+    expect(co2.locator('summary')).to_contain_text('мм/год')
+    co2.locator('summary').click()
+    expect(co2.locator('table.rules').first).to_contain_text('Настройки')
+    expect(co2.locator('input, form, button, pre, p, ul')).to_have_count(0)
+    expect(page.locator('#co2Feature, #co2Nav')).to_have_count(0)
     comment = page.get_by_label("Комментарий", exact=True)
     comment.fill("QA: сохранённое решение")
+    def changed_automatic(route):
+        payload = route.fetch().json()
+        for well in payload['wells']:
+            if well['well_id'] == 'DEMO-001':
+                well['co2_assessment']['scenarios'][0]['rate_mm_year'] = 88
+                well['co2_assessment']['input_hash'] = 'qa-auto-refresh'
+        route.fulfill(json=payload)
+    page.route('**/api/v1/rating', changed_automatic)
+    page.evaluate('refresh({keepNotice:true, auto:true})')
+    expect(co2.locator('summary')).to_contain_text('88')
+    expect(co2).to_have_attribute('open', '')
+    expect(comment).to_have_value('QA: сохранённое решение')
+    page.unroute('**/api/v1/rating')
+
     dialogs = []
 
     def decline(dialog):
@@ -104,40 +135,19 @@ def exercise(page, base: str, data: Path, db):
     open_well()
     expect(page.locator("#aiBox")).to_contain_text("Загружаем")
     open_well("DEMO-002")
-    expect(page.locator("#aiBox")).to_contain_text("ИИ-агент не настроен")
+    expect(page.locator("#aiBox").get_by_role("button", name="Сформировать предложение", exact=True)).to_be_enabled()
     assert delayed
     with page.expect_response("**/api/v1/rating/wells/DEMO-001") as old_response:
         delayed[0].fulfill(status=500, content_type="application/json", body='{"detail":"QA: поздняя ошибка A"}')
     old_response.value.finished()
     expect(page.locator("#aiBox")).not_to_contain_text("QA: поздняя ошибка A")
     page.unroute("**/api/v1/rating/wells/DEMO-001")
+    page.locator("#aiBox").get_by_role("button", name="Сформировать предложение", exact=True).click()
+    expect(page.locator("#aiBox")).to_contain_text("Тестовый реестр", timeout=30000)
+    expect(page.locator("#aiBox")).to_contain_text("Предварительный подбор по реестру")
+    expect(page.locator("#aiBox")).to_contain_text("LLM не подключена")
+    expect(page.locator("#aiBox")).to_contain_text("Сформировано")
     page.get_by_role("button", name="Закрыть карточку", exact=True).click()
-
-    page.get_by_text("Новый расчёт для скважины", exact=True).click()
-    form = page.locator("#co2Feature form")
-    form.get_by_label("Скважина", exact=True).fill("QA-CO2")
-    form.get_by_label("Температура, °C", exact=True).fill("60")
-    form.get_by_label("Абсолютное давление, бар", exact=True).fill("50")
-    form.get_by_label("Измеренная доля CO₂", exact=True).check()
-    fraction = form.get_by_label("Доля CO₂, % (сценарии через ;)", exact=True)
-    fraction.fill("1;2")
-    form.get_by_role("button", name="Рассчитать CO₂", exact=True).click()
-    expect(form.get_by_role("alert").filter(has_text="одно значение")).to_be_visible()
-    fraction.fill("1.5")
-    form.get_by_label("Создать скважину, если её ещё нет", exact=True).check()
-    form.get_by_label("Синтетические данные", exact=True).check()
-    form.get_by_role("button", name="Рассчитать CO₂", exact=True).click()
-    form.get_by_role("button", name="Открыть скважину QA-CO2", exact=True).click()
-    expect(page.locator("#cardTitle")).to_have_text("Скважина QA-CO2")
-    expect(page.locator("#wellCo2 .co2-history")).to_contain_text("0,75")
-    page.get_by_role("button", name="Закрыть карточку", exact=True).click()
-    page.get_by_label("Файл CO₂ v4", exact=True).set_input_files(str(ROOT / "examples/co2/v4-example.json"))
-    page.get_by_label("Создать отсутствующие скважины", exact=True).check()
-    page.get_by_role("button", name="Проверить файл v4", exact=True).click()
-    expect(page.locator("#co2Feature")).to_contain_text("Предупреждений:")
-    expect(page.locator("#co2Feature")).to_contain_text("полев")
-    page.get_by_role("button", name="Импортировать проверенный файл", exact=True).click()
-    expect(page.locator("#co2Feature")).to_contain_text("Сохранено: 1")
 
     dars = page.locator("#sourceCards > .box").filter(has=page.get_by_role("heading", name="ДАРС", exact=True))
     dars.get_by_label("Проверить скважину", exact=True).fill("DEMO-001")

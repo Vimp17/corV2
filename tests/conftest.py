@@ -40,6 +40,8 @@ os.environ.update({
     "MAI_DOCS_RETRY_MINUTES": "1",
     # The demonstration math model of the repository, whatever a developer's .env names.
     "MAI_MATH_MODEL_PATH": str(ROOT / "config" / "math_model.json"),
+    "MAI_CO2_MODEL_PATH": str(ROOT / "config" / "co2_model.json"),
+    "MAI_CO2_DEFAULTS_PATH": str(ROOT / "config" / "co2_defaults.json"),
 })
 (_TMP / "inbox").mkdir(parents=True, exist_ok=True)
 

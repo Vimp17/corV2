@@ -12,60 +12,44 @@ class Element {
   dispatch(event) { return Promise.all((this.listeners[event]||[]).map(fn=>fn({preventDefault(){}}))); }
 }
 function descendants(node) { return [node,...node.children.flatMap(n=>typeof n==='object'?descendants(n):[])]; }
-function control(root,label) { const node=descendants(root).find(n=>n.tag==='label' && String(n.children[0]).startsWith(label)); return node.children.find(n=>n.tag==='input'); }
 function create() {
-  const roots={wellCo2:new Element(),co2Feature:new Element()};
+  const roots={wellCo2:new Element()};
   const context={Node:Element,document:{createElement:t=>new Element(t),createTextNode:t=>String(t)},
     $:id=>roots[id]||descendants(roots.wellCo2).find(n=>n.id===id), state:{selected:'A'},
-    ruNum:String, console, FormData:class{}, refresh:async()=>{}, api:async()=>({})};
+    ruNum:String, console};
   const html=fs.readFileSync('dashboard/index.html','utf8');
   const helper=html.slice(html.indexOf('    function el('),html.indexOf('    const headers ='));
-  const controller=fs.existsSync('dashboard/co2.js')?fs.readFileSync('dashboard/co2.js','utf8'):
-    html.slice(html.indexOf('    // CO₂ scenario'),html.indexOf('  </script>')).replace('    initCo2();','');
+  const controller=fs.readFileSync('dashboard/co2.js','utf8');
   vm.createContext(context); vm.runInContext(helper+controller,context);
   return {context,root:roots.wellCo2};
 }
-const detail=id=>({well_id:id,co2_enabled:true,co2_assessments:[]});
-test('CO2 input and expanded form survive refresh and switching wells',()=>{
-  const {context:c,root}=create(); c.renderCo2(detail('A'));
-  control(root,'Температура').value='60'; descendants(root).find(n=>n.tag==='details').open=true;
-  c.renderCo2(detail('A')); assert.equal(control(root,'Температура').value,'60');
-  assert.equal(descendants(root).find(n=>n.tag==='details').open,true);
-  c.state.selected='B'; c.renderCo2(detail('B')); assert.equal(control(root,'Температура').value,'');
-  control(root,'Температура').value='70'; c.state.selected='A'; c.renderCo2(detail('A'));
-  assert.equal(control(root,'Температура').value,'60');
+const detail=(rate=1.2)=>({well_id:'A',co2_enabled:true,co2_automatic:{automatic_status:'calculated',
+ input_hash:String(rate),scenarios:[{co2_mole_fraction:.015,pco2_bar:.75,rate_mm_year:rate}],
+ quality_flags:['Комментарий, который не должен отображаться'],model_version:'technical-hash',
+ input_provenance:{temperature_c:{kind:'default',value:60,reason:'Не показывать причину'},
+ ph_in_situ:{kind:'source',value:5,source_id:'KHIMIK'}}}});
+test('CO2 card is collapsed and shows result in its summary',()=>{
+ const {context:c,root}=create();c.renderCo2(detail());
+ const panel=descendants(root).find(n=>n.tag==='details');
+ assert.equal(Boolean(panel.open),false);
+ assert.match(descendants(panel).find(n=>n.tag==='summary').textContent,/1.2 мм\/год/);
 });
-test('pending CO2 request survives redraw and cannot replace another well history',async()=>{
-  const {context:c,root}=create(); c.renderCo2(detail('A'));
-  let finish; const calls=[]; c.api=async(path)=>{calls.push(path); return new Promise(resolve=>{finish=resolve;});};
-  const form=descendants(root).find(n=>n.tag==='form');
-  control(root,'Температура').value='60'; control(root,'Абсолютное').value='50';
-  const request=form.dispatch('submit');
-  c.renderCo2(detail('A')); assert.equal(descendants(root).find(n=>n.tag==='button').disabled,true);
-  c.state.selected='B'; c.renderCo2(detail('B'));
-  finish({assessment:{calculation_mode:'calculated',model_version:'test',scenarios:[],quality_flags:[],inputs:{}},duplicates:0});
-  await request;
-  assert.deepEqual(calls,['/api/v1/co2/calculate']);
-  assert.equal(control(root,'Скважина').value,'B');
+test('expanded content contains only inputs, their source and results',()=>{
+ const {context:c,root}=create();c.renderCo2(detail());
+ const nodes=descendants(root);const text=nodes.map(n=>n.textContent||'').join(' ');
+ assert.match(text,/Температура/);assert.match(text,/KHIMIK/);assert.match(text,/Настройки/);
+ assert.doesNotMatch(text,/Комментарий|причину|technical-hash|JSON|Ограничения/);
+ assert.equal(nodes.filter(n=>['form','input','button','pre','p','ul'].includes(n.tag)).length,0);
 });
-test('measured composition asks for one value and validates it before sending',async()=>{
-  const {context:c,root}=create();c.renderCo2(detail('A'));
-  const measured=descendants(root).find(n=>n.tag==='label' && n.children.some(x=>typeof x==='string' && x.includes('Измеренная доля'))).children.find(n=>n.tag==='input');
-  measured.checked=true;await measured.dispatch('change');
-  const fraction=control(root,'Доля CO₂');assert.equal(fraction.value,'');
-  fraction.value='1;2';control(root,'Температура').value='60';control(root,'Абсолютное').value='50';
-  let calls=0;c.api=async()=>{calls++;return {};};
-  await descendants(root).find(n=>n.tag==='form').dispatch('submit');
-  assert.equal(calls,0);assert.match(descendants(root).filter(n=>n.tag==='span').map(n=>n.textContent||'').join(' '),/одно значение/);
+test('automatic update keeps the panel expanded',()=>{
+ const {context:c,root}=create();c.renderCo2(detail());
+ const panel=descendants(root).find(n=>n.tag==='details');panel.open=true;
+ c.updateCo2Automatic('A',detail(2.4).co2_automatic);
+ assert.equal(descendants(root).find(n=>n.tag==='details'),panel);
+ assert.equal(panel.open,true);
+ assert.match(descendants(panel).find(n=>n.tag==='summary').textContent,/2.4 мм\/год/);
 });
-test('global result opens the submitted well after refresh even if the form changes',async()=>{
-  const {context:c}=create(); const form=c.co2Form();
-  control(form,'Скважина').value='QA-A'; control(form,'Температура').value='60'; control(form,'Абсолютное').value='50';
-  let finish; c.api=async()=>new Promise(resolve=>{finish=resolve;});
-  let refreshed=false,opened; c.refresh=async()=>{refreshed=true;};c.openWell=id=>{assert.equal(refreshed,true);opened=id;};
-  const pending=form.dispatch('submit'); control(form,'Скважина').value='QA-B';
-  finish({assessment:{calculation_mode:'calculated',model_version:'test',scenarios:[],quality_flags:[],inputs:{}},duplicates:0});
-  await pending;
-  const link=descendants(form).find(n=>n.tag==='button' && n.textContent?.startsWith('Открыть скважину'));
-  await link.dispatch('click'); assert.equal(opened,'QA-A');
+test('standalone CO2 forms and navigation are absent from the shipped dashboard',()=>{
+ const html=fs.readFileSync('dashboard/index.html','utf8');
+ assert.doesNotMatch(html,/id="co2Feature"|id="co2Nav"|initCo2\(/);
 });

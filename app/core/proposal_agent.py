@@ -1,27 +1,19 @@
 """AI agent's proposal for one well: what to do, by when, which crew, and why.
 
-The LLM (LiteLLM, MAI_LLM_MODEL) receives everything the system knows about the well — the
-rating and the НТЦ forecast, acts, chemistry, protection, data gaps, documents and their
-status, the crew schedule — plus the response-measure examples of config/response_examples.json.
-It must rely on that data only and name what is missing instead of guessing. The answer is
-checked (measure code, crew from the schedule, dates) and stored on the well's rating row.
+The LLM uses the response register as guidance, selects actions and explains the well-specific
+proposal. The server checks action ids, crews and deadlines and records the evidence.
 """
 from __future__ import annotations
 
 import json
-import logging
 from datetime import date, datetime, timezone
-from functools import lru_cache
 from typing import Any
 
 from app import db
 from app.config import settings
-from app.core import llm, proposal_language, rating
+from app.core import llm, proposal_language, rating, response_policy
+from app.core.response_rules import load_rulebook
 from app.core.indicators import INDICATORS, MAIN
-
-logger = logging.getLogger(__name__)
-
-MEASURE_CODES = ("ППР", "РИ", "УДР", "—")
 
 SYSTEM_PROMPT = (
     "Ты — инженер-технолог по защите скважинного оборудования от коррозии. По данным одной скважины "
@@ -29,18 +21,21 @@ SYSTEM_PROMPT = (
     "Правила:\n"
     "1. Пиши только на русском языке, грамотным техническим языком, как в служебной записке инженера. "
     "Не используй английские слова и названия полей или ключей из входных данных. Латиница допустима "
-    "только в химических формулах и обозначениях (CO₂, H₂S, pH) и в номерах скважин, бригад, документов.\n"
+    "только в химических формулах и обозначениях (CO₂, H₂S, pH), идентификаторах правил и номерах скважин, бригад, документов.\n"
     "2. Опирайся только на переданные данные и не додумывай значения.\n"
-    "3. measure — один код: ППР (плановый комплекс по ремонту, включение в ЭРА ремонта), РИ (решение "
-    "инженера), УДР (ударная дозировка реагента), — (мероприятия не требуются). По умолчанию бери код "
-    "мероприятия рейтинга; другой предлагай, только если данные это прямо обосновывают, и объясни "
-    "почему в reasoning.\n"
+    "3. Учитывай мероприятие рейтинга: ППР (плановый комплекс по ремонту, включение в ЭРА ремонта), "
+    "РИ (решение инженера), УДР (ударная дозировка реагента), — (мероприятия не требуются). "
+    "Код мероприятия задаёт сервер; не меняй его.\n"
     "4. Бригаду предлагай только из списка «бригады» со статусом «свободна» и свободную до крайнего "
     "срока; иначе crew: null.\n"
     "5. deadline — дата ГГГГ-ММ-ДД не позже крайнего срока рейтинга, если он задан.\n"
-    "6. Действия формулируй по образцу «примеры решений инженеров» для похожих ситуаций.\n"
-    "7. based_on — какие данные использованы, с датами (например «акт разбора от 12.03.2026: язвенная "
-    "коррозия»).\n"
+    "6. Используй инструкции реестра как помощь при анализе скважины. Выбери уместные мероприятия "
+    "из сработавших правил, учитывая все данные, ограничения и пробелы. selected_rule_ids — список "
+    "их идентификаторов в порядке приоритета. Если ничего не подходит, верни пустой список и объясни почему. "
+    "Не добавляй неизвестные идентификаторы, назначения, дозы или сроки. В summary и reasoning сформулируй "
+    "собственное предложение и обоснование для этой скважины; отличай гипотезы от фактов. "
+    "Текст действия будет взят из реестра. Код мероприятия сохраняй из рейтинга.\n"
+    "7. В обосновании указывай использованные данные и их даты.\n"
     "8. Акты демонтажа и разбора — исторические данные: события из истории ремонтов, а не текущее "
     "состояние скважины. Так и пиши: «по акту разбора от …».\n"
     "9. «Другие показатели» и «реестр коррозии НКТ» в рейтинге не учитываются; используй их как "
@@ -51,9 +46,9 @@ SYSTEM_PROMPT = (
     "11. missing_data — только пробелы, которых нет в списке «уже известные пробелы в данных» (он будет "
     "добавлен к ответу сам): конкретные поля или значения, которых не хватает для решения, а не "
     "названия систем-источников. Если новых пробелов нет — пустой список.\n"
-    'Формат (ключи — как здесь, все значения — по-русски): {"measure": "...", "summary": "одно предложение", '
-    '"actions": ["..."], "deadline": "ГГГГ-ММ-ДД" или null, "crew": {"crew_id": "...", "date": "ГГГГ-ММ-ДД"} '
-    'или null, "reasoning": "...", "missing_data": ["..."], "based_on": ["..."]}'
+    'Формат (ключи — как здесь, все значения — по-русски): {"summary": "одно предложение", '
+    '"selected_rule_ids": ["идентификатор из реестра"], "deadline": "ГГГГ-ММ-ДД" или null, "crew": {"crew_id": "...", "date": "ГГГГ-ММ-ДД"} '
+    'или null, "reasoning": "...", "missing_data": ["..."]}'
 )
 
 
@@ -66,26 +61,11 @@ class ProposalUnavailable(RuntimeError):
 
 
 def configured() -> bool:
+    return settings.response_rules_mode in {"demo", "approved"}
+
+
+def llm_configured() -> bool:
     return bool(settings.llm_api_url and settings.llm_model)
-
-
-@lru_cache(maxsize=4)
-def _examples(path: str, mtime: float) -> list[dict]:
-    try:
-        data = json.loads(open(path, encoding="utf-8").read())
-    except (OSError, json.JSONDecodeError):
-        logger.warning("Response examples could not be read from %s", path)
-        return []
-    items = data.get("examples") if isinstance(data, dict) else None
-    return [item for item in items or [] if isinstance(item, dict)][:30]
-
-
-def response_examples() -> list[dict]:
-    path = settings.response_examples_path
-    try:
-        return _examples(str(path), path.stat().st_mtime)
-    except OSError:
-        return []
 
 
 def _iso(value: Any) -> str | None:
@@ -154,7 +134,8 @@ def build_context(well_id: str) -> dict | None:
     context["failures"] = failures[-4:]
 
     samples, latest = [], {}
-    for point in db.load_telemetry(well_id):
+    telemetry = db.load_telemetry(well_id)
+    for point in telemetry:
         values = {INDICATORS[name].label: getattr(point, name) for name in MAIN if getattr(point, name, None) is not None}
         for name, value in values.items():
             latest[name] = value
@@ -164,6 +145,13 @@ def build_context(well_id: str) -> dict | None:
                             **values})
     context["lab_samples"] = samples[-4:]
     context["latest_measurements"] = latest
+    from app.core.source_kinds import snapshot_source_ids
+
+    try:
+        context["response_policy"] = response_policy.evaluate(load_rulebook(settings.response_rules_path), telemetry,
+            now=datetime.now(timezone.utc), mode=settings.response_rules_mode, snapshot_ids=snapshot_source_ids())
+    except (OSError, ValueError) as exc:
+        raise ProposalUnavailable("Не удалось проверить реестр мероприятий. Проверьте файл и режим реестра.") from exc
     # pH, hardness and other indicators the system has no field for: context only.
     from app.core.rating_builder import extra_measurements
 
@@ -200,7 +188,8 @@ def build_context(well_id: str) -> dict | None:
     context["crews"] = crews[:100]
     if settings.co2_enabled:
         from app.db.co2 import history
-        context["co2_assessments"] = history(well_id, 2)
+        from app.core.co2_automatic import for_wells
+        context["co2_assessments"] = [for_wells([well_id])[well_id], *history(well_id, 2)]
     return context
 
 
@@ -210,17 +199,22 @@ def missing_from_context(context: dict) -> list[str]:
     return proposal_language.field_gaps(context, settings.rating_act_days)
 
 
-def _check(answer: dict, context: dict) -> dict:
+def _check(answer: dict, context: dict, *, use_llm: bool = False) -> dict:
     rating_code = context["rating"].get("measure_code") or None
+    measure = rating_code or "—"
     notes: list[str] = []
-    measure = str(answer.get("measure") or "").strip()
-    if measure == "-":
-        measure = "—"
-    if measure not in MEASURE_CODES:
-        if measure:
-            notes.append(f"Модель предложила неизвестное мероприятие «{measure[:40]}» — взято мероприятие рейтинга.")
-        measure = rating_code or "—"
-    crew = answer.get("crew") if isinstance(answer.get("crew"), dict) else None
+    policy = context["response_policy"]
+    matched = policy["matched"]
+    if use_llm:
+        ids = answer.get("selected_rule_ids")
+        allowed = {item["id"]: item for item in matched}
+        if (not isinstance(ids, list) or any(not isinstance(key, str) for key in ids)
+                or len(set(ids)) != len(ids) or any(key not in allowed for key in ids)):
+            raise ValueError("Модель должна выбрать уникальные идентификаторы только из сработавших правил")
+        if any(not isinstance(answer.get(key), str) or not answer[key].strip() for key in ("summary", "reasoning")):
+            raise ValueError("Модель должна сформулировать предложение и обоснование")
+        matched = [allowed[key] for key in ids]
+    crew = answer.get("crew") if use_llm and isinstance(answer.get("crew"), dict) else None
     known_crews = {str(item.get("crew_id")): item for item in context["crews"] if item.get("crew_id")}
     if crew is not None:
         crew_id = str(crew.get("crew_id") or "").strip()
@@ -248,27 +242,39 @@ def _check(answer: dict, context: dict) -> dict:
         deadline = rating_deadline
     deadline = deadline or rating_deadline
 
-    def strings(value, limit: int, size: int = 500) -> list[str]:
-        items = value if isinstance(value, list) else ([value] if value else [])
-        return [str(item).strip()[:size] for item in items if str(item or "").strip()][:limit]
-
     # Known gaps first; the model's items only when they are not a rephrasing of one of them.
-    missing = proposal_language.merge_gaps(missing_from_context(context),
-                                           [proposal_language.clean(item) for item in strings(answer.get("missing_data"), 15)])
     clean = proposal_language.clean
+    missing = missing_from_context(context)
+    if use_llm:
+        extra = answer.get("missing_data") or []
+        extra = extra if isinstance(extra, list) else [extra]
+        extra = [clean(str(item).strip()[:500]) for item in extra if str(item or "").strip()][:15]
+        missing = proposal_language.merge_gaps(missing, extra)
+    if not matched:
+        crew, deadline = None, None
+    if policy["mode"] == "demo":
+        notes.append("Тестовые правила и пороги. Мероприятия требуют проверки инженером.")
+    if not use_llm:
+        notes.append("Предварительный подбор по реестру без LLM; это не предложение языковой модели.")
     return {
         "measure": measure,
         "rating_measure": rating_code,
-        "differs_from_rating": bool(rating_code) and measure != rating_code,
-        "summary": clean(str(answer.get("summary") or "").strip())[:600],
-        "actions": [clean(item) for item in strings(answer.get("actions"), 10)],
+        "differs_from_rating": False,
+        "summary": clean(answer["summary"].strip())[:600] if use_llm else (
+            f"Предварительно подобрано мероприятий: {len(matched)}." if matched else
+            "Подходящие мероприятия реестра не подтверждены; требуется рассмотрение инженером."),
+        "actions": list(dict.fromkeys(item["action"] for item in matched)),
         "deadline": deadline,
         "crew": crew,
-        "reasoning": clean(str(answer.get("reasoning") or "").strip())[:3000],
-        "missing_data": missing,
-        "based_on": [clean(item) for item in strings(answer.get("based_on"), 15, 300)],
+        "reasoning": clean(answer["reasoning"].strip())[:3000] if use_llm else
+                     "\n".join(dict.fromkeys(item["explanation"] for item in matched)),
+        "missing_data": proposal_language.merge_gaps(missing, policy["missing_data"]),
+        "based_on": list(dict.fromkeys(e["text"] for item in matched for e in item["evidence"] if e["result"] is True)),
         "checks": notes,
         "index": context["rating"].get("index"),
+        "rule_evaluation": policy,
+        "selected_rule_ids": [item["id"] for item in matched],
+        "proposal_source": "llm_with_rules" if use_llm else "rules_fallback",
     }
 
 
@@ -281,23 +287,32 @@ def _date_or_none(value: Any) -> str | None:
 
 def generate(well_id: str) -> dict:
     """Draft, check and store the proposal; returns it. Raises ProposalUnavailable / LookupError."""
-    if not configured():
-        raise ProposalUnavailable("ИИ-агент не настроен: задайте MAI_LLM_API_URL и MAI_LLM_MODEL.")
     context = build_context(well_id)
     if context is None:
         raise LookupError(well_id)
     # The model reads the well in Russian (names and values) and answers in the same language.
-    payload = proposal_language.for_model(context, missing_from_context(context), response_examples(),
-                                          settings.rating_act_days)
+    payload = proposal_language.for_model(context, missing_from_context(context), settings.rating_act_days)
+    payload["инструкции реестра для формирования предложения"] = [
+        {"идентификатор": r["id"], "действие": r["action"], "пояснение": r["explanation"],
+         "факты срабатывания": [e["text"] for e in r["evidence"] if e["result"] is True]}
+        for r in context["response_policy"]["matched"]]
+    payload["реестр содержит тестовые пороги"] = context["response_policy"]["mode"] == "demo"
+    payload["нехватка данных для проверки правил"] = context["response_policy"]["missing_data"]
     messages = [{"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False, default=str)}]
-    try:
-        answer = llm.parse_json_object(llm.chat(messages, model=settings.llm_model, temperature=0.2))
-    except llm.LLMError as exc:
-        raise ProposalUnavailable(f"ИИ-агент недоступен: {exc}", status_code=502) from exc
-    except ValueError as exc:
-        raise ProposalUnavailable("ИИ-агент вернул ответ не в формате JSON.", status_code=502) from exc
-    proposal = {**_check(answer, context), "model": settings.llm_model,
+    warning = None
+    proposal = None
+    model = "Реестр мероприятий"
+    if llm_configured():
+        try:
+            answer = llm.parse_json_object(llm.chat(messages, model=settings.llm_model, temperature=0.2))
+            proposal = _check(answer, context, use_llm=True)
+            model = settings.llm_model
+        except (llm.LLMError, ValueError):
+            warning = "Предложение LLM не получено или не прошло проверку. Показан предварительный подбор по реестру без назначения бригады."
+    proposal = {**(proposal if proposal is not None else _check({}, context)), "model": model,
                 "generated_at": datetime.now(timezone.utc).isoformat()}
+    if warning:
+        proposal["checks"].append(warning)
     db.save_ai_proposal(well_id, proposal)
     return proposal

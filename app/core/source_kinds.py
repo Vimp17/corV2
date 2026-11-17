@@ -12,10 +12,7 @@ A point merged from several sources at one moment ("DARS+KHIMIK") has the kinds 
 """
 from __future__ import annotations
 
-import logging
 from typing import Any
-
-logger = logging.getLogger(__name__)
 
 
 def point_sources(point: Any) -> set[str]:

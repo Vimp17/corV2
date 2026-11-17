@@ -28,7 +28,7 @@ GLOSSARY = {
     "base_corrosion": "коррозия по акту разбора", "data_gaps": "пробелы в данных", "missing_data": "нет данных",
     "lab_samples": "лабораторные пробы", "latest_measurements": "последние значения показателей",
     "other_measurements": "другие показатели", "nkt_registry": "реестр коррозии НКТ",
-    "response_examples": "примеры решений", "crew_id": "бригада", "crews": "бригады", "crew": "бригада",
+    "crew_id": "бригада", "crews": "бригады", "crew": "бригада",
     "deadline": "крайний срок", "measure": "мероприятие", "rating": "рейтинг", "available": "свободна",
     "busy": "занята", "workover": "ремонт скважины", "inhibitor": "ингибитор", "water cut": "обводнённость",
     "corrosion rate": "скорость коррозии", "tubing": "НКТ", "ERA": "ЭРА",
@@ -96,7 +96,7 @@ def field_gaps(context: dict, act_days: int) -> list[str]:
     return merge_gaps(gaps, [])
 
 
-def for_model(context: dict, known_gaps: list[str], examples: list[dict], act_days: int) -> dict:
+def for_model(context: dict, known_gaps: list[str], act_days: int) -> dict:
     """The context with Russian names and values: the language the answer should be written in."""
     rating = context["rating"]
     return {
@@ -148,12 +148,19 @@ def for_model(context: dict, known_gaps: list[str], examples: list[dict], act_da
             {"дата реестра": context["nkt_registry"].get("date"), "строки": context["nkt_registry"].get("rows")}
             if context.get("nkt_registry") else None),
         "CO₂-коррозия (дополнительный контекст, не вероятность отказа)": [{
-            "режим": "пересчёт" if a["calculation_mode"] == "calculated" else "внешний расчёт v4",
-            "версия": a["model_version"], "дата состояния": a.get("state_at"),
-            "синтетические данные": a["synthetic"], "ограничения": a["quality_flags"],
+            "режим": {'automatic': 'автоматический расчёт из карточки', 'calculated': 'ручной пересчёт',
+                       'imported': 'внешний расчёт v4'}.get(a['calculation_mode'], a['calculation_mode']),
+            "статус автоматического расчёта": a.get('automatic_status'),
+            "подстановки администратора": a.get('defaults_used'),
+            "происхождение исходных параметров": a.get('input_provenance'),
+            "версия": a.get("model_version"), "методика": a.get("model_title"),
+            "конфигурация": a.get("configuration_hash"), "дата состояния": a.get("state_at"),
+            "исходные параметры расчёта": a.get("inputs"),
+            "синтетические данные": a.get("synthetic", False), "ограничения": a["quality_flags"],
             "сценарии": [{"доля CO₂": r["co2_mole_fraction"], "парциальное давление, бар": r["pco2_bar"],
+                          "фугитивность CO₂, бар": r.get("fugacity_bar"),
                           "скорость, мм/год": r["rate_mm_year"]} for r in a["scenarios"]],
-            "внешние результаты v4 (V — мм/год; S — баллы, не состав газа)": a["imported_results"],
+            "внешние результаты v4 (V — мм/год; S — баллы, не состав газа)": a.get("imported_results", {}),
         } for a in context.get("co2_assessments") or []],
         "документы скважины": [{"вид": item.get("type"), "файл": item.get("file"), "дата": item.get("date"),
                                 "статус": item.get("status"), "примечание": item.get("note")}
@@ -164,7 +171,4 @@ def for_model(context: dict, known_gaps: list[str], examples: list[dict], act_da
                      "свободна с": crew.get("available_from"), "свободна до": crew.get("available_to")}
                     for crew in context.get("crews") or []],
         "уже известные пробелы в данных": known_gaps,
-        "примеры решений инженеров": [{"ситуация": item.get("situation"), "мероприятие": item.get("measure"),
-                                       "действия": item.get("actions"), "почему": item.get("why")}
-                                      for item in examples],
     }

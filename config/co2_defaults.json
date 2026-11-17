@@ -1,0 +1,17 @@
+{
+  "revision": "1",
+  "description": "Согласованные стартовые допущения проекта, не нормативы NORSOK",
+  "max_age_days": 30,
+  "registry_pressure_basis": "unknown",
+  "allow_lab_ph_as_in_situ": false,
+  "values": {
+    "temperature_c": 60,
+    "pressure_abs_bar": 50,
+    "co2_pct": 1.5,
+    "ph_in_situ": 5,
+    "wall_shear_pa": 19,
+    "water_cut_pct": 80,
+    "material": "carbon_steel",
+    "water_wetting": "water_wet"
+  }
+}

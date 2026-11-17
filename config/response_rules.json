@@ -1,0 +1,60 @@
+{
+  "schema_version": 2,
+  "revision": 1,
+  "rules": [
+    {
+      "id": "sampling_frequency",
+      "revision": 1,
+      "status": "draft",
+      "conditions": {
+        "all": [
+          {
+            "field": "measurements.co2_pct",
+            "op": "gt",
+            "value": null,
+            "max_age_days": null
+          },
+          {
+            "field": "measurements.water_cut_pct",
+            "op": "gt",
+            "value": null,
+            "max_age_days": null
+          }
+        ],
+        "any": []
+      },
+      "action": "Увеличить частоту отбора проб для контроля коррозионной среды.",
+      "explanation": "При одновременном превышении согласованных порогов CO₂ и обводнённости требуется уточнить состояние среды дополнительными пробами. Частоту и состав анализов определяет инженер."
+    },
+    {
+      "id": "inhibitor_review",
+      "revision": 1,
+      "status": "draft",
+      "conditions": {
+        "all": [
+          {
+            "field": "measurements.co2_pct",
+            "op": "gt",
+            "value": null,
+            "max_age_days": null
+          },
+          {
+            "field": "measurements.water_cut_pct",
+            "op": "gt",
+            "value": null,
+            "max_age_days": null
+          },
+          {
+            "field": "measurements.corrosion_rate_mm_year",
+            "op": "gt",
+            "value": null,
+            "max_age_days": null
+          }
+        ],
+        "any": []
+      },
+      "action": "Внести предложение в график ППР о пересмотре дозирования ингибитора с рассмотрением увеличения дозы.",
+      "explanation": "При превышении порогов CO₂, обводнённости и измеренной скорости коррозии предложить проверку эффективности защиты. Изменение дозы требует согласования инженером с учётом действующей методики."
+    }
+  ]
+}

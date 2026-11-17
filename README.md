@@ -4,6 +4,8 @@
 
 > Пороги и баллы правил НТЦ — демонстрационные. Это индикатор для проверки системы, а не вероятность отказа и не производственная инструкция: перед эксплуатацией их проверяют на фактических данных. Предложения ИИ проверяет инженер; сервис ничего не отправляет и не бронирует сам.
 
+Основа таблицы правил мероприятий для инженерной верификации — [реестр и порядок согласования](docs/response-rules.md). Демо-реестр подключён к агенту; тестовые пороги заменяются через Excel. Для проверенных правил предусмотрен отдельный режим approved.
+
 **Развёртывание на сервере (Windows, без Docker)** — архив сборки и `mai.cmd`: [`standalone/README.md`](standalone/README.md) (в архиве — `README-DEMO.md`). Этот файл — устройство сервиса для разработчика и интегратора.
 
 ## Содержание
@@ -63,7 +65,7 @@ flowchart LR
 | `app/core/` | `rating_builder` (значения рейтинга из данных), `rating` (индекс, мероприятие, срок), `rules` (правила НТЦ), `math_model` (математическая модель), `indicators` (названия, единицы и допустимые диапазоны показателей, формат чисел), `features`, `normalization`, `readiness`, `monitor_runner`, `proposal_agent` и `proposal_language` (ИИ-агент), `excel_ingestion` и `excel_cells` (чтение ячеек Excel для всех читателей таблиц), `source_connectors`, `llm` (клиент LiteLLM) |
 | `app/core/documents/` | Конвейер документов: `intake`, `text`, `extract`, `load`, `pipeline`, `excel_reader`, `nkt_registry` |
 | `app/db/` | SQL Server: `schema` (таблицы), `base` (подключение, проверка таблиц при старте, блокировки, MERGE), `sources` (данные источников), `rating` (рейтинг, задания дневного цикла), `documents` |
-| `config/` | `source_profiles.json` (колонки источников), `document_types.json` (типы документов), `response_examples.json` (примеры решений инженеров для ИИ) |
+| `config/` | `source_profiles.json` (колонки источников), `document_types.json` (типы документов), `response_rules*.json` (реестр мероприятий для ИИ) |
 | `dashboard/index.html` | Дашборд (один файл, без сборки) |
 | `n8n/` | Ежедневный цикл и форма оператора |
 | `standalone/` | Сборка для Windows Server: `mai.cmd` → `manage.py`, команды управления (`cli/`: мастер настройки, процесс API, проверка, n8n, очистка, диагностика), сборка архива |
@@ -203,7 +205,7 @@ MAI_OCR_MODEL=ocr_модель                       # принимает изо
 
 Без LiteLLM рейтинг и Excel работают; PDF и сканы ждут повторной попытки.
 
-**Предложение ИИ-агента** (`POST /api/v1/rating/wells/{id}/ai-proposal`, кнопка в карточке, ежедневный цикл n8n): модель получает по-русски всё о скважине — индекс, мероприятие и срок рейтинга, прогнозы НТЦ и мат. модели, сработавшие правила НТЦ (только сработавшие, по строке на правило), категорию, среду, защиту, акты, отказы, пробы, дополнительные показатели, реестр НКТ, пробелы в данных, документы, расписание бригад — и примеры решений инженеров из `config/response_examples.json` (замените их реальными: ситуация → мероприятие → действия → почему). Ответ проверяется: мероприятие — ППР / РИ / УДР / —; бригада — только свободная из расписания; срок — не позже срока рейтинга; «Нет данных» — известные пробелы плюс новые пункты модели без повторов. Предложение сохраняется у скважины.
+**Предложение ИИ-агента** (`POST /api/v1/rating/wells/{id}/ai-proposal`, кнопка в карточке): сервер проверяет условия JSON-реестра и передаёт сработавшие правила с фактами в LLM вместе с данными скважины. Модель выбирает подходящие мероприятия, формирует сводку и обоснование, указывает пробелы и предлагает бригаду. Сервер проверяет выбранные ID, подставляет точные тексты допустимых действий, проверяет бригаду и срок. Реестр служит инструкцией модели; её сводка и обоснование сохраняются. Без LLM или при ошибке доступен явно обозначенный предварительный подбор по реестру. По умолчанию используются тестовые пороги; режим `approved` принимает только инженерно согласованные правила. Таблица изменяется через Excel и конвертер. [Настройка, замена таблицы и тестовые примеры](docs/response-rules.md).
 
 ## 7. Ежедневный цикл и n8n
 
@@ -250,7 +252,7 @@ MAI_OCR_MODEL=ocr_модель                       # принимает изо
 | Достаточность данных | `MAI_MIN_TELEMETRY_RECORDS` (8), `MAI_MIN_TREND_OBSERVATIONS` (8), `MAI_TREND_WINDOW_DAYS` (28), `MAI_MIN_CURRENT_SIGNALS` (2), `MAI_MAX_FORWARD_FILL_DAYS` (7), `MAI_MAX_TELEMETRY_AGE_HOURS` (48), `MAI_MAX_FUTURE_SKEW_HOURS` (24) |
 | Рейтинг | `MAI_RATING_COMBINE` (max), `MAI_MATH_MODEL_PATH` (config/math_model.json), `MAI_RATING_HORIZON_DAYS` (90), `MAI_RATING_REPAIR_FROM` (80), `MAI_RATING_UD_FROM` (40), `MAI_RATING_UD_TO` (60), `MAI_RATING_DAYS_REPAIR` (14), `MAI_RATING_DAYS_ENGINEER` (30), `MAI_RATING_DAYS_UD` (45), `MAI_RATING_SAMPLING_DAYS` (30), `MAI_RATING_ACT_DAYS` (365), `MAI_RATING_RECOMPUTE_SYNC_LIMIT` (50) |
 | Защита | `MAI_RATING_PROTECTION_MODE` (adjust), `MAI_RATING_PROTECTION_FACTOR` (0,5), `MAI_RATING_PROTECTION_MIN_INHIBITOR` (0,80), `MAI_RATING_PROTECTION_MAX_INJECTION_DEV` (15), `MAI_RATING_PROTECTION_MAX_RATE` (0,1) |
-| LiteLLM | `MAI_LLM_API_URL`, `MAI_LLM_API_KEY`, `MAI_LLM_MODEL`, `MAI_LLM_TIMEOUT_SECONDS` (45), `MAI_LLM_MAX_RETRIES` (1), `MAI_RESPONSE_EXAMPLES_PATH` |
+| LiteLLM | `MAI_LLM_API_URL`, `MAI_LLM_API_KEY`, `MAI_LLM_MODEL`, `MAI_LLM_TIMEOUT_SECONDS` (45), `MAI_LLM_MAX_RETRIES` (1) |
 | OCR | `MAI_OCR_MODEL`, `MAI_OCR_API_URL`, `MAI_OCR_API_KEY`, `MAI_OCR_TIMEOUT_SECONDS` (120), `MAI_OCR_MAX_SIDE_PX` (2000) |
 | Документы | `MAI_DOCS_STORAGE_DIR` (./data/documents), `MAI_DOCS_INBOX_DIR`, `MAI_DOCS_INBOX_SCAN_SECONDS` (300), `MAI_DOCS_WORKER` (true), `MAI_DOCS_MAX_ATTEMPTS` (3), `MAI_DOCS_RETRY_MINUTES` (5), `MAI_DOCS_MAX_BYTES` (25 МБ), `MAI_DOCS_MAX_PAGES` (30), `MAI_DOCS_MIN_PAGE_CHARS` (40), `MAI_DOCS_MAX_TEXT_CHARS` (60 000), `MAI_DOCS_CHUNK_CHARS` (6000), `MAI_DOCS_LLM_MODEL`, `MAI_DOCS_TYPES_PATH` |
 
@@ -298,11 +300,11 @@ MAI_TEST_DATABASE_URL="mssql+pymssql://sa:пароль@localhost:1433/mai_test" 
 | «ИИ-агент не настроен» | Задайте `MAI_LLM_API_URL` и `MAI_LLM_MODEL` |
 | n8n: 401 / не соединяется | Credential `X-API-Key`; адрес API, видимый из n8n, и брандмауэр (`standalone/README.md`) |
 
-## CO₂-коррозия (демонстрационная функция)
+## CO₂-коррозия (MVP)
 
-Добавлены отдельный сценарный расчёт базовой формулы v4, импорт сохранённых результатов v4, история в SQL Server, блок в карточке и контекст для ИИ-агента. Скорость хранится в мм/год отдельно от вероятности отказа и не меняет текущие индекс и мероприятия. Полный A2 не пересчитывается без спецификации химических поправок. Инструкция и ограничения — [standalone/README.md, раздел 17](standalone/README.md#17-co₂-коррозия-сценарный-расчёт-и-импорт-v4).
+Основная методика — NORSOK M-506:2005 с настраиваемыми коэффициентами и сохраняемой версией. Карточка, рейтинг и экспорт сразу получают автоматический результат из источников; отсутствующие параметры берутся из `config/co2_defaults.json` с переопределениями администратора `MAI_CO2_DEFAULT_*`. Происхождение каждого параметра видно в карточке; пользователь не редактирует нормы. В карточке CO₂ отображается компактным раскрывающимся блоком: только параметры и результат. Через API доступны ручной сценарий и загрузка исходных данных XLSX/CSV/JSON с предварительным расчётом и атомарным подтверждением. В автоматической карточке используются согласованные проектные подстановки; строгий ручной/файловый расчёт требует рабочий pH и касательное напряжение. Обводнённость сохраняется как контекст водной фазы. Скорость в мм/год хранится отдельно от индекса и измеренной телеметрии.
 
-Полный пользовательский набор не публикуется; независимый учебный пример — `examples/co2/v4-example.json`. Интеграционные проверки: `sh scripts/test_co2_local.sh` (временная SQL Server). Сборка и проверка Windows — workflow `.github/workflows/build-demo.yml`.
+Методика, поля, единицы, ограничения, API и замена ядра: [NORSOK MVP](docs/norsok-mvp.md). Внешние A1/A2 v4 сохраняются отдельно без пересчёта. Учебные файлы — `examples/co2/`; полный пользовательский набор не публикуется. Проверки: `sh scripts/test_co2_local.sh`, второй драйвер — `MAI_TEST_SQL_DRIVER=pyodbc`; сборка и Windows smoke — `.github/workflows/build-demo.yml`.
 
 ## Обновление после ревью корректности
 

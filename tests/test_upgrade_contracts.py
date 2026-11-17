@@ -23,8 +23,9 @@ def test_rank_ties_keep_excel_competition_places():
 def test_valid_crew_is_kept_with_open_availability_bounds():
     from app.core.proposal_agent import _check
     from tests.test_review_regressions import _context
-    result = _check({'measure': 'РИ', 'crew': {'crew_id': 'C', 'date': '2026-11-12'}},
-                    _context({'crew_id': 'C', 'status': 'available'}))
+    result = _check({'selected_rule_ids': ['sample'], 'summary': 'Отбор проб', 'reasoning': 'Высокий CO₂',
+                     'crew': {'crew_id': 'C', 'date': '2026-11-12'}},
+                    _context({'crew_id': 'C', 'status': 'available'}), use_llm=True)
     assert result['crew']['crew_id'] == 'C'
 
 
@@ -96,8 +97,8 @@ def test_co2_bulk_import_uses_bounded_sql_round_trips(client):
     engine = db.engine()
     event.listen(engine, 'before_cursor_execute', capture)
     try:
-        result = save_assessments([calculate(CO2Calculation(well_id=f'BULK-{i}', temperature_c=60,
-                                  pressure_abs_bar=50)) for i in range(20)], create_wells=True)
+        result = save_assessments([calculate(CO2Calculation(well_id=f'BULK-{i}', model_id='co2-v4-base-1', temperature_c=60,
+                                  pressure_abs_bar=50, co2_mole_fractions=[.005, .015, .03])) for i in range(20)], create_wells=True)
     finally:
         event.remove(engine, 'before_cursor_execute', capture)
     assert result['stored'] == 20

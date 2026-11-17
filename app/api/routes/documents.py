@@ -6,7 +6,6 @@ rating recompute. A document that cannot be confirmed loads nothing ("не ра�
 """
 from __future__ import annotations
 
-import logging
 import mimetypes
 
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
@@ -18,8 +17,6 @@ from app.config import settings
 from app.core.documents import intake, pipeline
 from app.core.documents.text import ocr_configured
 from app.core.documents.types import DocumentTypesError, load_document_types
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
